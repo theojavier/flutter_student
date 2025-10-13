@@ -128,6 +128,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
 
   void _onSelectPage(int index) {
     setState(() => selectedIndex = index);
+    _closeDropdownsAndOverlays(context);
     switch (index) {
       case 0:
         context.go('/home');

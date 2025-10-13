@@ -19,6 +19,7 @@ class _LoginPageState extends State<LoginPage> {
   final FirebaseAuth auth = FirebaseAuth.instance;
 
   bool isLoading = false;
+  StreamSubscription? _examListener;
 
   Future<void> _login() async {
   final studentId = studentIdController.text.trim();
@@ -71,16 +72,35 @@ class _LoginPageState extends State<LoginPage> {
     }
 
     // ✅ Proceed only if student role
-    if (role.toString().toLowerCase() == "admin") {
+    if (role.toString().toLowerCase() == "student") {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString("userId", doc.id);
+      await prefs.setString("studentId", data["studentId"]);
+
+      if (data.containsKey("program")) {
+        await prefs.setString("program", data["program"]);
+      }
+      if (data.containsKey("yearBlock")) {
+        await prefs.setString("yearBlock", data["yearBlock"]);
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Welcome Student!")),
+      );
+
+      // 🔔 Start notifications listener
+      final program = data["program"];
+      final yearBlock = data["yearBlock"];
+      if (program != null && yearBlock != null) {
+        startExamListener(doc.id, program, yearBlock);
+      }
 
       if (mounted) context.go('/home');
     } else {
-      _showError("Access denied (not a admin)");
+      _showError("Access denied (not a student)");
     }
   } on FirebaseAuthException catch (e) {
-    _showError(e.message ?? "Invalid ID or Password");
+    _showError(e.message ?? "Invalid Student ID or Password");
   } catch (e) {
     _showError("Login failed: $e");
   }
@@ -89,6 +109,33 @@ class _LoginPageState extends State<LoginPage> {
   }
 
 
+  // 🔔 Real-time exam notifications listener
+  void startExamListener(String userId, String program, String yearBlock) {
+    _examListener = db
+        .collection('exams')
+        .where('program', isEqualTo: program)
+        .where('yearBlock', isEqualTo: yearBlock)
+        .snapshots()
+        .listen((snapshot) async {
+      final userRef = db.collection('users').doc(userId);
+
+      for (var examDoc in snapshot.docs) {
+        final examId = examDoc.id;
+        final notifRef = userRef.collection('notifications').doc(examId);
+
+        final notifSnap = await notifRef.get();
+        if (!notifSnap.exists) {
+          await notifRef.set({
+            'viewed': false,
+            'subject': examDoc['subject'],
+            'createdAt': examDoc['createdAt'],
+          });
+          debugPrint("📌 Created notif for $userId -> exam $examId");
+        }
+      }
+    });
+  }
+
   void _showError(String message) {
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
@@ -96,6 +143,7 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   void dispose() {
+    _examListener?.cancel();
     studentIdController.dispose();
     passwordController.dispose();
     super.dispose();
