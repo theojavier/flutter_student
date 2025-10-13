@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "348602182315",
+    "firebase_url": "https://rd-final-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "rd-final",
+    "storage_bucket": "rd-final.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:348602182315:android:94619651ecd68bf34665ee",
+        "android_client_info": {
+          "package_name": "com.example.a3rd"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD5faRhRRuQ_k1NwbqFpPwtVpc1VD1JXaI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:348602182315:android:f2bc9c87addef5b84665ee",
+        "android_client_info": {
+          "package_name": "com.example.my_flutter_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD5faRhRRuQ_k1NwbqFpPwtVpc1VD1JXaI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,182 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:go_router/go_router.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  _LoginPageState createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final TextEditingController studentIdController = TextEditingController();
+  final TextEditingController passwordController = TextEditingController();
+  final FirebaseFirestore db = FirebaseFirestore.instance;
+  final FirebaseAuth auth = FirebaseAuth.instance;
+
+  bool isLoading = false;
+
+  Future<void> _login() async {
+  final studentId = studentIdController.text.trim();
+  final password = passwordController.text.trim();
+
+  if (studentId.isEmpty) return _showError("Student ID required");
+  if (password.isEmpty) return _showError("Password required");
+
+  setState(() => isLoading = true);
+
+  try {
+    // 🔎 Get Firestore user profile by Student ID
+    final query = await db
+        .collection("users")
+        .where("studentId", isEqualTo: studentId)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) {
+      _showError("Student ID not found");
+      setState(() => isLoading = false);
+      return;
+    }
+
+    final doc = query.docs.first;
+    final data = doc.data();
+
+    final email = data["email"];
+    final uid = data["UID"];
+    final role = data["role"];
+
+    if (email == null || uid == null) {
+      _showError("Account setup error. Please contact admin.");
+      setState(() => isLoading = false);
+      return;
+    }
+
+    // 🔐 Authenticate with FirebaseAuth
+    final userCredential = await auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    // ✅ UID consistency check
+    if (userCredential.user == null || userCredential.user!.uid != uid) {
+      _showError("Account mismatch. Please contact admin.");
+      await auth.signOut();
+      setState(() => isLoading = false);
+      return;
+    }
+
+    // ✅ Proceed only if student role
+    if (role.toString().toLowerCase() == "admin") {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString("userId", doc.id);
+
+      if (mounted) context.go('/home');
+    } else {
+      _showError("Access denied (not a admin)");
+    }
+  } on FirebaseAuthException catch (e) {
+    _showError(e.message ?? "Invalid ID or Password");
+  } catch (e) {
+    _showError("Login failed: $e");
+  }
+
+  setState(() => isLoading = false);
+  }
+
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  void dispose() {
+    studentIdController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Image.asset(
+                "assets/image/istockphoto_1401106927_612x612_removebg_preview.png",
+                width: 200,
+                height: 200,
+              ),
+              const SizedBox(height: 60),
+              SizedBox(
+                width: 320,
+                child: TextField(
+                  controller: studentIdController,
+                  decoration: InputDecoration(
+                    hintText: "Student ID",
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                        vertical: 12, horizontal: 16),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 25),
+              SizedBox(
+                width: 320,
+                child: TextField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    hintText: "Password",
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                        vertical: 12, horizontal: 16),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 40),
+              isLoading
+                  ? const CircularProgressIndicator()
+                  : SizedBox(
+                      width: 340,
+                      child: ElevatedButton(
+                        onPressed: _login,
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text("Login"),
+                      ),
+                    ),
+              const SizedBox(height: 20),
+              TextButton(
+                onPressed: () {
+                  context.go('/forgot');
+                },
+                child: const Text(
+                  "Forgot Password?",
+                  style: TextStyle(
+                    color: Colors.blue,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
