@@ -60,12 +60,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   // Navigate to /take-exam
   context.push(
-    '/take-exam',
-    extra: {
-      'examId': item.examId,
-      'startMillis': item.startMillis,
-      'endMillis': item.endMillis,   // only if you add this to your model
-    },
+    '/take-exam/${item.examId}',
   );
 }
 

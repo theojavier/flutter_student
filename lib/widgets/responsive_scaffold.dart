@@ -350,15 +350,8 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                                     .update({'viewed': true});
 
                                 Navigator.of(ctx).pop();
-                                context.push(
-                                  '/take-exam',
-                                  extra: {
-                                    'examId': item.examId,
-                                    'subject': item.title,
-                                    'teacherId': item.teacherId,
-                                    'startMillis': item.startMillis,
-                                    'endMillis': item.endMillis,
-                                  },
+                                context.go(
+                                  '/take-exam/${item.examId}',
                                 );
                               },
                             ),
