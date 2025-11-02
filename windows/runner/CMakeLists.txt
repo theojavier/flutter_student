@@ -22,7 +22,7 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
-# ✅ Add this *after* apply_standard_settings, not before add_executable
+# Add this *after* apply_standard_settings, not before add_executable
 if(MSVC)
   target_compile_options(${BINARY_NAME} PRIVATE /Zc:__cplusplus /permissive- /wd4996)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

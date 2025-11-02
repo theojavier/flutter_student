@@ -28,7 +28,7 @@ Future<void> ensureUserNotifications({
     if (!notifSnap.exists) {
       await notifRef.set({
         'viewed': false,
-        'title': examDoc['subject'] ?? 'New Exam',
+        'subject': examDoc['subject'] ?? 'New Exam',
         'message': 'A new exam for ${examDoc['subject'] ?? 'your subject'} has been posted.',
         'createdAt': examDoc['createdAt'],
       });

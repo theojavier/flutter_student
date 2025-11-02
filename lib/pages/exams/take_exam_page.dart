@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 class TakeExamPage extends StatefulWidget {
   final String examId;
@@ -30,6 +31,10 @@ class _TakeExamPageState extends State<TakeExamPage>
   int? end;
   bool isWarningShown = false;
 
+  bool _hasCamera = false;
+  bool _checkingCamera = true;
+  MediaStream? _cameraStream;
+
   @override
   void initState() {
     super.initState();
@@ -50,14 +55,91 @@ class _TakeExamPageState extends State<TakeExamPage>
     });
   }
 
-  // 🔹 Anti-tab-switch: warn when app goes background
+  Future<bool> _checkCameraAvailability() async {
+  try {
+    final devices = await navigator.mediaDevices.enumerateDevices();
+    final hasVideoInput = devices.any((d) => d.kind == 'videoinput');
+    if (!hasVideoInput) return false;
+
+    // Try to open the camera
+    final stream = await navigator.mediaDevices.getUserMedia({
+      'video': true,
+      'audio': false,
+    });
+
+    final videoRenderer = RTCVideoRenderer();
+    await videoRenderer.initialize();
+    videoRenderer.srcObject = stream;
+
+    // Show a dialog for 5 seconds and auto-close it
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) {
+          // Auto-close after 5 seconds
+          Future.delayed(const Duration(seconds: 5), () {
+            if (Navigator.of(ctx).canPop()) {
+              Navigator.of(ctx).pop();
+            }
+          });
+
+          return AlertDialog(
+            title: const Text('Camera Test'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Please look at the screen'),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: 240,
+                  height: 180,
+                  child: RTCVideoView(videoRenderer, mirror: true),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    }
+
+    // Wait for 5 seconds (same as dialog)
+    await Future.delayed(const Duration(seconds: 5));
+    _detectFace();
+
+    // Stop and clean up
+    stream.getTracks().forEach((t) => t.stop());
+    await videoRenderer.dispose();
+
+    return true;
+  } catch (e) {
+    debugPrint("Camera test failed: $e");
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Camera test failed: $e"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+    return false;
+  }
+}
+
+
+// Placeholder for future face detection logic
+void _detectFace() {
+  //: implement face detection
+}
+
+  //  Anti-tab-switch: warn when app goes background
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused && !isWarningShown) {
       isWarningShown = true;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("⚠️ Don’t leave the app during the exam!"),
+          content: Text(" Don’t leave the app during the exam!"),
           backgroundColor: Colors.red,
         ),
       );
@@ -74,213 +156,301 @@ class _TakeExamPageState extends State<TakeExamPage>
         : DateFormat("MMM d, yyyy").format(date);
   }
 
-
   @override
   Widget build(BuildContext context) {
     if (studentId == null) {
-      return const Scaffold(
-        body: Center(child: Text("⚠️ Not logged in")),
-      );
+      return const Scaffold(body: Center(child: Text(" Not logged in")));
     }
 
     return Scaffold(
-      appBar: AppBar(
-      automaticallyImplyLeading: false,
-      title: const Text("Exam Details")),
-      body: FutureBuilder<DocumentSnapshot>(
-        future: db.collection("exams").doc(widget.examId).get(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (!snapshot.data!.exists) {
-            return const Center(child: Text("Exam not found"));
-          }
-
-          final data = snapshot.data!.data() as Map<String, dynamic>;
-          final subject = data["subject"] ?? "Unknown";
-          final teacherId = data["teacherId"] ?? "";
-          start = widget.startMillis ??
-              data["startTime"]?.toDate().millisecondsSinceEpoch;
-          end = widget.endMillis ??
-              data["endTime"]?.toDate().millisecondsSinceEpoch;
-
-
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 🔹 Subject
-                Text(subject,
-                    style: const TextStyle(
-                        fontSize: 22, fontWeight: FontWeight.bold)),
-
-                // 🔹 Start time
-                if (start != null)
-                  Text("Start: ${formatDate(start!)}",
-                      style: const TextStyle(fontSize: 16)),
-
-                const SizedBox(height: 16),
-
-                // 🔹 Instructions
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  color: const Color(0xFFEEEEEE),
-                  child: const Text(
-                    "Instructions:\n- Don’t switch tabs\n- Don’t leave the app",
-                    style: TextStyle(fontSize: 14),
+      backgroundColor: Colors.grey[100],
+      body: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.purple.shade700,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 6,
+                    offset: const Offset(0, 3),
                   ),
-                ),
-
-                const SizedBox(height: 16),
-                Divider(color: Colors.grey[400]),
-
-                // 🔹 Teacher name
-                FutureBuilder<DocumentSnapshot>(
-                  future: teacherId.isNotEmpty
-                      ? db.collection("users").doc(teacherId).get()
-                      : Future.value(null),
-                  builder: (context, teacherSnap) {
-                    String teacherText = "Teacher: Unknown";
-                    if (teacherSnap.hasData &&
-                        teacherSnap.data != null &&
-                        teacherSnap.data!.exists) {
-                      final teacherData =
-                          teacherSnap.data!.data() as Map<String, dynamic>;
-                      final name = teacherData["name"];
-                      if (name != null) teacherText = "Teacher: $name";
-                    }
-                    return Text(teacherText,
-                        style: const TextStyle(fontSize: 16));
-                  },
-                ),
-
-                // 🔹 Duration
-                if (start != null && end != null)
-                  Text(
-                    "${formatDate(start!)} - ${DateFormat("h:mm a").format(DateTime.fromMillisecondsSinceEpoch(end!))}",
-                    style: const TextStyle(fontSize: 16),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Exam Details',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-
-
-                const Spacer(),
-
-                // 🔹 Start / Resume / View Result button (real-time updates)
-StreamBuilder<DocumentSnapshot>(
-  stream: db
-      .collection("examResults")
-      .doc(widget.examId)
-      .collection(studentId!)
-      .doc("result")
-      .snapshots(),
-  builder: (context, resultSnap) {
-    if (!resultSnap.hasData) {
-      return ElevatedButton(
-        onPressed: null,
-        child: const Text("Loading..."),
-      );
-    }
-
-    final doc = resultSnap.data!;
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-// ✅ Completed
-if (doc.exists && doc["status"] == "completed") {
-  return ElevatedButton(
-    style: ElevatedButton.styleFrom(backgroundColor: AppColors.viewResult),
-    child: const Text("View Result"),
-    onPressed: () {
-// View Result
-context.goNamed(
-  'examResult',
-  pathParameters:{
-    "examId": widget.examId,
-    "studentId": studentId!,
-  },
-);
-    },
-  );
-}
-
-// ✅ In-progress
-if (doc.exists && doc["status"] == "in-progress") {
-  return ElevatedButton(
-    style: ElevatedButton.styleFrom(backgroundColor: AppColors.resumeExam),
-    child: const Text("Exam being taken"),
-    onPressed: () {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Exam is already being taken"),
-        ),
-      );
-    },
-  );
-}
-if (doc.exists && doc["status"] == "incomplete") {
-  return ElevatedButton(
-    style: ElevatedButton.styleFrom(backgroundColor: const Color.fromARGB(255, 255, 0, 0)),
-    child: const Text("Exam incomplete"),
-    onPressed: () {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("you can't take the exam"),
-        ),
-      );
-    },
-  );
-}
-
-    // ✅ Exam not started yet
-    if (start != null && now < start!) {
-      return ElevatedButton(
-        onPressed: null,
-        child: const Text("Exam not started yet"),
-      );
-    }
-
-    // ✅ Exam ended
-    if (end != null && now > end!) {
-      return ElevatedButton(
-        onPressed: null,
-        child: const Text("Exam ended"),
-      );
-    }
-
-// ✅ Start new attempt
-return ElevatedButton(
-  style: ElevatedButton.styleFrom(backgroundColor: AppColors.startExam),
-  child: const Text("Start Exam"),
-  onPressed: () async {
-    await db
-        .collection("examResults")
-        .doc(widget.examId)
-        .collection(studentId!)
-        .doc("result")
-        .set({
-      "examId": widget.examId,
-      "studentId": studentId,
-      "status": "in-progress",
-      "startedAt": DateTime.now(),
-    });
-
-    // Start Exam
-context.goNamed(
-  'exam',
-  pathParameters: {
-    "examId": widget.examId,
-    "studentId": studentId!,
-  },
-);
-  },
-);
-  },
-),
-              ],
+                ],
+              ),
             ),
-          );
-        },
+            Expanded(
+              child: FutureBuilder<DocumentSnapshot>(
+                future: db.collection("exams").doc(widget.examId).get(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (!snapshot.data!.exists) {
+                    return const Center(child: Text("Exam not found"));
+                  }
+
+                  final data = snapshot.data!.data() as Map<String, dynamic>;
+                  final subject = data["subject"] ?? "Unknown";
+                  final teacherId = data["teacherId"] ?? "";
+                  start =
+                      widget.startMillis ??
+                      data["startTime"]?.toDate().millisecondsSinceEpoch;
+                  end =
+                      widget.endMillis ??
+                      data["endTime"]?.toDate().millisecondsSinceEpoch;
+
+                  return Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          subject,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (start != null)
+                          Text(
+                            "Start: ${formatDate(start!)}",
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                        const SizedBox(height: 16),
+
+                        // 🧾 Instructions Box
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEEEEEE),
+                            border: Border.all(color: Colors.red, width: 2),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: RichText(
+                            textAlign: TextAlign.start,
+                            text: const TextSpan(
+                              style: TextStyle(
+                                color: Colors.black,
+                                fontSize: 14,
+                                height: 1.4,
+                              ),
+                              children: [
+                                TextSpan(
+                                  text: "IMPORTANT:\n",
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                TextSpan(
+                                  text:
+                                      "Instructions:\n- Don’t switch tabs\n- Don’t leave the app\n- Look at the screen it may trigger as cheating.",
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
+                        Divider(color: Colors.grey[400]),
+
+                        //  Teacher name
+                        FutureBuilder<DocumentSnapshot>(
+                          future: teacherId.isNotEmpty
+                              ? db.collection("users").doc(teacherId).get()
+                              : Future.value(null),
+                          builder: (context, teacherSnap) {
+                            String teacherText = "Teacher: Unknown";
+                            if (teacherSnap.hasData &&
+                                teacherSnap.data != null &&
+                                teacherSnap.data!.exists) {
+                              final teacherData =
+                                  teacherSnap.data!.data()
+                                      as Map<String, dynamic>;
+                              final name = teacherData["name"];
+                              if (name != null) teacherText = "Teacher: $name";
+                            }
+                            return Text(
+                              teacherText,
+                              style: const TextStyle(fontSize: 16),
+                            );
+                          },
+                        ),
+
+                        //  Duration
+                        if (start != null && end != null)
+                          Text(
+                            "${formatDate(start!)} - ${DateFormat("h:mm a").format(DateTime.fromMillisecondsSinceEpoch(end!))}",
+                            style: const TextStyle(fontSize: 16),
+                          ),
+
+                        const Spacer(),
+
+                        //  Start / Resume / View Result button (real-time updates)
+                        StreamBuilder<DocumentSnapshot>(
+                          stream: db
+                              .collection("examResults")
+                              .doc(widget.examId)
+                              .collection(studentId!)
+                              .doc("result")
+                              .snapshots(),
+                          builder: (context, resultSnap) {
+                            if (!resultSnap.hasData) {
+                              return ElevatedButton(
+                                onPressed: null,
+                                child: const Text("Loading..."),
+                              );
+                            }
+
+                            final doc = resultSnap.data!;
+                            final now = DateTime.now().millisecondsSinceEpoch;
+
+                            //  Completed
+                            if (doc.exists && doc["status"] == "completed") {
+                              return ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.viewResult,
+                                ),
+                                child: const Text("View Result"),
+                                onPressed: () {
+                                  // View Result
+                                  context.goNamed(
+                                    'examResult',
+                                    pathParameters: {
+                                      "examId": widget.examId,
+                                      "studentId": studentId!,
+                                    },
+                                    extra: {'fromExamPage': true},
+                                  );
+                                },
+                              );
+                            }
+
+                            //  In-progress
+                            if (doc.exists && doc["status"] == "in-progress") {
+                              return ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.resumeExam,
+                                ),
+                                child: const Text("Exam being taken"),
+                                onPressed: () {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        "Exam is already being taken",
+                                      ),
+                                    ),
+                                  );
+                                },
+                              );
+                            }
+                            if (doc.exists && doc["status"] == "incomplete") {
+                              return ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color.fromARGB(
+                                    255,
+                                    255,
+                                    0,
+                                    0,
+                                  ),
+                                ),
+                                child: const Text("Exam incomplete"),
+                                onPressed: () {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text("you can't take the exam"),
+                                    ),
+                                  );
+                                },
+                              );
+                            }
+
+                            //  Exam not started yet
+                            if (start != null && now < start!) {
+                              return ElevatedButton(
+                                onPressed: null,
+                                child: const Text("Exam not started yet"),
+                              );
+                            }
+
+                            //  Exam ended
+                            if (end != null && now > end!) {
+                              return ElevatedButton(
+                                onPressed: null,
+                                child: const Text("Exam ended"),
+                              );
+                            }
+
+                            //  Start new attempt
+                            return ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.startExam,
+                              ),
+                              child: const Text("Start Exam"),
+                              onPressed: () async {
+                                bool hasCamera =
+                                    await _checkCameraAvailability();
+                                if (!hasCamera) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        "No camera detected! You cannot take the exam.",
+                                      ),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                  return; // Stop here if no camera
+                                }
+
+                                await db
+                                    .collection("examResults")
+                                    .doc(widget.examId)
+                                    .collection(studentId!)
+                                    .doc("result")
+                                    .set({
+                                      "examId": widget.examId,
+                                      "studentId": studentId,
+                                      "status": "in-progress",
+                                      "startedAt": DateTime.now(),
+                                    });
+
+                                // Start Exam
+                                context.goNamed(
+                                  'exam',
+                                  pathParameters: {
+                                    "examId": widget.examId,
+                                    "studentId": studentId!,
+                                  },
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

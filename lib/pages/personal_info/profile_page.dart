@@ -49,7 +49,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
           final data = snapshot.data!.data() as Map<String, dynamic>;
 
-          // ✅ Fix Imgur link handling
+          //  Fix Imgur link handling
           String? imageUrl = data["profileImage"];
           if (imageUrl != null &&
               imageUrl.contains("imgur.com") &&

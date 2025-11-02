@@ -19,97 +19,100 @@ class _LoginPageState extends State<LoginPage> {
   final FirebaseAuth auth = FirebaseAuth.instance;
 
   bool isLoading = false;
+  bool _isPasswordVisible = false;
   StreamSubscription? _examListener;
 
   Future<void> _login() async {
-  final studentId = studentIdController.text.trim();
-  final password = passwordController.text.trim();
+    final studentId = studentIdController.text.trim();
+    final password = passwordController.text.trim();
 
-  if (studentId.isEmpty) return _showError("Student ID required");
-  if (password.isEmpty) return _showError("Password required");
+    if (studentId.isEmpty) return _showError("Student ID required");
+    if (password.isEmpty) return _showError("Password required");
 
-  setState(() => isLoading = true);
+    setState(() => isLoading = true);
 
-  try {
-    // 🔎 Get Firestore user profile by Student ID
-    final query = await db
-        .collection("users")
-        .where("studentId", isEqualTo: studentId)
-        .limit(1)
-        .get();
+    try {
+      // Get Firestore user profile by Student ID
+      final query = await db
+          .collection("users")
+          .where("studentId", isEqualTo: studentId)
+          .limit(1)
+          .get();
 
-    if (query.docs.isEmpty) {
-      _showError("Student ID not found");
-      setState(() => isLoading = false);
-      return;
-    }
-
-    final doc = query.docs.first;
-    final data = doc.data();
-
-    final email = data["email"];
-    final uid = data["UID"];
-    final role = data["role"];
-
-    if (email == null || uid == null) {
-      _showError("Account setup error. Please contact admin.");
-      setState(() => isLoading = false);
-      return;
-    }
-
-    // 🔐 Authenticate with FirebaseAuth
-    final userCredential = await auth.signInWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
-
-    // ✅ UID consistency check
-    if (userCredential.user == null || userCredential.user!.uid != uid) {
-      _showError("Account mismatch. Please contact admin.");
-      await auth.signOut();
-      setState(() => isLoading = false);
-      return;
-    }
-
-    // ✅ Proceed only if student role
-    if (role.toString().toLowerCase() == "student") {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("userId", doc.id);
-      await prefs.setString("studentId", data["studentId"]);
-
-      if (data.containsKey("program")) {
-        await prefs.setString("program", data["program"]);
-      }
-      if (data.containsKey("yearBlock")) {
-        await prefs.setString("yearBlock", data["yearBlock"]);
+      if (query.docs.isEmpty) {
+        _showError("Student ID not found");
+        setState(() => isLoading = false);
+        return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Welcome Student!")),
+      final doc = query.docs.first;
+      final data = doc.data();
+
+      final email = data["email"];
+      final uid = data["UID"];
+      final role = data["role"];
+
+      if (email == null || uid == null) {
+        _showError("Account setup error. Please contact admin.");
+        setState(() => isLoading = false);
+        return;
+      }
+
+      // Authenticate with FirebaseAuth
+      final userCredential = await auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
       );
 
-      // 🔔 Start notifications listener
-      final program = data["program"];
-      final yearBlock = data["yearBlock"];
-      if (program != null && yearBlock != null) {
-        startExamListener(doc.id, program, yearBlock);
+      // UID consistency check
+      if (userCredential.user == null || userCredential.user!.uid != uid) {
+        _showError("Account mismatch. Please contact admin.");
+        await auth.signOut();
+        setState(() => isLoading = false);
+        return;
       }
 
-      if (mounted) context.go('/home');
-    } else {
-      _showError("Access denied (not a student)");
+      // Proceed only if student role
+      if (role.toString().toLowerCase() == "student") {
+        await db.collection("users").doc(doc.id).update({
+          "lastLogin": FieldValue.serverTimestamp(),
+        });
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString("userId", doc.id);
+        await prefs.setString("studentId", data["studentId"]);
+
+        if (data.containsKey("program")) {
+          await prefs.setString("program", data["program"]);
+        }
+        if (data.containsKey("yearBlock")) {
+          await prefs.setString("yearBlock", data["yearBlock"]);
+        }
+
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("Welcome Student!")));
+
+        // Start notifications listener
+        final program = data["program"];
+        final yearBlock = data["yearBlock"];
+        if (program != null && yearBlock != null) {
+          startExamListener(doc.id, program, yearBlock);
+        }
+
+        if (mounted) context.go('/home');
+      } else {
+        _showError("Access denied (not a student)");
+      }
+    } on FirebaseAuthException catch (e) {
+      _showError(e.message ?? "Invalid Student ID or Password");
+    } catch (e) {
+      _showError("Login failed: $e");
     }
-  } on FirebaseAuthException catch (e) {
-    _showError(e.message ?? "Invalid Student ID or Password");
-  } catch (e) {
-    _showError("Login failed: $e");
+
+    setState(() => isLoading = false);
   }
 
-  setState(() => isLoading = false);
-  }
-
-
-  // 🔔 Real-time exam notifications listener
+  // Real-time exam notifications listener
   void startExamListener(String userId, String program, String yearBlock) {
     _examListener = db
         .collection('exams')
@@ -117,28 +120,29 @@ class _LoginPageState extends State<LoginPage> {
         .where('yearBlock', isEqualTo: yearBlock)
         .snapshots()
         .listen((snapshot) async {
-      final userRef = db.collection('users').doc(userId);
+          final userRef = db.collection('users').doc(userId);
 
-      for (var examDoc in snapshot.docs) {
-        final examId = examDoc.id;
-        final notifRef = userRef.collection('notifications').doc(examId);
+          for (var examDoc in snapshot.docs) {
+            final examId = examDoc.id;
+            final notifRef = userRef.collection('notifications').doc(examId);
 
-        final notifSnap = await notifRef.get();
-        if (!notifSnap.exists) {
-          await notifRef.set({
-            'viewed': false,
-            'subject': examDoc['subject'],
-            'createdAt': examDoc['createdAt'],
-          });
-          debugPrint("📌 Created notif for $userId -> exam $examId");
-        }
-      }
-    });
+            final notifSnap = await notifRef.get();
+            if (!notifSnap.exists) {
+              await notifRef.set({
+                'viewed': false,
+                'subject': examDoc['subject'],
+                'createdAt': examDoc['createdAt'],
+              });
+              debugPrint("Created notif for $userId -> exam $examId");
+            }
+          }
+        });
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -165,6 +169,8 @@ class _LoginPageState extends State<LoginPage> {
                 height: 200,
               ),
               const SizedBox(height: 60),
+
+              // Student ID Field
               SizedBox(
                 width: 320,
                 child: TextField(
@@ -175,27 +181,48 @@ class _LoginPageState extends State<LoginPage> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     contentPadding: const EdgeInsets.symmetric(
-                        vertical: 12, horizontal: 16),
+                      vertical: 12,
+                      horizontal: 16,
+                    ),
                   ),
                 ),
               ),
               const SizedBox(height: 25),
+
+              // Password Field with Eye Icon
               SizedBox(
                 width: 320,
                 child: TextField(
                   controller: passwordController,
-                  obscureText: true,
+                  obscureText: !_isPasswordVisible,
                   decoration: InputDecoration(
                     hintText: "Password",
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                     ),
                     contentPadding: const EdgeInsets.symmetric(
-                        vertical: 12, horizontal: 16),
+                      vertical: 12,
+                      horizontal: 16,
+                    ),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _isPasswordVisible
+                            ? Icons.visibility
+                            : Icons.visibility_off,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _isPasswordVisible = !_isPasswordVisible;
+                        });
+                      },
+                    ),
                   ),
                 ),
               ),
+
               const SizedBox(height: 40),
+
+              // Login Button
               isLoading
                   ? const CircularProgressIndicator()
                   : SizedBox(
@@ -208,7 +235,10 @@ class _LoginPageState extends State<LoginPage> {
                         child: const Text("Login"),
                       ),
                     ),
+
               const SizedBox(height: 20),
+
+              // Forgot Password Button
               TextButton(
                 onPressed: () {
                   context.go('/forgot');

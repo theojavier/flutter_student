@@ -33,7 +33,7 @@ class _ForgotPageState extends State<ForgotPage> {
     setState(() => isLoading = true);
 
     try {
-      // 🔎 Verify Student ID exists first
+      // Verify Student ID exists first
       final query = await db
           .collection("users")
           .where("studentId", isEqualTo: studentId)
@@ -49,14 +49,14 @@ class _ForgotPageState extends State<ForgotPage> {
       final data = query.docs.first.data();
       final firestoreEmail = data["email"];
 
-      // ✅ Check if entered email matches Firestore email
+      //  Check if entered email matches Firestore email
       if (firestoreEmail != email) {
         _showError("Email does not match this Student ID");
         setState(() => isLoading = false);
         return;
       }
 
-      // ✅ If matched, send reset email
+      //  If matched, send reset email
       await auth.sendPasswordResetEmail(email: email);
 
       if (mounted) {

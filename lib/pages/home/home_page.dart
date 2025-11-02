@@ -214,7 +214,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ---------------- UI helpers (same structure you used before) ----------------
+  // UI helpers (same structure you used before)
 
   Widget _buildSkeletonUI() {
     return SingleChildScrollView(
@@ -313,7 +313,7 @@ class _HomePageState extends State<HomePage> {
     return const Center(child: Text("No exam schedule found"));
   }
 
-  // 🔹 Sort by startTime (newest first)
+  //  Sort by startTime (newest first)
   exams.sort((a, b) {
     final aTime = _toDate((a.data() as Map<String, dynamic>)["startTime"]) ?? DateTime(0);
     final bTime = _toDate((b.data() as Map<String, dynamic>)["startTime"]) ?? DateTime(0);
@@ -325,7 +325,7 @@ class _HomePageState extends State<HomePage> {
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     margin: const EdgeInsets.all(8),
     child: ConstrainedBox(
-      // 👈 height for about 5 rows
+      //  height for about 5 rows
       constraints: const BoxConstraints(maxHeight: 400),
       child: SingleChildScrollView(
         child: Table(
@@ -376,7 +376,7 @@ Widget _buildResultsTable(List<Map<String, dynamic>> results) {
     return const Center(child: Text("No results found"));
   }
 
-  // 🔹 Sort by examDate (newest first) if available
+  //  Sort by examDate (newest first) if available
   results.sort((a, b) {
     final aTime = _toDate(a["examDate"]) ?? DateTime(0);
     final bTime = _toDate(b["examDate"]) ?? DateTime(0);
@@ -388,7 +388,7 @@ Widget _buildResultsTable(List<Map<String, dynamic>> results) {
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     margin: const EdgeInsets.all(8),
     child: ConstrainedBox(
-      // 👈 height for about 5 rows
+      //  height for about 5 rows
       constraints: const BoxConstraints(maxHeight: 400),
       child: SingleChildScrollView(
         child: Table(

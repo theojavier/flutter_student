@@ -42,8 +42,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
     loaded.add(
       NotificationItem(
         examId: doc.id,
-        title: data['subject'] ?? 'New Exam', // ✅ use 'subject'
-        createdAt: (data['createdAt'] as Timestamp).toDate(), // ✅ use createdAt
+        title: data['subject'] ?? 'New Exam', //  use 'subject'
+        createdAt: (data['createdAt'] as Timestamp).toDate(), //  use createdAt
         viewed: data['viewed'] ?? false,
       ),
     );

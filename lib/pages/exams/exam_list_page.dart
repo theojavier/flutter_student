@@ -58,7 +58,6 @@ class _ExamListPageState extends State<ExamListPage> {
     }
   }
 
-  /// Compute week start (Monday 00:00) and week end (Sunday 23:59:59)
   Map<String, DateTime> _weekRange() {
     final now = DateTime.now();
     final monday = now.subtract(Duration(days: now.weekday - 1));
@@ -95,10 +94,6 @@ class _ExamListPageState extends State<ExamListPage> {
     final startTs = Timestamp.fromDate(range['start']!);
     final endTs = Timestamp.fromDate(range['end']!);
 
-    debugPrint("PROGRAM filter = $_program");
-    debugPrint("YEARBLOCK filter = $_yearBlock");
-    debugPrint("WEEK START = $startTs, END = $endTs");
-
     final examsQuery = _db
         .collection('exams')
         .where('program', isEqualTo: _program)
@@ -107,38 +102,72 @@ class _ExamListPageState extends State<ExamListPage> {
         .where('endTime', isLessThanOrEqualTo: endTs);
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.purple.shade700,
-        title: const Text('My Exam'),
-      ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: examsQuery.snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return const Center(child: Text('No exams this week'));
-          }
+      backgroundColor: Colors.grey[100],
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Top title cube
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.purple.shade700,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 6,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: const Center(
+                child: Text(
+                  'My Exams',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
 
-          final exams = snapshot.data!.docs
-              .map((doc) => ExamModel.fromDoc(doc))
-              .toList();
+            // Exams list
+            Expanded(
+              child: StreamBuilder<QuerySnapshot>(
+                stream: examsQuery.snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        'No exams scheduled for this week',
+                        style: TextStyle(fontSize: 16),
+                      ),
+                    );
+                  }
 
-          debugPrint("Found ${exams.length} exams this week:");
-          for (var e in exams) {
-            debugPrint(
-                "${e.subject} → ${e.startTime?.toDate()} - ${e.endTime?.toDate()}");
-          }
+                  final exams = snapshot.data!.docs
+                      .map((doc) => ExamModel.fromDoc(doc))
+                      .toList();
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: exams.length,
-            itemBuilder: (context, index) {
-              return ExamItemCard(exam: exams[index]);
-            },
-          );
-        },
+                  return ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    itemCount: exams.length,
+                    separatorBuilder: (context, index) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      return ExamItemCard(exam: exams[index]);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

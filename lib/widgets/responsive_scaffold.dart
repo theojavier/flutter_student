@@ -1,15 +1,17 @@
-import 'dart:async';
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
+// responsive_scaffold.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'nav_header.dart';
 import 'package:go_router/go_router.dart';
 import '../helpers/notifications_helper.dart';
 import '../widgets/notifications_list.dart';
 import '../pages/notifications/notification_item.dart';
-import 'nav_header.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
+
+//  Platform + Web detection
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:io' show Platform;
 
 class ResponsiveScaffold extends StatefulWidget {
   final Widget homePage;
@@ -39,63 +41,97 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   String? _userId;
   Map<String, dynamic>? _cachedProfile;
 
-  StreamSubscription<DocumentSnapshot>? _profileSubscription;
   late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
-    selectedIndex = widget.initialIndex;
+    selectedIndex = widget.initialIndex; //  set from constructor
     _pages = [widget.homePage, widget.examPage, widget.schedulePage];
     _loadUserProfile();
   }
 
+  StreamSubscription<DocumentSnapshot>? _profileSubscription;
+
   Future<void> _loadUserProfile() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
+
     if (userId == null) {
-      setState(() {
-        headerName = "No user found";
-        headerSection = "";
-        profileImageUrl = null;
-      });
+      if (_cachedProfile == null && mounted) {
+        setState(() {
+          headerName = "No user found";
+          headerSection = "";
+          profileImageUrl = null;
+        });
+      }
       return;
     }
+
+    //  silently assign without setState (prevents flicker on nav)
     _userId = userId;
 
-    if (_cachedProfile != null) _updateProfileUI(_cachedProfile!);
+    //  show cache immediately, but only once
+    if (_cachedProfile != null) {
+      _updateProfileUI(_cachedProfile!);
+    }
 
+    // cancel old subscription before listening
     await _profileSubscription?.cancel();
+
     _profileSubscription = FirebaseFirestore.instance
         .collection("users")
         .doc(userId)
         .snapshots()
         .listen((doc) {
-      if (!doc.exists) {
-        setState(() {
-          headerName = "Profile not found";
-          headerSection = "";
-          profileImageUrl = null;
+          if (!doc.exists) {
+            if (_cachedProfile == null && mounted) {
+              setState(() {
+                headerName = "Profile not found";
+                headerSection = "";
+                profileImageUrl = null;
+              });
+            }
+            return;
+          }
+
+          final data = doc.data()!;
+          _updateProfileUI(data);
         });
-        return;
-      }
+  }
+
+  void _refreshProfile() async {
+    if (_userId == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(_userId)
+        .get();
+    if (doc.exists) {
       _updateProfileUI(doc.data()!);
-    });
+    }
   }
 
   void _updateProfileUI(Map<String, dynamic> data) {
-    if (!mounted) return;
+    if (!mounted) return; // 🔒 safeguard
+
     var url = (data['profileImage'] as String?) ?? '';
-    if (url.isNotEmpty && url.contains('imgur.com') && !url.contains('i.imgur.com')) {
+    if (url.isNotEmpty &&
+        url.contains('imgur.com') &&
+        !url.contains('i.imgur.com')) {
       url = '${url.replaceAll('imgur.com', 'i.imgur.com')}.jpg';
     }
 
     final newName = data['name'] ?? 'No Name';
     final newSection =
-        '${data['program'] ?? ''} ${data['yearBlock'] ?? ''} (${data['semester'] ?? ''})'.trim();
+        '${data['program'] ?? ''} ${data['yearBlock'] ?? ''} (${data['semester'] ?? ''})'
+            .trim();
     final newImageUrl = url.isNotEmpty ? url : null;
 
-    if (newName != headerName || newSection != headerSection || newImageUrl != profileImageUrl) {
+    //  only update UI if something actually changed
+    if (newName != headerName ||
+        newSection != headerSection ||
+        newImageUrl != profileImageUrl) {
       setState(() {
         headerName = newName;
         headerSection = newSection;
@@ -103,6 +139,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
         _cachedProfile = Map<String, dynamic>.from(data);
       });
     } else {
+      // still update cache silently, without rebuild
       _cachedProfile = Map<String, dynamic>.from(data);
     }
   }
@@ -113,22 +150,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     super.dispose();
   }
 
-  bool _isDesktop(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    if (kIsWeb) return width >= 900;
-    return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
-  }
-
-  void _closeDropdownsAndOverlays(BuildContext context) {
-    FocusScope.of(context).unfocus();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      FocusManager.instance.primaryFocus?.unfocus();
-    });
-  }
-
   void _onSelectPage(int index) {
     setState(() => selectedIndex = index);
-    _closeDropdownsAndOverlays(context);
+
     switch (index) {
       case 0:
         context.go('/home');
@@ -140,7 +164,23 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
         context.go('/schedule');
         break;
     }
-    if (!_isDesktop(context)) Navigator.pop(context);
+
+    // close drawer on mobile
+    if (!_isDesktop(context)) {
+      Navigator.pop(context);
+    }
+  }
+
+  //  Centralized desktop detection
+  bool _isDesktop(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+
+    if (kIsWeb) {
+      // Treat wide web browsers as desktop, narrow as mobile
+      return width >= 900;
+    }
+
+    return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
   }
 
   @override
@@ -149,105 +189,109 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     const topColor = Colors.blue;
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: topColor,
-        elevation: 0,
-        centerTitle: true,
-        automaticallyImplyLeading: !isDesktop,
-        title: GestureDetector(
-          onTap: () => context.go('/home'),
-          child: Image.asset(
-            'assets/image/istockphoto_1401106927_612x612_removebg_preview.png',
-            height: 50,
-            width: 90,
-          ),
-        ),
-        leading: isDesktop
-            ? null
-            : Builder(
+      appBar: isDesktop
+          ? AppBar(
+              backgroundColor: topColor,
+              elevation: 0,
+              centerTitle: true,
+              automaticallyImplyLeading: false,
+              title: GestureDetector(
+                onTap: () => context.go('/home'),
+                child: Image.asset(
+                  'assets/image/istockphoto_1401106927_612x612_removebg_preview.png',
+                  height: 50,
+                  width: 90,
+                ),
+              ),
+              actions: _buildActions(context),
+            )
+          : AppBar(
+              backgroundColor: topColor,
+              centerTitle: true,
+              automaticallyImplyLeading: false,
+              title: GestureDetector(
+                onTap: () => context.go('/home'),
+                child: Image.asset(
+                  'assets/image/istockphoto_1401106927_612x612_removebg_preview.png',
+                  height: 50,
+                  width: 90,
+                ),
+              ),
+              leading: Builder(
                 builder: (ctx) => IconButton(
                   icon: const Icon(Icons.menu),
                   onPressed: () => Scaffold.of(ctx).openDrawer(),
                 ),
               ),
-        actions: _buildActions(context),
-      ),
-      drawer: isDesktop ? null : _buildDrawer(context),
-      body: isDesktop
-    ? Row(
-        children: [
-          Container(
-            width: 260,
-            color: Colors.white,
-            child: Column(
-              children: [
-                NavHeader(
-                  name: headerName,
-                  section: headerSection,
-                  profileImageUrl: profileImageUrl,
-                  onProfileTap: () async {
-                    _navigateSafely(context, '/profile');
-                  },
-                  onHistoryTap: () async {
-                    final prefs = await SharedPreferences.getInstance();
-                    final studentId = prefs.getString('studentId');
-                    _navigateSafely(context, '/exam-history',
-                        extra: {'studentId': studentId});
-                  },
-                ),
-                Expanded(
-                  child: ListView(
-                    padding: EdgeInsets.zero,
-                    children: _menuTiles(),
-                  ),
-                ),
-              ],
+              actions: _buildActions(context),
             ),
-          ),
+      drawer: isDesktop ? null : _buildDrawer(context),
+
+      body: Row(
+        children: [
+          if (isDesktop)
+            Container(
+              width: 260,
+              color: Colors.white,
+              child: Column(
+                children: [
+                  NavHeader(
+                    name: headerName,
+                    section: headerSection,
+                    profileImageUrl: profileImageUrl,
+                    onProfileTap: () {
+                      _refreshProfile();
+                      context.go('/profile');
+                    },
+                    onHistoryTap: () async {
+                      final prefs = await SharedPreferences.getInstance();
+                      final studentId = prefs.getString('studentId');
+                      context.go(
+                        '/exam-history',
+                        extra: {'studentId': studentId},
+                      );
+                    },
+                  ),
+                  Expanded(
+                    child: ListView(
+                      padding: EdgeInsets.zero,
+                      children: _menuTiles(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(child: widget.detailPage ?? _pages[selectedIndex]),
         ],
-      )
-    : widget.detailPage ?? _pages[selectedIndex],
+      ),
     );
-  }
-
-  void _navigateSafely(BuildContext context, String route, {Map<String, dynamic>? extra}) async {
-    _closeDropdownsAndOverlays(context);
-    FocusScope.of(context).unfocus();
-
-    if (Navigator.of(context, rootNavigator: true).canPop()) {
-      Navigator.of(context, rootNavigator: true).pop();
-    }
-    final scaffoldState = Scaffold.maybeOf(context);
-    if (scaffoldState?.isDrawerOpen ?? false) {
-      Navigator.of(context).pop();
-    }
-
-    final loc = GoRouter.of(context).routeInformationProvider.value.uri.toString();
-    if (loc != route) {
-      await Future.delayed(const Duration(milliseconds: 200));
-      context.go(route, extra: extra);
-    }
   }
 
   List<Widget> _menuTiles() => [
-        _buildMenuItem(Icons.home, 'Home', 0, '/home'),
-        _buildMenuItem(Icons.event, 'My Exam', 1, '/exam-list'),
-        _buildMenuItem(Icons.schedule, 'My Schedule', 2, '/schedule'),
-      ];
-
-  Widget _buildMenuItem(IconData icon, String title, int index, String route) {
-    return ListTile(
-      leading: Icon(icon, color: Colors.black87),
-      title: Text(title, style: const TextStyle(color: Colors.black87)),
-      selected: false,
-      selectedTileColor: Colors.transparent,
-      hoverColor: Colors.grey.shade200,
-      focusColor: Colors.transparent,
-      splashColor: Colors.transparent,
-      onTap: () => _onSelectPage(index),
-    );
-  }
+    ListTile(
+      leading: const Icon(Icons.home),
+      title: const Text('Home'),
+      selected: selectedIndex == 0,
+      onTap: () => _onSelectPage(0),
+    ),
+    ListTile(
+      leading: const Icon(Icons.event),
+      title: const Text('My Exam'),
+      selected: selectedIndex == 1,
+      onTap: () => _onSelectPage(1),
+    ),
+    ListTile(
+      leading: const Icon(Icons.schedule),
+      title: const Text('My Schedule'),
+      selected: selectedIndex == 2,
+      onTap: () async {
+        final prefs = await SharedPreferences.getInstance();
+        final studentId = prefs.getString('studentId');
+        if (!mounted) return;
+        _onSelectPage(2);
+      },
+    ),
+  ];
 
   List<Widget> _buildActions(BuildContext context) {
     return [
@@ -265,6 +309,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                 ? snap.data!.docs.where((d) => !(d['viewed'] ?? false)).length
                 : 0;
 
+            // Optional: ensure notifications exist
             ensureUserNotifications(userId: _userId!);
 
             return Stack(
@@ -280,7 +325,8 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                               return NotificationItem(
                                 examId: doc.id,
                                 title: data['subject'] ?? 'New Exam',
-                                createdAt: (data['createdAt'] as Timestamp).toDate(),
+                                createdAt: (data['createdAt'] as Timestamp)
+                                    .toDate(),
                                 viewed: data['viewed'] ?? false,
                               );
                             }).toList()
@@ -295,20 +341,25 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                             child: NotificationsList(
                               notifications: notifications,
                               onNotificationClick: (item) async {
+                                // mark as viewed
                                 await FirebaseFirestore.instance
                                     .collection('users')
                                     .doc(_userId)
                                     .collection('notifications')
                                     .doc(item.examId)
                                     .update({'viewed': true});
+
                                 Navigator.of(ctx).pop();
-                                context.push('/take-exam', extra: {
-                                  'examId': item.examId,
-                                  'subject': item.title,
-                                  'teacherId': item.teacherId,
-                                  'startMillis': item.startMillis,
-                                  'endMillis': item.endMillis,
-                                });
+                                context.push(
+                                  '/take-exam',
+                                  extra: {
+                                    'examId': item.examId,
+                                    'subject': item.title,
+                                    'teacherId': item.teacherId,
+                                    'startMillis': item.startMillis,
+                                    'endMillis': item.endMillis,
+                                  },
+                                );
                               },
                             ),
                           ),
@@ -327,11 +378,17 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                         color: Colors.red,
                         shape: BoxShape.circle,
                       ),
-                      constraints: const BoxConstraints(minWidth: 4, minHeight: 1),
+                      constraints: const BoxConstraints(
+                        minWidth: 4,
+                        minHeight: 1,
+                      ),
                       child: Text(
                         unread > 9 ? '9+' : unread.toString(),
                         style: const TextStyle(
-                            color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -343,16 +400,15 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
       PopupMenuButton<String>(
         onSelected: (value) async {
           if (value == 'logout') {
-            await _profileSubscription?.cancel();
             final prefs = await SharedPreferences.getInstance();
             await prefs.clear();
-            await FirebaseAuth.instance.signOut();
             _cachedProfile = null;
-            _userId = null;
             if (mounted) context.go('/login');
           }
         },
-        itemBuilder: (ctx) => const [PopupMenuItem(value: 'logout', child: Text('Logout'))],
+        itemBuilder: (ctx) => const [
+          PopupMenuItem(value: 'logout', child: Text('Logout')),
+        ],
       ),
     ];
   }
@@ -366,11 +422,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
             name: headerName,
             section: headerSection,
             profileImageUrl: profileImageUrl,
-            onProfileTap: () => _navigateSafely(context, '/profile'),
+            onProfileTap: () => context.push('/profile'),
             onHistoryTap: () async {
-              final prefs = await SharedPreferences.getInstance();
-              final studentId = prefs.getString('studentId');
-              _navigateSafely(context, '/exam-history', extra: {'studentId': studentId});
+              context.push('/exam-history');
             },
           ),
           ..._menuTiles(),

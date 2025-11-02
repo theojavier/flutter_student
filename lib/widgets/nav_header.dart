@@ -23,32 +23,22 @@ class NavHeader extends StatefulWidget {
 class _NavHeaderState extends State<NavHeader> {
   bool _expanded = false;
 
-  void _toggleExpand() {
-    setState(() => _expanded = !_expanded);
-  }
-
-  void _handleTap(VoidCallback callback) {
-    // ✅ Collapse dropdown first
-    if (_expanded) setState(() => _expanded = false);
-
-    // ✅ Then call the actual navigation callback
-    Future.microtask(callback);
-  }
-
   @override
   Widget build(BuildContext context) {
+    // Make the header full width and with no margin so it visually connects
+    // to the AppBar when the same color is used.
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         InkWell(
-          onTap: _toggleExpand,
+          onTap: () => setState(() => _expanded = !_expanded),
           child: SizedBox(
-            height: 160,
+            height: 160, // adjust height to taste
             width: double.infinity,
             child: UserAccountsDrawerHeader(
-              margin: EdgeInsets.zero,
+              margin: EdgeInsets.zero, // important: remove default gap
               decoration: const BoxDecoration(
-                color: Colors.blue,
+                color: Colors.blue, // same as AppBar for fused look
               ),
               accountName: Text(
                 widget.name,
@@ -64,23 +54,23 @@ class _NavHeaderState extends State<NavHeader> {
               currentAccountPicture: CircleAvatar(
                 backgroundColor: Colors.white,
                 child: widget.profileImageUrl != null
-                    ? ClipOval(
-                        child: Image.network(
-                          widget.profileImageUrl!,
-                          key: ValueKey(widget.profileImageUrl),
-                          fit: BoxFit.cover,
-                          width: 80,
-                          height: 80,
-                        ),
-                      )
-                    : const Icon(Icons.person, size: 40, color: Colors.grey),
-              ),
-              onDetailsPressed: _toggleExpand,
+                  ? ClipOval(
+                    child: Image.network(
+                      widget.profileImageUrl!,
+                      key: ValueKey(widget.profileImageUrl), //  cache by URL
+                      fit: BoxFit.cover,
+                      width: 80,
+                      height: 80,
+                      ),
+                    )
+                  : const Icon(Icons.person, size: 40, color: Colors.grey),
+                ),
+              onDetailsPressed: () => setState(() => _expanded = !_expanded),
             ),
           ),
         ),
 
-        // 🔹 Dropdown (closes when any option clicked)
+        // Expandable options (hidden by default)
         AnimatedCrossFade(
           firstChild: const SizedBox.shrink(),
           secondChild: Column(
@@ -88,12 +78,12 @@ class _NavHeaderState extends State<NavHeader> {
               ListTile(
                 leading: const Icon(Icons.person),
                 title: const Text("My Profile"),
-                onTap: () => _handleTap(widget.onProfileTap),
+                onTap: widget.onProfileTap,
               ),
               ListTile(
                 leading: const Icon(Icons.history),
                 title: const Text("History"),
-                onTap: () => _handleTap(widget.onHistoryTap),
+                onTap: widget.onHistoryTap,
               ),
             ],
           ),
@@ -105,3 +95,4 @@ class _NavHeaderState extends State<NavHeader> {
     );
   }
 }
+
