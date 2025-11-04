@@ -331,14 +331,7 @@ void _detectFace() {
                                 child: const Text("View Result"),
                                 onPressed: () {
                                   // View Result
-                                  context.goNamed(
-                                    'examResult',
-                                    pathParameters: {
-                                      "examId": widget.examId,
-                                      "studentId": studentId!,
-                                    },
-                                    extra: {'fromExamPage': true},
-                                  );
+                                  context.go('/exam-result/${widget.examId}/$studentId');
                                 },
                               );
                             }

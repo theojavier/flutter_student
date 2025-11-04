@@ -37,110 +37,81 @@ class MyApp extends StatelessWidget {
     final GoRouter router = GoRouter(
       initialLocation: isLoggedIn ? '/home' : '/login',
       routes: [
-        GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
+
+        /// Public Routes
+        GoRoute(
+          path: '/login',
+          builder: (context, state) => const LoginPage(),
+        ),
         GoRoute(
           path: '/forgot',
           builder: (context, state) => const ForgotPage(),
         ),
-        GoRoute(
-          path: '/home',
-          builder: (context, state) => ResponsiveScaffold(
-            initialIndex: 0,
-            homePage: HomePage(),
-            examPage: ExamListPage(),
-            schedulePage: SchedulePage(),
-          ),
-        ),
-        GoRoute(
-          path: '/exam-list',
-          builder: (context, state) => ResponsiveScaffold(
-            initialIndex: 1,
-            homePage: HomePage(),
-            examPage: ExamListPage(),
-            schedulePage: SchedulePage(),
-          ),
-        ),
-        GoRoute(
-          path: '/schedule',
-          builder: (context, state) => ResponsiveScaffold(
-            initialIndex: 2,
-            homePage: HomePage(),
-            examPage: ExamListPage(),
-            schedulePage: SchedulePage(),
-          ),
-        ),
-        GoRoute(
-          name: 'take-exam',
-          path: '/take-exam/:examId',
-          builder: (context, state) {
-            final args = state.extra as Map<String, dynamic>?;
+
+        ShellRoute(
+          builder: (context, state, child) {
             return ResponsiveScaffold(
-              initialIndex: 1,
+              detailPage: child, 
               homePage: HomePage(),
               examPage: ExamListPage(),
               schedulePage: SchedulePage(),
-              detailPage: TakeExamPage(
-                examId: args?['examId'] ?? state.pathParameters['examId']!,
-                startMillis: args?['startMillis'],
-                endMillis: args?['endMillis'],
+            );
+          },
+          routes: [
+
+
+            GoRoute(
+              path: '/home',
+              builder: (context, state) => HomePage(),
+            ),
+            GoRoute(
+              path: '/exam-list',
+              builder: (context, state) => ExamListPage(),
+            ),
+            GoRoute(
+              path: '/schedule',
+              builder: (context, state) => SchedulePage(),
+            ),
+            GoRoute(
+              path: '/profile',
+              builder: (context, state) => const ProfilePage(),
+            ),
+
+
+            GoRoute(
+              name: 'take-exam',
+              path: '/take-exam/:examId',
+              builder: (context, state) {
+                final args = state.extra as Map<String, dynamic>?;
+                return TakeExamPage(
+                  examId: args?['examId'] ?? state.pathParameters['examId']!,
+                  startMillis: args?['startMillis'],
+                  endMillis: args?['endMillis'],
+                );
+              },
+            ),
+            GoRoute(
+              path: '/exam-history',
+              builder: (context, state) =>
+                  const ExamHistoryPage(),
+            ),
+            GoRoute(
+              name: 'exam',
+              path: '/exam/:examId/:studentId',
+              builder: (context, state) => ExamPage(
+                examId: state.pathParameters['examId']!,
+                studentId: state.pathParameters['studentId']!,
               ),
-            );
-          },
-        ),
-        GoRoute(
-          path: '/profile',
-          builder: (context, state) => ResponsiveScaffold(
-            homePage: ProfilePage(),
-            examPage: ExamListPage(),
-            schedulePage: SchedulePage(),
-            detailPage: const ProfilePage(),
-          ),
-        ),
-        GoRoute(
-          path: '/exam-history',
-          builder: (context, state) {
-            final args = state.extra as Map<String, dynamic>?;
-            return ResponsiveScaffold(
-              homePage: HomePage(),
-              examPage: ExamListPage(),
-              schedulePage: SchedulePage(),
-              detailPage: const ExamHistoryPage(),
-            );
-          },
-        ),
-        GoRoute(
-          name: 'exam',
-          path: '/exam/:examId/:studentId',
-          builder: (context, state) {
-            final examId = state.pathParameters['examId']!;
-            final studentId = state.pathParameters['studentId']!;
-            return ResponsiveScaffold(
-              homePage: HomePage(),
-              examPage: ExamListPage(),
-              schedulePage: SchedulePage(),
-              detailPage: ExamPage(examId: examId, studentId: studentId),
-            );
-          },
-        ),
-        GoRoute(
-          name: 'examResult',
-          path: '/exam-result/:examId/:studentId',
-          builder: (context, state) {
-            final examId = state.pathParameters['examId']!;
-            final studentId = state.pathParameters['studentId']!;
-            final extra = state.extra as Map<String, dynamic>?;
-            final fromExamPage = extra?['fromExamPage'] ?? false;
-            return ResponsiveScaffold(
-              homePage: HomePage(),
-              examPage: ExamListPage(),
-              schedulePage: SchedulePage(),
-              detailPage: ExamResultPage(
-                examId: examId,
-                studentId: studentId,
-                fromExamPage: fromExamPage,
+            ),
+            GoRoute(
+              name: 'examResult',
+              path: '/exam-result/:examId/:studentId',
+              builder: (context, state) => ExamResultPage(
+                examId: state.pathParameters['examId']!,
+                studentId: state.pathParameters['studentId']!,
               ),
-            );
-          },
+            ),
+          ],
         ),
       ],
     );

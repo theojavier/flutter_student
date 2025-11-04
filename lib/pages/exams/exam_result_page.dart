@@ -7,13 +7,11 @@ import 'dart:html' as html;
 class ExamResultPage extends StatefulWidget {
   final String examId;
   final String studentId;
-  final bool fromExamPage;
 
   const ExamResultPage({
     super.key,
     required this.examId,
     required this.studentId,
-    this.fromExamPage = false,
   });
 
   @override
@@ -27,39 +25,39 @@ class _ExamResultPageState extends State<ExamResultPage> {
   void initState() {
     super.initState();
 
-    if (kIsWeb && widget.fromExamPage) {
-      // Push a new browser state so pressing back won't immediately navigate away
-      html.window.history.pushState(
-        {'locked': true},
-        "Result",
-        html.window.location.href,
-      );
+    // if (kIsWeb && widget.fromExamPage) {
+    //   // Push a new browser state so pressing back won't immediately navigate away
+    //   html.window.history.pushState(
+    //     {'locked': true},
+    //     "Result",
+    //     html.window.location.href,
+    //   );
 
-      // Listen for browser back button
-      _popSub = html.window.onPopState.listen((event) {
-        final stateData = event.state;
+    //   // Listen for browser back button
+    //   _popSub = html.window.onPopState.listen((event) {
+    //     final stateData = event.state;
 
-        // Only block if our custom lock state exists
-        if (stateData is Map && stateData['locked'] == true) {
-          // Re-push same state to keep browser from leaving
-          html.window.history.pushState(
-            {'locked': true},
-            "Result",
-            html.window.location.href,
-          );
+    //     // Only block if our custom lock state exists
+    //     if (stateData is Map && stateData['locked'] == true) {
+    //       // Re-push same state to keep browser from leaving
+    //       html.window.history.pushState(
+    //         {'locked': true},
+    //         "Result",
+    //         html.window.location.href,
+    //       );
 
-          // Show the snack message
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                "Back navigation is disabled after submitting the exam.",
-              ),
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-      });
-    }
+    //       // Show the snack message
+    //       ScaffoldMessenger.of(context).showSnackBar(
+    //         const SnackBar(
+    //           content: Text(
+    //             "Back navigation is disabled after submitting the exam.",
+    //           ),
+    //           duration: Duration(seconds: 2),
+    //         ),
+    //       );
+    //     }
+    //   });
+    // }
   }
 
   @override
@@ -85,7 +83,8 @@ class _ExamResultPageState extends State<ExamResultPage> {
     final db = FirebaseFirestore.instance;
 
     return WillPopScope(
-      onWillPop: () async => !widget.fromExamPage,
+      onWillPop: () async => false,
+      //onWillPop: () async => !widget.fromExamPage,
       child: Scaffold(
         backgroundColor: Colors.white,
         body: FutureBuilder<DocumentSnapshot>(

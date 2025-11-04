@@ -59,9 +59,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   // Navigate to /take-exam
-  context.push(
-    '/take-exam/${item.examId}',
-  );
+  context.go('/take-exam/${item.examId}');
 }
 
   @override

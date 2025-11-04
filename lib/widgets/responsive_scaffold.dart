@@ -46,8 +46,13 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   @override
   void initState() {
     super.initState();
-    selectedIndex = widget.initialIndex; //  set from constructor
-    _pages = [widget.homePage, widget.examPage, widget.schedulePage];
+    
+      selectedIndex = widget.initialIndex; // ✅ ensure initial value
+  _pages = [widget.homePage, widget.examPage, widget.schedulePage];
+
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _syncIndexWithRoute(); // ✅ call AFTER first layout
+  });
     _loadUserProfile();
   }
 
@@ -182,6 +187,25 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
 
     return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
   }
+  void _syncIndexWithRoute() {
+  final location = GoRouter.of(context)
+      .routerDelegate
+      .currentConfiguration
+      .uri
+      .toString();
+
+  if (location.startsWith('/home')) {
+    selectedIndex = 0;
+  } else if (location.startsWith('/exam-list') ||
+      location.startsWith('/take-exam') ||
+      location.startsWith('/exam/')) {
+    selectedIndex = 1;
+  } else if (location.startsWith('/schedule')) {
+    selectedIndex = 2;
+  }
+
+  setState(() {});
+}
 
   @override
   Widget build(BuildContext context) {
@@ -350,9 +374,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                                     .update({'viewed': true});
 
                                 Navigator.of(ctx).pop();
-                                context.go(
-                                  '/take-exam/${item.examId}',
-                                );
+                                context.go('/take-exam/${item.examId}');
                               },
                             ),
                           ),
@@ -415,9 +437,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
             name: headerName,
             section: headerSection,
             profileImageUrl: profileImageUrl,
-            onProfileTap: () => context.push('/profile'),
+            onProfileTap: () => context.go('/profile'),
             onHistoryTap: () async {
-              context.push('/exam-history');
+              context.go('/exam-history');
             },
           ),
           ..._menuTiles(),

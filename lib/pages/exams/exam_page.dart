@@ -63,7 +63,14 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     final lastExamId = prefs.getString("examId");
     if (lastExamId != null && lastExamId != widget.examId) {
-      await prefs.clear();
+      for (var key in prefs.getKeys()) {
+        if (key.startsWith("answer_") ||
+            key == "examId" ||
+            key == "currentIndex" ||
+            key == "questionOrder") {
+          await prefs.remove(key);
+        }
+      }
     }
 
     int? savedIndex = prefs.getInt("currentIndex");
@@ -335,23 +342,24 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
   }
 
   Future<void> _markIncompleteIfNeeded() async {
-    try {
-      final ref = db
-          .collection("examResults")
-          .doc(widget.examId)
-          .collection(widget.studentId)
-          .doc("result");
-      final snap = await ref.get();
-      if (snap.exists && snap.data()?["status"] != "completed") {
-        await ref.set({
-          "status": "incomplete",
-          "submittedAt": FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-    } catch (e) {
-      debugPrint("markIncomplete error: $e");
+  if (_examFinished || submitting) return; // << add this
+  try {
+    final ref = db
+        .collection("examResults")
+        .doc(widget.examId)
+        .collection(widget.studentId)
+        .doc("result");
+    final snap = await ref.get();
+    if (snap.exists && snap.data()?["status"] != "completed") {
+      await ref.set({
+        "status": "incomplete",
+        "submittedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
     }
+  } catch (e) {
+    debugPrint("markIncomplete error: $e");
   }
+}
 
   ///  SUBMIT
   Future<void> _submitExam({bool auto = false}) async {
@@ -402,20 +410,33 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
       _beforeUnloadSub?.cancel();
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-
-      if (mounted) {
-        context.goNamed(
-          'examResult',
-          pathParameters: {
-            'examId': widget.examId,
-            'studentId': widget.studentId,
-          },
-          extra: {
-            "fromExamPage": true,
-          },
-        );
+      for (var key in prefs.getKeys()) {
+        if (key.startsWith("answer_") ||
+            key == "examId" ||
+            key == "currentIndex" ||
+            key == "questionOrder") {
+          await prefs.remove(key);
+        }
       }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+  if (mounted) {
+    // GoRouter.of(context).pushReplacementNamed(
+    //   'examResult',
+    //   pathParameters: {
+    //     'examId': widget.examId,
+    //     'studentId': widget.studentId,
+    //   },
+    // );
+    context.goNamed(
+      'examResult',
+      pathParameters: {
+        'examId': widget.examId,
+        'studentId': widget.studentId,
+      },
+    );
+  }
+});
     } catch (e) {
       debugPrint("submitExam error: $e");
       await _markIncompleteIfNeeded();
@@ -642,14 +663,16 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                                       TextButton(
                                         onPressed: () =>
                                             Navigator.of(context).pop(),
-                                        child: const Text("Cancel"),
+                                            child: const Text("Cancel"),
                                       ),
                                       ElevatedButton(
                                         onPressed: submitting
                                             ? null
                                             : () {
-                                                Navigator.of(context).pop();
-                                                _submitExam();
+                                                Navigator.of(context, rootNavigator: true).pop();
+                                                Future.delayed(const Duration(milliseconds: 100), () {
+  if (mounted) _submitExam();
+});
                                               },
                                         child: const Text("Submit"),
                                       ),

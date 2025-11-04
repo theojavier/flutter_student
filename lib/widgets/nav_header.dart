@@ -54,17 +54,19 @@ class _NavHeaderState extends State<NavHeader> {
               currentAccountPicture: CircleAvatar(
                 backgroundColor: Colors.white,
                 child: widget.profileImageUrl != null
-                  ? ClipOval(
-                    child: Image.network(
-                      widget.profileImageUrl!,
-                      key: ValueKey(widget.profileImageUrl), //  cache by URL
-                      fit: BoxFit.cover,
-                      width: 80,
-                      height: 80,
-                      ),
-                    )
-                  : const Icon(Icons.person, size: 40, color: Colors.grey),
-                ),
+                    ? ClipOval(
+                        child: Image.network(
+                          widget.profileImageUrl!,
+                          key: ValueKey(
+                            widget.profileImageUrl,
+                          ), //  cache by URL
+                          fit: BoxFit.cover,
+                          width: 80,
+                          height: 80,
+                        ),
+                      )
+                    : const Icon(Icons.person, size: 40, color: Colors.grey),
+              ),
               onDetailsPressed: () => setState(() => _expanded = !_expanded),
             ),
           ),
@@ -78,21 +80,33 @@ class _NavHeaderState extends State<NavHeader> {
               ListTile(
                 leading: const Icon(Icons.person),
                 title: const Text("My Profile"),
-                onTap: widget.onProfileTap,
+                onTap: () {
+                  setState(() => _expanded = false);
+                  if (Scaffold.maybeOf(context)?.isDrawerOpen ?? false) {
+                    Navigator.of(context).pop();
+                  }
+                  widget.onProfileTap();
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.history),
                 title: const Text("History"),
-                onTap: widget.onHistoryTap,
+                onTap: () {
+                  setState(() => _expanded = false);
+                  if (Scaffold.maybeOf(context)?.isDrawerOpen ?? false) {
+                    Navigator.of(context).pop();
+                  }
+                  widget.onHistoryTap();
+                },
               ),
             ],
           ),
-          duration: const Duration(milliseconds: 200),
-          crossFadeState:
-              _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+          duration: const Duration(milliseconds: 100),
+          crossFadeState: _expanded
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
         ),
       ],
     );
   }
 }
-
