@@ -47,11 +47,11 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   void initState() {
     super.initState();
     
-      selectedIndex = widget.initialIndex; // ✅ ensure initial value
+      selectedIndex = widget.initialIndex; //  ensure initial value
   _pages = [widget.homePage, widget.examPage, widget.schedulePage];
 
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    _syncIndexWithRoute(); // ✅ call AFTER first layout
+    _syncIndexWithRoute(); //  call AFTER first layout
   });
     _loadUserProfile();
   }
@@ -118,7 +118,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   }
 
   void _updateProfileUI(Map<String, dynamic> data) {
-    if (!mounted) return; // 🔒 safeguard
+    if (!mounted) return; 
 
     var url = (data['profileImage'] as String?) ?? '';
     if (url.isNotEmpty &&
@@ -222,9 +222,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               title: GestureDetector(
                 onTap: () => context.go('/home'),
                 child: Image.asset(
-                  'assets/image/istockphoto_1401106927_612x612_removebg_preview.png',
-                  height: 50,
-                  width: 90,
+                  'assets/image/fots_student.png',
+                  height: 80,
+                  width: 120,
                 ),
               ),
               actions: _buildActions(context),
@@ -236,9 +236,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               title: GestureDetector(
                 onTap: () => context.go('/home'),
                 child: Image.asset(
-                  'assets/image/istockphoto_1401106927_612x612_removebg_preview.png',
-                  height: 50,
-                  width: 90,
+                  'assets/image/fots_student.png',
+                  height: 80,
+                  width: 120,
                 ),
               ),
               leading: Builder(
@@ -295,22 +295,17 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     ListTile(
       leading: const Icon(Icons.home),
       title: const Text('Home'),
-      selected: selectedIndex == 0,
       onTap: () => _onSelectPage(0),
     ),
     ListTile(
       leading: const Icon(Icons.event),
       title: const Text('My Exam'),
-      selected: selectedIndex == 1,
       onTap: () => _onSelectPage(1),
     ),
     ListTile(
       leading: const Icon(Icons.schedule),
       title: const Text('My Schedule'),
-      selected: selectedIndex == 2,
       onTap: () async {
-        final prefs = await SharedPreferences.getInstance();
-        final studentId = prefs.getString('studentId');
         if (!mounted) return;
         _onSelectPage(2);
       },

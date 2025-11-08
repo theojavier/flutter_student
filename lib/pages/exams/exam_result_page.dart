@@ -2,16 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
-import 'dart:html' as html;
+//import 'dart:html' as html;
 
 class ExamResultPage extends StatefulWidget {
   final String examId;
   final String studentId;
+  //final bool fromExamPage;
 
   const ExamResultPage({
     super.key,
     required this.examId,
     required this.studentId,
+    //this.fromExamPage = false,
   });
 
   @override
@@ -19,7 +21,7 @@ class ExamResultPage extends StatefulWidget {
 }
 
 class _ExamResultPageState extends State<ExamResultPage> {
-  StreamSubscription<html.PopStateEvent>? _popSub;
+  //StreamSubscription<html.PopStateEvent>? _popSub;
 
   @override
   void initState() {
@@ -27,7 +29,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
 
     // if (kIsWeb && widget.fromExamPage) {
     //   // Push a new browser state so pressing back won't immediately navigate away
-    //   html.window.history.pushState(
+    //   html.window.history.replaceState(
     //     {'locked': true},
     //     "Result",
     //     html.window.location.href,
@@ -40,7 +42,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
     //     // Only block if our custom lock state exists
     //     if (stateData is Map && stateData['locked'] == true) {
     //       // Re-push same state to keep browser from leaving
-    //       html.window.history.pushState(
+    //       html.window.history.replaceState(
     //         {'locked': true},
     //         "Result",
     //         html.window.location.href,
@@ -62,7 +64,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
 
   @override
   void dispose() {
-    _popSub?.cancel();
+    //_popSub?.cancel();
     super.dispose();
   }
 
@@ -83,8 +85,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
     final db = FirebaseFirestore.instance;
 
     return WillPopScope(
-      onWillPop: () async => false,
-      //onWillPop: () async => !widget.fromExamPage,
+      onWillPop: () async => true,
       child: Scaffold(
         backgroundColor: Colors.white,
         body: FutureBuilder<DocumentSnapshot>(

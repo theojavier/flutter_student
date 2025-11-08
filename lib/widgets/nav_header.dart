@@ -101,7 +101,7 @@ class _NavHeaderState extends State<NavHeader> {
               ),
             ],
           ),
-          duration: const Duration(milliseconds: 100),
+          duration: const Duration(milliseconds: 60),
           crossFadeState: _expanded
               ? CrossFadeState.showSecond
               : CrossFadeState.showFirst,

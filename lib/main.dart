@@ -37,12 +37,8 @@ class MyApp extends StatelessWidget {
     final GoRouter router = GoRouter(
       initialLocation: isLoggedIn ? '/home' : '/login',
       routes: [
-
         /// Public Routes
-        GoRoute(
-          path: '/login',
-          builder: (context, state) => const LoginPage(),
-        ),
+        GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
         GoRoute(
           path: '/forgot',
           builder: (context, state) => const ForgotPage(),
@@ -51,19 +47,14 @@ class MyApp extends StatelessWidget {
         ShellRoute(
           builder: (context, state, child) {
             return ResponsiveScaffold(
-              detailPage: child, 
+              detailPage: child,
               homePage: HomePage(),
               examPage: ExamListPage(),
               schedulePage: SchedulePage(),
             );
           },
           routes: [
-
-
-            GoRoute(
-              path: '/home',
-              builder: (context, state) => HomePage(),
-            ),
+            GoRoute(path: '/home', builder: (context, state) => HomePage()),
             GoRoute(
               path: '/exam-list',
               builder: (context, state) => ExamListPage(),
@@ -76,7 +67,6 @@ class MyApp extends StatelessWidget {
               path: '/profile',
               builder: (context, state) => const ProfilePage(),
             ),
-
 
             GoRoute(
               name: 'take-exam',
@@ -92,8 +82,7 @@ class MyApp extends StatelessWidget {
             ),
             GoRoute(
               path: '/exam-history',
-              builder: (context, state) =>
-                  const ExamHistoryPage(),
+              builder: (context, state) => const ExamHistoryPage(),
             ),
             GoRoute(
               name: 'exam',
@@ -106,10 +95,14 @@ class MyApp extends StatelessWidget {
             GoRoute(
               name: 'examResult',
               path: '/exam-result/:examId/:studentId',
-              builder: (context, state) => ExamResultPage(
-                examId: state.pathParameters['examId']!,
-                studentId: state.pathParameters['studentId']!,
-              ),
+              builder: (context, state) {
+                final examId = state.pathParameters['examId']!;
+                final studentId = state.pathParameters['studentId']!;
+                return ExamResultPage(
+                  examId: examId,
+                  studentId: studentId,
+                );
+              },
             ),
           ],
         ),

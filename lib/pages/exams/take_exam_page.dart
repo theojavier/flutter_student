@@ -11,10 +11,12 @@ class TakeExamPage extends StatefulWidget {
   final String examId;
   final int? startMillis;
   final int? endMillis;
+  final String? studentId;
 
   const TakeExamPage({
     super.key,
     required this.examId,
+    this.studentId,
     this.startMillis,
     this.endMillis,
   });
@@ -56,81 +58,80 @@ class _TakeExamPageState extends State<TakeExamPage>
   }
 
   Future<bool> _checkCameraAvailability() async {
-  try {
-    final devices = await navigator.mediaDevices.enumerateDevices();
-    final hasVideoInput = devices.any((d) => d.kind == 'videoinput');
-    if (!hasVideoInput) return false;
+    try {
+      final devices = await navigator.mediaDevices.enumerateDevices();
+      final hasVideoInput = devices.any((d) => d.kind == 'videoinput');
+      if (!hasVideoInput) return false;
 
-    // Try to open the camera
-    final stream = await navigator.mediaDevices.getUserMedia({
-      'video': true,
-      'audio': false,
-    });
+      // Try to open the camera
+      final stream = await navigator.mediaDevices.getUserMedia({
+        'video': true,
+        'audio': false,
+      });
 
-    final videoRenderer = RTCVideoRenderer();
-    await videoRenderer.initialize();
-    videoRenderer.srcObject = stream;
+      final videoRenderer = RTCVideoRenderer();
+      await videoRenderer.initialize();
+      videoRenderer.srcObject = stream;
 
-    // Show a dialog for 5 seconds and auto-close it
-    if (context.mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) {
-          // Auto-close after 5 seconds
-          Future.delayed(const Duration(seconds: 5), () {
-            if (Navigator.of(ctx).canPop()) {
-              Navigator.of(ctx).pop();
-            }
-          });
+      // Show a dialog for 5 seconds and auto-close it
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) {
+            // Auto-close after 5 seconds
+            Future.delayed(const Duration(seconds: 5), () {
+              if (Navigator.of(ctx).canPop()) {
+                Navigator.of(ctx).pop();
+              }
+            });
 
-          return AlertDialog(
-            title: const Text('Camera Test'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Please look at the screen'),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: 240,
-                  height: 180,
-                  child: RTCVideoView(videoRenderer, mirror: true),
-                ),
-              ],
-            ),
-          );
-        },
-      );
+            return AlertDialog(
+              title: const Text('Camera Test'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Please look at the screen'),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: 240,
+                    height: 180,
+                    child: RTCVideoView(videoRenderer, mirror: true),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      }
+
+      // Wait for 5 seconds (same as dialog)
+      await Future.delayed(const Duration(seconds: 5));
+      _detectFace();
+
+      // Stop and clean up
+      stream.getTracks().forEach((t) => t.stop());
+      await videoRenderer.dispose();
+
+      return true;
+    } catch (e) {
+      debugPrint("Camera test failed: $e");
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Camera test failed: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
     }
-
-    // Wait for 5 seconds (same as dialog)
-    await Future.delayed(const Duration(seconds: 5));
-    _detectFace();
-
-    // Stop and clean up
-    stream.getTracks().forEach((t) => t.stop());
-    await videoRenderer.dispose();
-
-    return true;
-  } catch (e) {
-    debugPrint("Camera test failed: $e");
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Camera test failed: $e"),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-    return false;
   }
-}
 
-
-// Placeholder for future face detection logic
-void _detectFace() {
-  //: implement face detection
-}
+  // Placeholder for future face detection logic
+  void _detectFace() {
+    //: implement face detection
+  }
 
   //  Anti-tab-switch: warn when app goes background
   @override
@@ -237,7 +238,7 @@ void _detectFace() {
                           ),
                         const SizedBox(height: 16),
 
-                        // 🧾 Instructions Box
+                        // Instructions Box
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.all(12),
@@ -331,7 +332,13 @@ void _detectFace() {
                                 child: const Text("View Result"),
                                 onPressed: () {
                                   // View Result
-                                  context.go('/exam-result/${widget.examId}/$studentId');
+                                  context.goNamed(
+                                    'examResult',
+                                    pathParameters: {
+                                      'examId': widget.examId,
+                                      'studentId': studentId!,
+                                    },
+                                  );
                                 },
                               );
                             }
@@ -421,6 +428,7 @@ void _detectFace() {
                                       "examId": widget.examId,
                                       "studentId": studentId,
                                       "status": "in-progress",
+                                      "cheatingCount": 0,
                                       "startedAt": DateTime.now(),
                                     });
 

@@ -164,7 +164,7 @@ class _LoginPageState extends State<LoginPage> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Image.asset(
-                "assets/image/istockphoto_1401106927_612x612_removebg_preview.png",
+                "assets/image/fots_student.png",
                 width: 200,
                 height: 200,
               ),

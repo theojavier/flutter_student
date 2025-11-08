@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+//import 'package:usb_serial/usb_serial.dart';//kills web support
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/question_model.dart';
 import '../../theme/colors.dart';
-import 'package:go_router/go_router.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'dart:html' as html;
+import 'web_lifecycle.dart';
 
 class ExamPage extends StatefulWidget {
   final String examId;
@@ -33,6 +35,8 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
   Timer? _saveDebounce;
   RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   MediaStream? _localStream;
+  bool _showResultUI = false;
+  Map<String, dynamic>? _resultData;
   bool _cameraVisible = false;
   Offset _popupPosition = const Offset(100, 100);
   final String _secretKey = "BSCS-DS";
@@ -45,8 +49,7 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
 
   String teacherId = "";
 
-  StreamSubscription<html.Event>? _visibilitySub;
-  StreamSubscription<html.Event>? _beforeUnloadSub;
+  StreamSubscription? _visibilitySub;
 
   @override
   void initState() {
@@ -54,7 +57,11 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
     _initCameraIfAuthorized();
     WidgetsBinding.instance.addObserver(this);
     _initAndLoad().then((_) {
-      if (kIsWeb) _setupWebLifecycleHandlers();
+      _visibilitySub = setupWebLifecycleHandlers(
+        examFinished: _examFinished,
+        onCheatingDetected: _logCheatingEvent,
+        showWarning: _showWarning,
+      );
     });
   }
 
@@ -154,11 +161,37 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
     final resultRef = examRef.collection(widget.studentId).doc("result");
     final resultSnap = await resultRef.get();
     if (resultSnap.exists) {
-      final status = resultSnap.data()?["status"]?.toString() ?? "";
-      if (status == "incomplete" || status == "submitted") {
+      // final status = resultSnap.data()?["status"]?.toString() ?? "incomplete";
+      // if (status == "completed") {
+      //   await _stopCamera();
+      //   if (mounted) {
+      //     setState(() {
+      //       _resultData = resultSnap.data();
+      //       _showResultUI = true;
+      //       loading = false;
+      //     });
+      //   }
+      //   return;
+      // }
+      // if (status == "incomplete") {
+      //   await _stopCamera();
+      //   if (mounted) {
+      //     _showWarning(
+      //       "You already started this exam.\nPlease contact your teacher.",
+      //     );
+      //     context.go('/home');
+      //   }
+      //   return;
+      // }
+      final submittedAt = resultSnap.data()?["submittedAt"];
+      if (submittedAt != null) {
+        await _stopCamera();
         if (mounted) {
-          _showWarning("You cannot re-enter this exam.");
-          Navigator.of(context).pop();
+          setState(() {
+            _resultData = resultSnap.data();
+            _showResultUI = true;
+            loading = false;
+          });
         }
         return;
       }
@@ -167,8 +200,6 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
     await resultRef.set({
       "examId": widget.examId,
       "studentId": widget.studentId,
-      "status": "in-progress",
-      "cheatingCount": 0,
       "lastSavedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
@@ -182,6 +213,29 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
       currentIndex = savedIndex ?? 0;
       loading = false;
     });
+  }
+
+  Future<void> _stopCamera() async {
+    try {
+      if (_localStream != null) {
+        for (var track in _localStream!.getTracks()) {
+          track.stop();
+        }
+        _localStream = null;
+      }
+
+      if (_localRenderer.srcObject != null) {
+        _localRenderer.srcObject = null;
+      }
+
+      if (mounted) {
+        setState(() {
+          _cameraVisible = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Stop camera error: $e");
+    }
   }
 
   Future<void> _initCameraIfAuthorized() async {
@@ -218,7 +272,6 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
       final examRef = db.collection("examResults").doc(widget.examId);
       final resultRef = examRef.collection(widget.studentId).doc("result");
 
-      // Removed redundant teacherId / metadata writes
       //  Only save the answer itself
       final answersCol = resultRef.collection("answers");
       await answersCol.doc(q.id).set({
@@ -227,7 +280,6 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
         "answer": answerStr,
         "correctAnswer": q.correctAnswer,
         "displayIndex": displayIndex,
-        // removed "timestamp"
       });
 
       await _saveProgressLocally();
@@ -325,11 +377,17 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
     try {
       final examRef = db.collection("examResults").doc(widget.examId);
       final resultRef = examRef.collection(widget.studentId).doc("result");
+      final snap = await resultRef.get();
+      final currentStatus = snap.data()?["status"]?.toString();
+      if (currentStatus == "completed" || currentStatus == "incomplete") {
+      return;
+      }
+
 
       await resultRef.set({
         "examId": widget.examId,
         "studentId": widget.studentId,
-        "status": "in-progress",
+        "status": currentStatus ?? "in-progress", //this can be remove to make it incomplete
         "lastCheatingUpdate": FieldValue.serverTimestamp(),
         "cheatingCount": FieldValue.increment(1), //increment
       }, SetOptions(merge: true));
@@ -342,24 +400,24 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
   }
 
   Future<void> _markIncompleteIfNeeded() async {
-  if (_examFinished || submitting) return; // << add this
-  try {
-    final ref = db
-        .collection("examResults")
-        .doc(widget.examId)
-        .collection(widget.studentId)
-        .doc("result");
-    final snap = await ref.get();
-    if (snap.exists && snap.data()?["status"] != "completed") {
-      await ref.set({
-        "status": "incomplete",
-        "submittedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    if (_examFinished || submitting) return;
+    try {
+      final ref = db
+          .collection("examResults")
+          .doc(widget.examId)
+          .collection(widget.studentId)
+          .doc("result");
+      final snap = await ref.get();
+      if (snap.exists && snap.data()?["status"] != "completed") {
+        await ref.set({
+          "status": "incomplete",
+          "submittedAt": FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    } catch (e) {
+      debugPrint("markIncomplete error: $e");
     }
-  } catch (e) {
-    debugPrint("markIncomplete error: $e");
   }
-}
 
   ///  SUBMIT
   Future<void> _submitExam({bool auto = false}) async {
@@ -407,7 +465,6 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
 
       _examFinished = true;
       _visibilitySub?.cancel();
-      _beforeUnloadSub?.cancel();
 
       final prefs = await SharedPreferences.getInstance();
       for (var key in prefs.getKeys()) {
@@ -419,24 +476,17 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
         }
       }
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-  if (mounted) {
-    // GoRouter.of(context).pushReplacementNamed(
-    //   'examResult',
-    //   pathParameters: {
-    //     'examId': widget.examId,
-    //     'studentId': widget.studentId,
-    //   },
-    // );
-    context.goNamed(
-      'examResult',
-      pathParameters: {
-        'examId': widget.examId,
-        'studentId': widget.studentId,
-      },
-    );
-  }
-});
+      if (!mounted) return;
+      await _stopCamera();
+
+      // fetch the saved result & display Exam Result UI here
+      final snapshot = await resultRef.get();
+      if (snapshot.exists) {
+        setState(() {
+          _resultData = snapshot.data() as Map<String, dynamic>?;
+          _showResultUI = true;
+        });
+      }
     } catch (e) {
       debugPrint("submitExam error: $e");
       await _markIncompleteIfNeeded();
@@ -449,10 +499,10 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
   ///LIFECYCLE
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!kIsWeb) {
-      if (state == AppLifecycleState.paused && !_examFinished) {
+    if (!kIsWeb && !_examFinished) {
+      if (state == AppLifecycleState.paused) {
         _logCheatingEvent();
-        _showWarning(" You minimized/alt-tabbed. Stay focused!");
+        _showWarning("You minimized or switched apps. Stay focused!");
         _saveProgressLocally();
       }
 
@@ -463,29 +513,6 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
         _markIncompleteIfNeeded();
       }
     }
-  }
-
-  void _setupWebLifecycleHandlers() {
-    _visibilitySub = html.document.onVisibilityChange.listen((_) {
-      if (html.document.hidden ?? false && !_examFinished) {
-        _logCheatingEvent();
-        _showWarning(" You switched tabs. Stay focused!");
-      }
-    });
-
-    _beforeUnloadSub = html.window.onBeforeUnload.listen((event) {
-      final e = event as html.BeforeUnloadEvent;
-      if (!_examFinished) _logCheatingEvent();
-      e.returnValue = '';
-    });
-    // Push initial state so the back button has something to intercept
-    html.window.history.pushState(null, "Exam", html.window.location.href);
-    html.window.onPopState.listen((event) {
-      if (!_examFinished) {
-        _showWarning("Back/Forward navigation is disabled during the exam");
-        html.window.history.pushState(null, "Exam", html.window.location.href);
-      }
-    });
   }
 
   void _showWarning(String message) {
@@ -500,7 +527,6 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
   void dispose() {
     countdownTimer?.cancel();
     _visibilitySub?.cancel();
-    _beforeUnloadSub?.cancel();
     _saveDebounce?.cancel();
     _localRenderer.dispose();
     _localStream?.getTracks().forEach((t) => t.stop());
@@ -550,9 +576,153 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
     }
   }
 
+  //  Grading colors based on adjusted scale
+  Color _getColor(double percent) {
+    if (percent >= 80) return Colors.green;
+    if (percent >= 75) return Colors.orange;
+    return Colors.red;
+  }
+
+  String _getMark(double percent) {
+    if (percent >= 75) return "Passed!";
+    return "Failed!";
+  }
+
   ///  UI
   @override
   Widget build(BuildContext context) {
+    if (_showResultUI && _resultData != null) {
+      final score = (_resultData!["score"] ?? 0).toDouble();
+      final total = (_resultData!["total"] ?? 0).toDouble();
+      final subject = _resultData!["subject"] ?? "Unknown Subject";
+      final studentId = _resultData!["studentId"] ?? "Unknown";
+
+      double rawPercent = total > 0 ? (score / total) * 100 : 0;
+      double adjustedPercent = 50 + (rawPercent / 2);
+      adjustedPercent = adjustedPercent.clamp(0, 100);
+
+      return WillPopScope(
+        onWillPop: () async =>
+            false, // Fully prevent navigation back after result
+        child: Scaffold(
+          backgroundColor: Colors.white,
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  decoration: BoxDecoration(
+                    color: _getColor(adjustedPercent),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      "Exam Result",
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black12,
+                        blurRadius: 6,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Subject: $subject",
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        "Student ID : $studentId",
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black12,
+                        blurRadius: 6,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        "Your examination score is $score / $total",
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        "${adjustedPercent.toStringAsFixed(2)} %",
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: _getColor(adjustedPercent),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        "Equivalent Grade",
+                        style: TextStyle(fontSize: 16, color: Colors.black54),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        "Mark: ${_getMark(adjustedPercent)}",
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: _getColor(adjustedPercent),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     if (loading)
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     if (questions.isEmpty)
@@ -663,16 +833,24 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                                       TextButton(
                                         onPressed: () =>
                                             Navigator.of(context).pop(),
-                                            child: const Text("Cancel"),
+                                        child: const Text("Cancel"),
                                       ),
                                       ElevatedButton(
                                         onPressed: submitting
                                             ? null
                                             : () {
-                                                Navigator.of(context, rootNavigator: true).pop();
-                                                Future.delayed(const Duration(milliseconds: 100), () {
-  if (mounted) _submitExam();
-});
+                                                Navigator.of(
+                                                  context,
+                                                  rootNavigator: true,
+                                                ).pop();
+                                                Future.delayed(
+                                                  const Duration(
+                                                    milliseconds: 100,
+                                                  ),
+                                                  () {
+                                                    if (mounted) _submitExam();
+                                                  },
+                                                );
                                               },
                                         child: const Text("Submit"),
                                       ),

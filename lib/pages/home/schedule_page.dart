@@ -118,6 +118,8 @@ class _SchedulePageState extends State<SchedulePage> {
 
                       // Scrollable schedule table
                       Expanded(
+                         child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         child: StreamBuilder<QuerySnapshot>(
                           stream: firestore
                               .collection("exams")
@@ -178,7 +180,7 @@ class _SchedulePageState extends State<SchedulePage> {
                                         border: TableBorder.all(color: Colors.black26),
                                         defaultVerticalAlignment: TableCellVerticalAlignment.middle,
                                         columnWidths: const {
-                                          0: FixedColumnWidth(140),
+                                          0: FixedColumnWidth(155),
                                           1: FixedColumnWidth(140),
                                           2: FixedColumnWidth(140),
                                           3: FixedColumnWidth(140),
@@ -219,6 +221,7 @@ class _SchedulePageState extends State<SchedulePage> {
                           },
                         ),
                       ),
+                      ),
                     ],
                   ),
                 ),
@@ -242,7 +245,7 @@ class _SchedulePageState extends State<SchedulePage> {
     final end = TimeOfDay(hour: hour + 1, minute: 0);
     return Container(
       padding: const EdgeInsets.all(6),
-      color: Colors.grey[200],
+      color: Colors.grey[100],
       child: Text(
         "${start.format(context)} – ${end.format(context)}",
         style: const TextStyle(fontWeight: FontWeight.bold),
