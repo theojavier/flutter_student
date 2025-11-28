@@ -36,7 +36,7 @@ class _ProfilePageState extends State<ProfilePage> {
     final userRef = FirebaseFirestore.instance.collection("users").doc(userId);
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFF0B1220),
       body: FutureBuilder<DocumentSnapshot>(
         future: userRef.get(),
         builder: (context, snapshot) {
@@ -66,11 +66,11 @@ class _ProfilePageState extends State<ProfilePage> {
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
-                  color: Colors.blue[800],
+                  color: const Color(0xFF0F2B45),
                   child: const Text(
                     "Profile",
                     style: TextStyle(
-                      color: Colors.white,
+                      color: Color(0xFFE6F0F8),
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                     ),
@@ -78,6 +78,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
                 // White Card with Profile Info
                 Card(
+                  color: const Color(0xFF0F3B61),
                   elevation: 4,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -130,7 +131,7 @@ class _ProfilePageState extends State<ProfilePage> {
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,
-            color: Colors.green[700],
+           color: Color(0xFFE6F0F8),
           ),
         ),
       );
@@ -142,7 +143,7 @@ class _ProfilePageState extends State<ProfilePage> {
             padding: const EdgeInsets.symmetric(vertical: 12),
             child: Text(
               "$label: ${value ?? "N/A"}",
-              style: const TextStyle(fontSize: 14, color: Colors.black87),
+              style: const TextStyle(fontSize: 14, color: Color(0xFFE6F0F8)),
             ),
           ),
           const Divider(height: 1, color: Colors.grey),

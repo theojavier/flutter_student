@@ -23,7 +23,10 @@ class ExamHistoryItem extends StatelessWidget {
 
     return InkWell(
       onTap: onTap,
+      splashColor: Colors.tealAccent.withOpacity(0.2), // subtle ripple
+      highlightColor: Colors.transparent,
       child: Card(
+        color: const Color(0xFF0F3B61),
         margin: const EdgeInsets.all(8),
         elevation: 4,
         shape: RoundedRectangleBorder(
@@ -44,7 +47,7 @@ class ExamHistoryItem extends StatelessWidget {
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: Colors.black,
+                        color: Color(0xFFE6F0F8),
                       ),
                     ),
                     const SizedBox(height: 4),

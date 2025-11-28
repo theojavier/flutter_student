@@ -87,7 +87,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
     return WillPopScope(
       onWillPop: () async => true,
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF0B1220),
         body: FutureBuilder<DocumentSnapshot>(
           future: db
               .collection("examResults")
@@ -147,7 +147,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF5F5F5),
+                      color: const Color(0xFF0F2B45),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.grey.shade300),
                       boxShadow: [
@@ -166,6 +166,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
+                            color: Color(0xFFE6F0F8)
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -173,7 +174,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
                           "Student ID : $studentId",
                           style: const TextStyle(
                             fontSize: 15,
-                            color: Colors.black87,
+                            color: Color(0xFFE6F0F8)
                           ),
                         ),
                       ],
@@ -186,7 +187,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: const Color(0xFF0F2B45),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.grey.shade300),
                       boxShadow: [
@@ -205,6 +206,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
+                            color: Color(0xFFE6F0F8)
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -219,7 +221,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
                         const SizedBox(height: 8),
                         const Text(
                           "Equivalent Grade",
-                          style: TextStyle(fontSize: 16, color: Colors.black54),
+                          style: TextStyle(fontSize: 16, color: Color(0xFFE6F0F8)),
                         ),
                         const SizedBox(height: 6),
                         Text(

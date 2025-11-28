@@ -33,6 +33,25 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <!-- this is the changes-->
+    <script>
+    // window.addEventListener("blur", () => {
+    //   const iframe = document.querySelector("iframe");
+    //   if (iframe && iframe.contentWindow) {
+    //     iframe.contentWindow.postMessage({ action: "shell-blur" }, "*");
+    //   }
+    // });
+
+    window.addEventListener("focus", () => {
+      const iframe = document.querySelector("iframe");
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ action: "shell-focus" }, "*");
+      }
+    });
+  </script>
+  <!-- intil this -->
+  <!-- this is the changes-->
+  <!--<script src="arduino_bridge.js"></script>-->
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

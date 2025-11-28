@@ -102,7 +102,7 @@ class _ExamListPageState extends State<ExamListPage> {
         .where('endTime', isLessThanOrEqualTo: endTs);
 
     return Scaffold(
-      backgroundColor: Colors.grey[100],
+      backgroundColor: const Color(0xFF0B1220),
       body: SafeArea(
         child: Column(
           children: [
@@ -112,21 +112,21 @@ class _ExamListPageState extends State<ExamListPage> {
               padding: const EdgeInsets.symmetric(vertical: 24),
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.purple.shade700,
+                color: const Color(0xFF0F2B45),
                 borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 6,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
+                // boxShadow: [
+                //   BoxShadow(
+                //     color: Colors.black.withOpacity(0.2),
+                //     blurRadius: 6,
+                //     offset: const Offset(0, 3),
+                //   ),
+                // ],
               ),
               child: const Center(
                 child: Text(
                   'My Exams',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: Color(0xFFE6F0F8),
                     fontSize: 26,
                     fontWeight: FontWeight.bold,
                   ),

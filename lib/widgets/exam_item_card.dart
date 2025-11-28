@@ -14,6 +14,8 @@ class ExamItemCard extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
+        splashColor: Colors.tealAccent.withOpacity(0.2), // subtle ripple
+        highlightColor: Colors.transparent,
         onTap: () {
           context.go(
             '/take-exam/${exam.id}',
@@ -27,6 +29,7 @@ class ExamItemCard extends StatelessWidget {
           );
         },
         child: Card(
+          color: const Color(0xFF0F2B45),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
@@ -45,6 +48,7 @@ class ExamItemCard extends StatelessWidget {
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
+                          color: Color(0xFFE6F0F8)
                         ),
                       ),
                     ),
@@ -55,14 +59,20 @@ class ExamItemCard extends StatelessWidget {
                 // Login time
                 Text(
                   "LOGIN TIME: ${exam.getFormattedLoginTime()}",
-                  style: const TextStyle(color: Colors.blue, fontSize: 14),
+                  style: const TextStyle(
+                    color: Colors.tealAccent, // <-- accent color
+                    fontSize: 14,
+                  ),
                 ),
                 const SizedBox(height: 6),
 
                 // Posted date
                 Text(
                   "Posted ${exam.getFormattedPostedDate()}",
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  style: const TextStyle(
+                    color: Colors.grey, // softer secondary text
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),

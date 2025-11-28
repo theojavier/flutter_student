@@ -15,6 +15,7 @@ import 'pages/exams/exam_history_page.dart';
 import 'pages/exams/exam_page.dart';
 import 'pages/exams/exam_result_page.dart';
 import 'pages/auth/forgot_page.dart';
+import 'pages/exams/exam_html.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,63 +47,92 @@ class MyApp extends StatelessWidget {
 
         ShellRoute(
           builder: (context, state, child) {
+            final location = state.uri.path;
+            int selectedIndex = 0;
+
+            if (location.startsWith('/home'))
+              selectedIndex = 0;
+            else if (location.startsWith('/exam-list'))
+              selectedIndex = 1;
+            else if (location.startsWith('/schedule'))
+              selectedIndex = 2;
+
             return ResponsiveScaffold(
-              detailPage: child,
-              homePage: HomePage(),
-              examPage: ExamListPage(),
-              schedulePage: SchedulePage(),
+              selectedIndex: selectedIndex,
+              child: child,
             );
           },
           routes: [
-            GoRoute(path: '/home', builder: (context, state) => HomePage()),
+            GoRoute(
+              path: '/home',
+              pageBuilder: (context, state) =>
+                  const NoTransitionPage(child: HomePage()),
+            ),
             GoRoute(
               path: '/exam-list',
-              builder: (context, state) => ExamListPage(),
+              pageBuilder: (context, state) =>
+                  const NoTransitionPage(child: ExamListPage()),
             ),
             GoRoute(
               path: '/schedule',
-              builder: (context, state) => SchedulePage(),
+              pageBuilder: (context, state) =>
+                  const NoTransitionPage(child: SchedulePage()),
             ),
             GoRoute(
               path: '/profile',
-              builder: (context, state) => const ProfilePage(),
+              pageBuilder: (context, state) =>
+                  const NoTransitionPage(child: ProfilePage()),
             ),
 
             GoRoute(
               name: 'take-exam',
               path: '/take-exam/:examId',
-              builder: (context, state) {
+              pageBuilder: (context, state) {
                 final args = state.extra as Map<String, dynamic>?;
-                return TakeExamPage(
-                  examId: args?['examId'] ?? state.pathParameters['examId']!,
-                  startMillis: args?['startMillis'],
-                  endMillis: args?['endMillis'],
+                return NoTransitionPage(
+                  child: TakeExamPage(
+                    examId: args?['examId'] ?? state.pathParameters['examId']!,
+                    startMillis: args?['startMillis'],
+                    endMillis: args?['endMillis'],
+                  ),
                 );
               },
             ),
             GoRoute(
               path: '/exam-history',
-              builder: (context, state) => const ExamHistoryPage(),
+              pageBuilder: (context, state) =>
+                  const NoTransitionPage(child: ExamHistoryPage()),
             ),
             GoRoute(
               name: 'exam',
               path: '/exam/:examId/:studentId',
-              builder: (context, state) => ExamPage(
-                examId: state.pathParameters['examId']!,
-                studentId: state.pathParameters['studentId']!,
+              pageBuilder: (context, state) => NoTransitionPage(
+                child: ExamPage(
+                  examId: state.pathParameters['examId']!,
+                  studentId: state.pathParameters['studentId']!,
+                ),
               ),
             ),
             GoRoute(
               name: 'examResult',
               path: '/exam-result/:examId/:studentId',
-              builder: (context, state) {
+              pageBuilder: (context, state) {
                 final examId = state.pathParameters['examId']!;
                 final studentId = state.pathParameters['studentId']!;
-                return ExamResultPage(
-                  examId: examId,
-                  studentId: studentId,
+                return NoTransitionPage(
+                  child: ExamResultPage(examId: examId, studentId: studentId),
                 );
               },
+            ),
+            GoRoute(
+              name: 'examhtml',
+              path: '/examhtml/:examId/:studentId',
+              pageBuilder: (context, state) => NoTransitionPage(
+                child: ExamHtmlPage(
+                  examId: state.pathParameters['examId']!,
+                  studentId: state.pathParameters['studentId']!,
+                ),
+              ),
             ),
           ],
         ),
@@ -112,8 +142,39 @@ class MyApp extends StatelessWidget {
     return MaterialApp.router(
       debugShowCheckedModeBanner: false,
       title: 'A3rd',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      theme: ThemeData(
+        scaffoldBackgroundColor: const Color(0xFF0B1220),
+        canvasColor: const Color(0xFF0B1220),
+        scrollbarTheme: ScrollbarThemeData(
+          thumbColor: WidgetStateProperty.all(Color.fromARGB(255, 24, 39, 68)),
+          trackColor: WidgetStateProperty.all(Colors.black12),
+          trackBorderColor: WidgetStateProperty.all(Colors.transparent),
+          radius: const Radius.circular(8),
+          thickness: WidgetStateProperty.all(8),
+        ),
+
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          background: const Color(0xFF0B1220),
+        ),
+      ),
+      scrollBehavior: MyScrollBehavior(),
       routerConfig: router,
+    );
+  }
+}
+
+class MyScrollBehavior extends MaterialScrollBehavior {
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return Scrollbar(
+      controller: details.controller,
+      thumbVisibility: true,
+      child: child,
     );
   }
 }

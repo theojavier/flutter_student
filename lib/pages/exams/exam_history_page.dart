@@ -66,7 +66,7 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.grey[100],
+      backgroundColor: const Color(0xFF0B1220),
       body: SafeArea(
         child: Column(
           children: [
@@ -76,15 +76,8 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
               padding: const EdgeInsets.symmetric(vertical: 24),
               margin: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.purple.shade700,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 6,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
+                color: const Color(0xFF0F2B45),
+                borderRadius: BorderRadius.circular(16)
               ),
               child: const Center(
                 child: Text(

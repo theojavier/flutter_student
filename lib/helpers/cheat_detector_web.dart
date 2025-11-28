@@ -1,34 +1,54 @@
-//cheat_detector_web
-import 'dart:html';
+//C:\Users\acer\OneDrive\Desktop\theo\my_flutter_app\lib\helpers\cheat_detector_web.dart
+import 'dart:async';
+import 'dart:html' as html;
 import 'dart:js' as js;
 
-class CheatDetectorWeb {
+class CheatDetector {
+  final Function()? onStrike;
+  final Function()? onReset;
+
+  StreamSubscription<html.Event>? _visListener;
   bool _enabled = false;
 
-  void start({
-    Function()? onStrike,
-    Function()? onReset,
-  }) {
+  CheatDetector({this.onStrike, this.onReset});
+
+  /// If [autoConnect] is true, will try calling JS connectUSB automatically
+  Future<void> start({bool autoConnect = true}) async {
     _enabled = true;
 
-    window.onMessage.listen((event) {
+    // Track tab switching
+    _visListener = html.document.onVisibilityChange.listen((event) {
       if (!_enabled) return;
-
-      final msg = event.data.toString().trim();
-      if (msg == "STRIKE") onStrike?.call();
-      if (msg == "OK") onReset?.call();
+      if (html.document.visibilityState == 'hidden') {
+        onStrike?.call();
+        _sendToArduino("STRIKE");
+      }
     });
 
-    js.context.callMethod('connectUSB');
-    print("Web USB listener started");
+    if (autoConnect) {
+      try {
+        // JS function in arduino_bridge.js
+        js.context.callMethod('connectUSB');
+      } catch (_) {
+        print("Auto-connect failed: permission required or JS not loaded.");
+      }
+    }
+
+    print("CheatDetector started (Web)");
   }
 
-  void stop() {
+  Future<void> stop() async {
     _enabled = false;
+    await _visListener?.cancel();
+    print("CheatDetector stopped (Web)");
   }
 
-  void send(String message) {
-    js.context.callMethod('sendToArduino', [message]);
-    print("Sent to Arduino: $message");
+  void send(String message) => _sendToArduino(message);
+
+  void _sendToArduino(String message) {
+    try {
+      js.context.callMethod('sendToArduino', [message]);
+      print("Sent to Arduino: $message");
+    } catch (_) {}
   }
 }

@@ -134,7 +134,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFF0B1220),
       body: StreamBuilder<QuerySnapshot>(
         stream: db
             .collection("exams")
@@ -182,7 +182,7 @@ class _HomePageState extends State<HomePage> {
                     const Text(
                       "Track,Monitor, and Eye opener",
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: Colors.black54),
+                      style: TextStyle(fontSize: 16, color: Colors.white),
                     ),
                     const SizedBox(height: 16),
                     const Text(
@@ -191,6 +191,7 @@ class _HomePageState extends State<HomePage> {
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
+                        color: Colors.white,
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -200,16 +201,16 @@ class _HomePageState extends State<HomePage> {
                           child: _dashboardCard(
                             title: "Today's Exams",
                             count: todayExamCount,
-                            color: Colors.green,
-                            countColor: Colors.blue,
+                            color: Colors.blue,
+                            countColor: Color(0xFFE6F0F8),
                           ),
                         ),
                         Expanded(
                           child: _dashboardCard(
                             title: "Completed Exams",
                             count: completedCount,
-                            color: Colors.blue,
-                            countColor: Colors.green,
+                            color: Colors.green,
+                            countColor: Color(0xFFE6F0F8),
                           ),
                         ),
                       ],
@@ -221,6 +222,7 @@ class _HomePageState extends State<HomePage> {
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
+                        color: Color(0xFFE6F0F8),
                       ),
                     ),
                     _buildScheduleTable(schedule),
@@ -231,6 +233,7 @@ class _HomePageState extends State<HomePage> {
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
+                        color: Color(0xFFE6F0F8),
                       ),
                     ),
                     _buildResultsTable(results),
@@ -294,7 +297,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _infoCard() {
     return Card(
-      color: Colors.orange,
+      color: Color(0xFF0F2B45),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       elevation: 4,
       child: Padding(
@@ -307,12 +310,15 @@ class _HomePageState extends State<HomePage> {
               fit: BoxFit.contain,
             ),
             const SizedBox(height: 8),
-            const Text(
-              "Welcome to tot Student Application",
-              style: TextStyle(
-                fontSize: 30,
-                fontWeight: FontWeight.bold,
-                color: Colors.black,
+            Center(
+              child: Text(
+                "Welcome to tot Student Application",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: MediaQuery.of(context).size.width < 360 ? 22 : 30,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFE6F0F8),
+                ),
               ),
             ),
           ],
@@ -341,7 +347,7 @@ class _HomePageState extends State<HomePage> {
               style: const TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
-                color: Colors.black,
+                color: Color(0xFFE6F0F8),
               ),
             ),
             const SizedBox(height: 8),
@@ -361,7 +367,16 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildScheduleTable(List<QueryDocumentSnapshot> exams) {
     if (exams.isEmpty) {
-      return const Center(child: Text("No exam schedule found"));
+      return const Center(
+        child: Text(
+          "No exam schedule found",
+          style: TextStyle(
+            color: Color(0xFFE6F0F8),
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      );
     }
 
     // Sort by startTime (newest first)
@@ -376,81 +391,104 @@ class _HomePageState extends State<HomePage> {
     });
 
     return Card(
+      color: Color(0xFF0F2B45),
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       margin: const EdgeInsets.all(8),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 350),
         child: SingleChildScrollView(
-          child: Table(
-            border: TableBorder.symmetric(
-              inside: const BorderSide(color: Colors.grey),
-            ),
-            columnWidths: const {
-              0: FlexColumnWidth(2), // Subject
-              1: FlexColumnWidth(2), // Date
-              2: FlexColumnWidth(2), // Time
-            },
-            children: [
-              const TableRow(
-                decoration: BoxDecoration(color: Colors.black12),
-                children: [
-                  Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text(
-                      "Subject",
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text(
-                      "Date",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text(
-                      "Start",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-              ...exams.map((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                final startTime = _toDate(data["startTime"]);
-                String dateText = "—";
-                String timeText = "—";
-
-                if (startTime != null) {
-                  dateText =
-                      "${startTime.year}-${startTime.month.toString().padLeft(2, '0')}-${startTime.day.toString().padLeft(2, '0')}";
-                  timeText =
-                      "${startTime.hour % 12 == 0 ? 12 : startTime.hour % 12}:${startTime.minute.toString().padLeft(2, '0')} ${startTime.hour >= 12 ? 'PM' : 'AM'}";
-                }
-
-                return TableRow(
+          child: ClipRRect(
+            child: Table(
+              border: TableBorder.all(color: Color(0xFF0F2B45), width: 1),
+              columnWidths: const {
+                0: FlexColumnWidth(2), // Subject
+                1: FlexColumnWidth(2), // Date
+                2: FlexColumnWidth(2), // Time
+              },
+              children: [
+                const TableRow(
+                  decoration: BoxDecoration(color: Colors.black12),
                   children: [
                     Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Text(data["subject"] ?? "—"),
+                      padding: EdgeInsets.all(8),
+                      child: Text(
+                        "Subject",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFE6F0F8),
+                        ),
+                      ),
                     ),
                     Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Text(dateText, textAlign: TextAlign.center),
+                      padding: EdgeInsets.all(8),
+                      child: Text(
+                        "Date",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFE6F0F8),
+                        ),
+                      ),
                     ),
                     Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Text(timeText, textAlign: TextAlign.center),
+                      padding: EdgeInsets.all(8),
+                      child: Text(
+                        "Start",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFE6F0F8),
+                        ),
+                      ),
                     ),
                   ],
-                );
-              }),
-            ],
+                ),
+                ...exams.map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final startTime = _toDate(data["startTime"]);
+                  String dateText = "—";
+                  String timeText = "—";
+
+                  if (startTime != null) {
+                    dateText =
+                        "${startTime.year}-${startTime.month.toString().padLeft(2, '0')}-${startTime.day.toString().padLeft(2, '0')}";
+                    timeText =
+                        "${startTime.hour % 12 == 0 ? 12 : startTime.hour % 12}:${startTime.minute.toString().padLeft(2, '0')} ${startTime.hour >= 12 ? 'PM' : 'AM'}";
+                  }
+
+                  return TableRow(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          data["subject"] ?? "—",
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFFE6F0F8)),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          dateText,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFFE6F0F8)),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          timeText,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFFE6F0F8)),
+                        ),
+                      ),
+                    ],
+                  );
+                }),
+              ],
+            ),
           ),
         ),
       ),
@@ -459,7 +497,16 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildResultsTable(List<Map<String, dynamic>> results) {
     if (results.isEmpty) {
-      return const Center(child: Text("No results found"));
+      return const Center(
+        child: Text(
+          "No results found",
+          style: TextStyle(
+            color: Color(0xFFE6F0F8),
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      );
     }
 
     //  Sort by examDate (newest first) if available
@@ -470,6 +517,7 @@ class _HomePageState extends State<HomePage> {
     });
 
     return Card(
+      color: const Color(0xFF0F2B45),
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       margin: const EdgeInsets.all(8),
@@ -477,73 +525,91 @@ class _HomePageState extends State<HomePage> {
         //  height for about 5 rows
         constraints: const BoxConstraints(maxHeight: 400),
         child: SingleChildScrollView(
-          child: Table(
-            border: TableBorder.symmetric(
-              inside: const BorderSide(color: Colors.grey),
-            ),
-            columnWidths: const {
-              0: FlexColumnWidth(2),
-              1: FlexColumnWidth(2),
-              2: FlexColumnWidth(2),
-            },
-            children: [
-              const TableRow(
-                decoration: BoxDecoration(color: Colors.black12),
-                children: [
-                  Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text(
-                      "Subject",
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text(
-                      "Score",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text(
-                      "Status",
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-              ...results.map((data) {
-                return TableRow(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Table(
+              border: TableBorder.all(color: Color(0xFF0F2B45), width: 1),
+              columnWidths: const {
+                0: FlexColumnWidth(2),
+                1: FlexColumnWidth(2),
+                2: FlexColumnWidth(2),
+              },
+              children: [
+                const TableRow(
+                  decoration: BoxDecoration(color: Colors.black12),
                   children: [
                     Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Text(data["subject"] ?? "—"),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(8),
+                      padding: EdgeInsets.all(8),
                       child: Text(
-                        (data["score"] ?? "—").toString(),
+                        "Subject",
                         textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFE6F0F8),
+                        ),
                       ),
                     ),
                     Padding(
-                      padding: const EdgeInsets.all(8),
+                      padding: EdgeInsets.all(8),
                       child: Text(
-                        data["status"] ?? "—",
+                        "Score",
+                        textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: (data["status"] == "completed")
-                              ? Colors.green
-                              : Colors.red,
                           fontWeight: FontWeight.bold,
+                          color: Color(0xFFE6F0F8),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Text(
+                        "Status",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFE6F0F8),
                         ),
                       ),
                     ),
                   ],
-                );
-              }),
-            ],
+                ),
+                ...results.map((data) {
+                  return TableRow(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          data["subject"] ?? "—",
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFFE6F0F8)),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          (data["score"] ?? "—").toString(),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFFE6F0F8)),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          data["status"] ?? "—",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: (data["status"] == "completed")
+                                ? Colors.green
+                                : Colors.red,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }),
+              ],
+            ),
           ),
         ),
       ),

@@ -17,10 +17,25 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController passwordController = TextEditingController();
   final FirebaseFirestore db = FirebaseFirestore.instance;
   final FirebaseAuth auth = FirebaseAuth.instance;
+  bool isFormValid = false;
 
   bool isLoading = false;
   bool _isPasswordVisible = false;
   StreamSubscription? _examListener;
+  void _updateButtonState() {
+    setState(() {
+      isFormValid =
+          studentIdController.text.isNotEmpty &&
+          passwordController.text.isNotEmpty;
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    studentIdController.addListener(_updateButtonState);
+    passwordController.addListener(_updateButtonState);
+  }
 
   Future<void> _login() async {
     final studentId = studentIdController.text.trim();
@@ -148,6 +163,8 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void dispose() {
     _examListener?.cancel();
+    studentIdController.removeListener(_updateButtonState);
+    passwordController.removeListener(_updateButtonState);
     studentIdController.dispose();
     passwordController.dispose();
     super.dispose();
@@ -156,7 +173,8 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: Colors.transparent,
+
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -228,8 +246,11 @@ class _LoginPageState extends State<LoginPage> {
                   : SizedBox(
                       width: 340,
                       child: ElevatedButton(
-                        onPressed: _login,
+                        onPressed: isFormValid ? _login : null,
                         style: ElevatedButton.styleFrom(
+                          backgroundColor: isFormValid
+                              ? Colors.green
+                              : Colors.grey,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                         ),
                         child: const Text("Login"),

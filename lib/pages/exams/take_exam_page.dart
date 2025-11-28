@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import '../../helpers/cheat_detector.dart';
 
 class TakeExamPage extends StatefulWidget {
   final String examId;
@@ -164,7 +165,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     }
 
     return Scaffold(
-      backgroundColor: Colors.grey[100],
+      backgroundColor: const Color(0xFF0B1220),
       body: SafeArea(
         child: Column(
           children: [
@@ -173,15 +174,15 @@ class _TakeExamPageState extends State<TakeExamPage>
               padding: const EdgeInsets.symmetric(vertical: 24),
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.purple.shade700,
+                color: const Color(0xFF0F2B45),
                 borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 6,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
+                // boxShadow: [
+                //   BoxShadow(
+                //     color: Colors.black.withOpacity(0.2),
+                //     blurRadius: 6,
+                //     offset: const Offset(0, 3),
+                //   ),
+                // ],
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -229,12 +230,16 @@ class _TakeExamPageState extends State<TakeExamPage>
                           style: const TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
+                            color: Color(0xFFE6F0F8),
                           ),
                         ),
                         if (start != null)
                           Text(
                             "Start: ${formatDate(start!)}",
-                            style: const TextStyle(fontSize: 16),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              color: Color(0xFFE6F0F8),
+                            ),
                           ),
                         const SizedBox(height: 16),
 
@@ -243,7 +248,7 @@ class _TakeExamPageState extends State<TakeExamPage>
                           width: double.infinity,
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFEEEEEE),
+                            color: const Color(0xFF0F3B61),
                             border: Border.all(color: Colors.red, width: 2),
                             borderRadius: BorderRadius.circular(4),
                           ),
@@ -251,7 +256,7 @@ class _TakeExamPageState extends State<TakeExamPage>
                             textAlign: TextAlign.start,
                             text: const TextSpan(
                               style: TextStyle(
-                                color: Colors.black,
+                                color: Color(0xFFE6F0F8),
                                 fontSize: 14,
                                 height: 1.4,
                               ),
@@ -290,7 +295,10 @@ class _TakeExamPageState extends State<TakeExamPage>
                             }
                             return Text(
                               teacherText,
-                              style: const TextStyle(fontSize: 16),
+                              style: const TextStyle(
+                                fontSize: 16,
+                                color: Color(0xFFE6F0F8),
+                              ),
                             );
                           },
                         ),
@@ -299,7 +307,10 @@ class _TakeExamPageState extends State<TakeExamPage>
                         if (start != null && end != null)
                           Text(
                             "${formatDate(start!)} - ${DateFormat("h:mm a").format(DateTime.fromMillisecondsSinceEpoch(end!))}",
-                            style: const TextStyle(fontSize: 16),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              color: Color(0xFFE6F0F8),
+                            ),
                           ),
 
                         const Spacer(),
@@ -419,6 +430,24 @@ class _TakeExamPageState extends State<TakeExamPage>
                                   return; // Stop here if no camera
                                 }
 
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      "Camera test completed!",
+                                    ),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+
+                                await db
+                                    .collection("examResults")
+                                    .doc(widget.examId)
+                                    .set({
+                                      "teacherId":
+                                          teacherId, // from exam document
+                                    }, SetOptions(merge: true));
+
+                                // Save student exam result
                                 await db
                                     .collection("examResults")
                                     .doc(widget.examId)
@@ -429,12 +458,12 @@ class _TakeExamPageState extends State<TakeExamPage>
                                       "studentId": studentId,
                                       "status": "in-progress",
                                       "cheatingCount": 0,
-                                      "startedAt": DateTime.now(),
+                                      "currentIndex": 0,
                                     });
 
                                 // Start Exam
                                 context.goNamed(
-                                  'exam',
+                                  'examhtml',
                                   pathParameters: {
                                     "examId": widget.examId,
                                     "studentId": studentId!,

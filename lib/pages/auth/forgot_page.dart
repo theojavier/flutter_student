@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:go_router/go_router.dart';
 
 class ForgotPage extends StatefulWidget {
   const ForgotPage({super.key});
@@ -61,8 +62,18 @@ class _ForgotPageState extends State<ForgotPage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Password reset email sent to $email")),
+          SnackBar(
+            content: Text("Password reset email sent to $email"),
+             backgroundColor: Colors.green,
+          ),
         );
+        Future.delayed(const Duration(seconds: 1), () {
+          // If using go_router
+          context.go('/login');
+
+          // OR if using Navigator
+          // Navigator.pop(context);
+        });
       }
     } on FirebaseAuthException catch (e) {
       _showError(e.message ?? "Error sending reset email");
@@ -80,7 +91,7 @@ class _ForgotPageState extends State<ForgotPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Forgot Password")),
+      backgroundColor: Color(0xFF0D1014),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -93,49 +104,65 @@ class _ForgotPageState extends State<ForgotPage> {
                 style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
+                  color: Color(0xFFE6F0F8),
                 ),
               ),
               const SizedBox(height: 40),
               SizedBox(
-                width: MediaQuery.of(context).size.width * 0.8,
+                width: 340,
                 child: TextField(
                   controller: studentIdController,
+                  style: TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     labelText: "Enter Student ID",
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Colors.white70),
                     ),
                     contentPadding: const EdgeInsets.symmetric(
-                        vertical: 12, horizontal: 16),
+                      vertical: 12,
+                      horizontal: 16,
+                    ),
                   ),
                 ),
               ),
               const SizedBox(height: 20),
               SizedBox(
-                width: MediaQuery.of(context).size.width * 0.8,
+                width: 340,
                 child: TextField(
                   controller: emailController,
+                  style: TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     labelText: "Enter Email",
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Colors.white70),
                     ),
                     contentPadding: const EdgeInsets.symmetric(
-                        vertical: 12, horizontal: 16),
+                      vertical: 12,
+                      horizontal: 16,
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 40),
               isLoading
                   ? const CircularProgressIndicator()
                   : SizedBox(
-                      width: MediaQuery.of(context).size.width * 0.8,
+                      width: 320,
                       child: ElevatedButton(
                         onPressed: _sendResetEmail,
                         style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
                           padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
-                        child: const Text("Send Reset Link"),
+                        child: const Text(
+                          "Send Reset Link",
+                          style: TextStyle(color: Colors.white),
+                        ),
                       ),
                     ),
             ],

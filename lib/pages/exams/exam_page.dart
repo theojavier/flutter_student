@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-//import 'package:usb_serial/usb_serial.dart';//kills web support
-import 'dart:typed_data';
+//import '../../helpers/cheat_detector.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -40,6 +38,10 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
   bool _cameraVisible = false;
   Offset _popupPosition = const Offset(100, 100);
   final String _secretKey = "BSCS-DS";
+  //CheatDetector? _cheatDetector;
+  // int strikes = 0;
+  // bool blocked = false;
+  // Offset bubblePos = Offset.zero; // optional: for UI bubble
 
   List<String> matchingPool = [];
 
@@ -213,6 +215,21 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
       currentIndex = savedIndex ?? 0;
       loading = false;
     });
+    // if (!_examFinished) {
+    //   _cheatDetector = CheatDetector(
+    //     onStrike: () async {
+    //       await _logCheatingEvent();
+    //       _showWarning("Cheating detected!");
+    //     },
+    //     onReset: () {
+    //       debugPrint("Cheat detector reset signal received");
+    //     },
+    //   );
+
+    //   await _cheatDetector?.start();
+    // }
+
+    // await _cheatDetector?.start();
   }
 
   Future<void> _stopCamera() async {
@@ -380,14 +397,15 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
       final snap = await resultRef.get();
       final currentStatus = snap.data()?["status"]?.toString();
       if (currentStatus == "completed" || currentStatus == "incomplete") {
-      return;
+        return;
       }
-
 
       await resultRef.set({
         "examId": widget.examId,
         "studentId": widget.studentId,
-        "status": currentStatus ?? "in-progress", //this can be remove to make it incomplete
+        "status":
+            currentStatus ??
+            "in-progress", //this can be remove to make it incomplete
         "lastCheatingUpdate": FieldValue.serverTimestamp(),
         "cheatingCount": FieldValue.increment(1), //increment
       }, SetOptions(merge: true));
@@ -478,6 +496,8 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
 
       if (!mounted) return;
       await _stopCamera();
+      // await _cheatDetector?.stop();
+      // _cheatDetector = null;
 
       // fetch the saved result & display Exam Result UI here
       final snapshot = await resultRef.get();
@@ -530,6 +550,7 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
     _saveDebounce?.cancel();
     _localRenderer.dispose();
     _localStream?.getTracks().forEach((t) => t.stop());
+    //_cheatDetector?.stop();
 
     //  Save progress + mark incomplete safely
     unawaited(() async {
@@ -739,10 +760,6 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
         return true;
       },
       child: Scaffold(
-        appBar: AppBar(
-          automaticallyImplyLeading: false,
-          title: Text("Question ${currentIndex + 1} of ${questions.length}"),
-        ),
         body: Stack(
           children: [
             Padding(
@@ -750,11 +767,98 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Question header
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color.fromARGB(255, 0, 153, 255),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      "Question ${currentIndex + 1} of ${questions.length}",
+                      style: const TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  //Instruction box
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Instructions:",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Builder(
+                        builder: (_) {
+                          String instruction = "";
+                          switch (q.type.toLowerCase()) {
+                            case "multiple-choice":
+                              instruction =
+                                  "- Select the correct answer from the options below.";
+                              break;
+                            case "true-false":
+                              instruction =
+                                  "- Choose whether the statement is True or False.";
+                              break;
+                            case "matching":
+                              instruction =
+                                  "- Select the correct match from the dropdown list.";
+                              break;
+                            default:
+                              instruction = "- Answer the following question:";
+                          }
+
+                          return Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEEEEEE),
+                              border: Border.all(color: Colors.red, width: 2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: RichText(
+                              textAlign: TextAlign.start,
+                              text: TextSpan(
+                                style: const TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 14,
+                                  height: 1.4,
+                                ),
+                                children: [
+                                  const TextSpan(
+                                    text:
+                                        "- Don’t switch tabs\n- Don’t leave the app\n- Look at the screen; it may trigger as cheating.\n",
+                                  ),
+                                  TextSpan(text: instruction),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Question text
                   Text(
                     q.questionText ?? "Question",
                     style: const TextStyle(fontSize: 18),
                   ),
                   const SizedBox(height: 20),
+
+                  // Remaining time
                   Text(
                     "Remaining Time: ${_formatRemaining(remaining)}",
                     style: const TextStyle(
@@ -764,7 +868,8 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  // multiple-choice
+
+                  // --- Question Type ---
                   if (q.type.toLowerCase() == "multiple-choice" &&
                       q.options != null)
                     Column(
@@ -779,7 +884,7 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                         );
                       }).toList(),
                     ),
-                  // true/false
+
                   if (q.type.toLowerCase() == "true-false")
                     Column(
                       children: ["True", "False"].map((opt) {
@@ -793,11 +898,11 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                         );
                       }).toList(),
                     ),
-                  // matching
+
                   if (q.type.toLowerCase() == "matching")
                     DropdownButtonFormField<String>(
                       isExpanded: true,
-                      initialValue: answers[currentIndex],
+                      value: answers[currentIndex],
                       hint: const Text("Select match"),
                       items: matchingPool
                           .map(
@@ -807,14 +912,20 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                       onChanged: (val) =>
                           val != null ? _onOptionSelected(val) : null,
                     ),
+
                   const Spacer(),
-                  SizedBox(
-                    width: double.infinity,
+
+                  // Next/Submit button
+                  Align(
+                    alignment: Alignment.centerRight,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.purple500,
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
                       ),
                       onPressed: submitting
                           ? null
@@ -831,8 +942,10 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                                     ),
                                     actions: [
                                       TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).pop(),
+                                        onPressed: () => Navigator.of(
+                                          context,
+                                          rootNavigator: true,
+                                        ).pop(),
                                         child: const Text("Cancel"),
                                       ),
                                       ElevatedButton(
@@ -908,11 +1021,6 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                                 (t) => t.stop(),
                               );
                             },
-                            child: const Icon(
-                              Icons.close,
-                              color: Colors.white,
-                              size: 18,
-                            ),
                           ),
                         ),
                       ],

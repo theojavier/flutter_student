@@ -6,6 +6,7 @@ import 'nav_header.dart';
 import 'package:go_router/go_router.dart';
 import '../helpers/notifications_helper.dart';
 import '../widgets/notifications_list.dart';
+import '../pages/exams/exam_html.dart';
 import '../pages/notifications/notification_item.dart';
 import 'dart:async';
 
@@ -14,19 +15,13 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
 
 class ResponsiveScaffold extends StatefulWidget {
-  final Widget homePage;
-  final Widget examPage;
-  final Widget schedulePage;
-  final int initialIndex;
-  final Widget? detailPage;
+  final int selectedIndex;
+  final Widget child;
 
   const ResponsiveScaffold({
     super.key,
-    required this.homePage,
-    required this.examPage,
-    required this.schedulePage,
-    this.initialIndex = 0,
-    this.detailPage,
+    required this.selectedIndex,
+    required this.child,
   });
 
   @override
@@ -34,25 +29,22 @@ class ResponsiveScaffold extends StatefulWidget {
 }
 
 class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
-  late int selectedIndex;
   String? profileImageUrl;
   String headerName = "Loading...";
   String headerSection = "";
   String? _userId;
   Map<String, dynamic>? _cachedProfile;
+  bool _isDrawerOpen = false;
 
   late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
-    
-      selectedIndex = widget.initialIndex; //  ensure initial value
-  _pages = [widget.homePage, widget.examPage, widget.schedulePage];
 
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    _syncIndexWithRoute(); //  call AFTER first layout
-  });
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future.delayed(const Duration(milliseconds: 50));
+    });
     _loadUserProfile();
   }
 
@@ -118,7 +110,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   }
 
   void _updateProfileUI(Map<String, dynamic> data) {
-    if (!mounted) return; 
+    if (!mounted) return;
 
     var url = (data['profileImage'] as String?) ?? '';
     if (url.isNotEmpty &&
@@ -155,8 +147,11 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     super.dispose();
   }
 
-  void _onSelectPage(int index) {
-    setState(() => selectedIndex = index);
+  Future<void> _onSelectPage(int index) async {
+    if (!_isDesktop(context)) {
+      Navigator.of(context).pop();
+      await Future.delayed(Duration(milliseconds: 200));
+    }
 
     switch (index) {
       case 0:
@@ -169,50 +164,31 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
         context.go('/schedule');
         break;
     }
-
-    // close drawer on mobile
-    if (!_isDesktop(context)) {
-      Navigator.pop(context);
-    }
   }
 
   //  Centralized desktop detection
   bool _isDesktop(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
 
-    if (kIsWeb) {
-      // Treat wide web browsers as desktop, narrow as mobile
-      return width >= 900;
+    if (kIsWeb) return width >= 900;
+
+    try {
+      return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+    } catch (_) {
+      return false;
     }
-
-    return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
   }
-  void _syncIndexWithRoute() {
-  final location = GoRouter.of(context)
-      .routerDelegate
-      .currentConfiguration
-      .uri
-      .toString();
-
-  if (location.startsWith('/home')) {
-    selectedIndex = 0;
-  } else if (location.startsWith('/exam-list') ||
-      location.startsWith('/take-exam') ||
-      location.startsWith('/exam/')) {
-    selectedIndex = 1;
-  } else if (location.startsWith('/schedule')) {
-    selectedIndex = 2;
-  }
-
-  setState(() {});
-}
 
   @override
   Widget build(BuildContext context) {
     final isDesktop = _isDesktop(context);
-    const topColor = Colors.blue;
+    bool isExamHtmlPage = GoRouterState.of(
+      context,
+    ).uri.path.contains('examhtml');
+    const topColor = Color(0xFF0F2B45);
 
     return Scaffold(
+      backgroundColor: Color(0xFF0F2B45),
       appBar: isDesktop
           ? AppBar(
               backgroundColor: topColor,
@@ -241,22 +217,36 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                   width: 120,
                 ),
               ),
-              leading: Builder(
-                builder: (ctx) => IconButton(
-                  icon: const Icon(Icons.menu),
-                  onPressed: () => Scaffold.of(ctx).openDrawer(),
-                ),
-              ),
+              leading: (!isDesktop && isExamHtmlPage)
+                  ? IgnorePointer(
+                      child: IconButton(
+                        icon: const Icon(Icons.menu, color: Colors.white),
+                        onPressed: () {},
+                      ),
+                    )
+                  : Builder(
+                      builder: (ctx) => IconButton(
+                        icon: const Icon(Icons.menu, color: Colors.white),
+                        onPressed: () => Scaffold.of(ctx).openDrawer(),
+                      ),
+                    ),
+
               actions: _buildActions(context),
             ),
-      drawer: isDesktop ? null : _buildDrawer(context),
-
+      drawer: (!isDesktop && !isExamHtmlPage) ? _buildDrawer(context) : null,
+      //drawer: isDesktop ? null : _buildDrawer(context),
+      onDrawerChanged: (isOpen) {
+        setState(() {
+          _isDrawerOpen = isOpen;
+        });
+      },
       body: Row(
         children: [
+          // Desktop sidebar
           if (isDesktop)
             Container(
               width: 260,
-              color: Colors.white,
+              color: Color.fromARGB(255, 17, 50, 80),
               child: Column(
                 children: [
                   NavHeader(
@@ -285,7 +275,29 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                 ],
               ),
             ),
-          Expanded(child: widget.detailPage ?? _pages[selectedIndex]),
+
+          // Main content
+          Expanded(
+            child: Stack(
+              children: [
+                // Your content/iframe
+                widget.child,
+
+                // Only block interaction when drawer is open (mobile)
+                if (_isDrawerOpen && !isDesktop)
+                  IgnorePointer(
+                    ignoring: false, // blocks taps below
+                    child: GestureDetector(
+                      onTap: () {
+                        Navigator.of(context).maybePop(); // closes drawer
+                      },
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(color: Colors.transparent),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -293,18 +305,24 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
 
   List<Widget> _menuTiles() => [
     ListTile(
-      leading: const Icon(Icons.home),
-      title: const Text('Home'),
+      tileColor: Color(0xFF0F2B45),
+      leading: const Icon(Icons.home, color: Colors.white),
+      title: const Text('Home', style: TextStyle(color: Color(0xFFE6F0F8))),
       onTap: () => _onSelectPage(0),
     ),
     ListTile(
-      leading: const Icon(Icons.event),
-      title: const Text('My Exam'),
+      tileColor: Color(0xFF0F2B45),
+      leading: const Icon(Icons.event, color: Colors.white),
+      title: const Text('My Exam', style: TextStyle(color: Color(0xFFE6F0F8))),
       onTap: () => _onSelectPage(1),
     ),
     ListTile(
-      leading: const Icon(Icons.schedule),
-      title: const Text('My Schedule'),
+      tileColor: Color(0xFF0F2B45),
+      leading: const Icon(Icons.schedule, color: Colors.white),
+      title: const Text(
+        'My Schedule',
+        style: TextStyle(color: Color(0xFFE6F0F8)),
+      ),
       onTap: () async {
         if (!mounted) return;
         _onSelectPage(2);
@@ -315,7 +333,10 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   List<Widget> _buildActions(BuildContext context) {
     return [
       if (_userId == null)
-        IconButton(icon: const Icon(Icons.notifications), onPressed: () {})
+        IconButton(
+          icon: const Icon(Icons.notifications, color: Colors.white),
+          onPressed: () {},
+        )
       else
         StreamBuilder<QuerySnapshot>(
           stream: FirebaseFirestore.instance
@@ -335,7 +356,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               alignment: Alignment.center,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.notifications),
+                  icon: const Icon(Icons.notifications, color: Colors.white),
                   onPressed: () {
                     if (_userId != null) {
                       final notifications = snap.hasData
@@ -383,6 +404,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                     right: 8,
                     top: 8,
                     child: Container(
+                      color: Color(0xFF0F2B45),
                       padding: const EdgeInsets.all(4),
                       decoration: const BoxDecoration(
                         color: Colors.red,
@@ -408,6 +430,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
           },
         ),
       PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: Colors.white),
         onSelected: (value) async {
           if (value == 'logout') {
             final prefs = await SharedPreferences.getInstance();
@@ -425,6 +448,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
 
   Widget _buildDrawer(BuildContext context) {
     return Drawer(
+      backgroundColor: Color(0xFF0F2B45),
       child: ListView(
         padding: EdgeInsets.zero,
         children: [

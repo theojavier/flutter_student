@@ -80,7 +80,7 @@ class _SchedulePageState extends State<SchedulePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[100],
+     backgroundColor: const Color(0xFF0B1220),
       body: loadingUser
           ? const Center(child: CircularProgressIndicator())
           : (program == null || yearBlock == null)
@@ -174,6 +174,8 @@ class _SchedulePageState extends State<SchedulePage> {
                                   child: SingleChildScrollView(
                                     controller: _verticalController,
                                     scrollDirection: Axis.vertical,
+                                    child: Container(
+                                    color: Colors.white,
                                     child: ConstrainedBox(
                                       constraints: const BoxConstraints(minWidth: 1120),
                                       child: Table(
@@ -214,6 +216,7 @@ class _SchedulePageState extends State<SchedulePage> {
                                         ],
                                       ),
                                     ),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -245,7 +248,7 @@ class _SchedulePageState extends State<SchedulePage> {
     final end = TimeOfDay(hour: hour + 1, minute: 0);
     return Container(
       padding: const EdgeInsets.all(6),
-      color: Colors.grey[100],
+      color: Colors.white,
       child: Text(
         "${start.format(context)} – ${end.format(context)}",
         style: const TextStyle(fontWeight: FontWeight.bold),
