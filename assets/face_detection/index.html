@@ -1,0 +1,73 @@
+
+
+// Send a message back to Flutter (e.g., cheating strike)
+function sendToFlutter(type, data = {}) {
+  if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+    window.flutter_inappwebview.callHandler(type, data);
+  } else {
+    console.warn("Flutter handler not ready:", type, data);
+  }
+}
+
+// Called whenever a strike is detected
+function notifyStrike() {
+  sendToFlutter("cheat_event", { strike: strikes });
+}
+
+// Modify your existing strike function:
+function registerStrikeOnce() {
+  const now = Date.now();
+  if (now - lastAway < 1200) return;
+  lastAway = now;
+
+  strikes++;
+  strikeBox.textContent = `Strikes: ${strikes}`;
+
+  //Notify Flutter
+  notifyStrike();
+
+  if (strikes >= 3) {
+    blocked = true;
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Blocked — Too many strikes";
+
+    //Auto-block notification
+    sendToFlutter("blocked", { strikes });
+  }
+  console.log("Strikes updated:", strikes);
+}
+
+//Flutter → Web: Load dynamic exam HTML
+window.loadExamFromFlutter = function (examHtml) {
+  document.getElementById("examContent").innerHTML = examHtml;
+
+  // Reset strike counters/UI
+  strikes = 0;
+  strikeBox.textContent = `Strikes: 0`;
+  blocked = false;
+  submitBtn.disabled = false;
+  submitBtn.textContent = "Submit Exam";
+  scoreBox.textContent = "Score: ?";
+  setVerification(false, "Face not verified");
+
+  sendToFlutter("exam_loaded", {});
+  console.log("Exam loaded from Flutter");
+};
+
+//Notify Flutter when submit happens
+submitBtn.addEventListener("click", () => {
+  const answer = document.querySelector('input[name="q1"]:checked')?.value || null;
+  const correctAnswer = "Paris";
+  const score = answer === correctAnswer ? 1 : 0;
+
+  scoreBox.textContent = `Score: ${score}/1`;
+
+  // Send results back
+  sendToFlutter("submit_exam", {
+    score,
+    strikes
+  });
+
+  alert("Submitted!");
+});
+

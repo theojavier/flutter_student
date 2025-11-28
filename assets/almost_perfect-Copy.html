@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Exam Portal — Full FaceMesh with Eye Bubble</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#0f2b45;
+    --card:#0f3b61;
+    --accent:#1e90ff;
+    --bg:#0b1220;
+    --ok:#2ecc71;
+    --warn:#ff6b6b;
+    --muted:#b7c7d6;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;
+    background:linear-gradient(180deg,#061225 0%, #071728 100%);
+    color:#e6f0f8;
+    -webkit-font-smoothing:antialiased;
+    position:relative;
+    min-height:100vh;
+  }
+  .topbar{
+    height:64px;
+    background:var(--navy);
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 20px;
+    box-shadow:0 4px 20px rgba(0,0,0,.4);
+  }
+  .topbar .brand{font-weight:700; letter-spacing:0.6px}
+  .topbar .timer{font-size:14px; color:var(--muted)}
+
+  .wrap{
+    max-width:1100px;
+    margin:28px auto;
+    display:grid;
+    grid-template-columns: 1fr 420px;
+    gap:20px;
+    padding:0 16px;
+  }
+
+  .card{
+    background:#0b2a44;
+    border-radius:10px;
+    padding:20px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.4);
+    position:relative;
+    overflow:visible;
+  }
+  .card h2{margin:0 0 14px; font-size:18px; color:#f3fbff}
+  .question {
+    background:#071a2b;
+    border-radius:8px;
+    padding:14px;
+    color:#dbeefc;
+    margin-bottom:18px;
+  }
+  .options label{
+    display:block;
+    padding:8px 12px;
+    margin:8px 0;
+    border-radius:6px;
+    cursor:pointer;
+    background:transparent;
+    border:1px solid rgba(255,255,255,0.03);
+  }
+  .options input{margin-right:10px}
+  .btn{
+    background:var(--accent);
+    color:#06203a;
+    border:none;
+    padding:10px 18px;
+    border-radius:8px;
+    font-weight:600;
+    cursor:pointer;
+    box-shadow: 0 6px 18px rgba(30,144,255,.16);
+  }
+  .card::after {
+    content:"";
+    position:absolute;
+    inset:6px;
+    border:3px solid rgba(255,255,255,0.05);
+    border-radius:8px;
+    pointer-events:none;
+    transition:border-color 0.18s, box-shadow 0.18s;
+  }
+  .card.alert::after {
+    border-color:var(--warn);
+    box-shadow:0 0 30px rgba(255,107,107,0.12);
+  }
+  .camera-panel{
+    background:#071a2b;
+    border-radius:10px;
+    padding:12px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    align-items:stretch;
+    box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  .cam-viewport{
+    position:relative;
+    width:100%;
+    aspect-ratio: 4/5;
+    background:#000;
+    border-radius:8px;
+    overflow:hidden;
+  }
+  video#input_video{
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    transform: scaleX(-1);
+  }
+  canvas#overlay{
+    position:absolute;
+    left:0; top:0;
+    width:100%; height:100%;
+    pointer-events:none;
+    transform: scaleX(-1);
+  }
+  .status-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-top:6px;
+  }
+  .face-status{
+    padding:8px 12px;
+    border-radius:8px;
+    display:flex;
+    gap:8px;
+    align-items:center;
+    background:rgba(0,0,0,0.15);
+    color:var(--muted);
+  }
+  .face-status.ok{ background: rgba(46,204,113,0.12); color:var(--ok); border:1px solid rgba(46,204,113,0.18) }
+  .face-status.bad{ background: rgba(255,107,107,0.08); color:var(--warn); border:1px solid rgba(255,107,107,0.12) }
+
+  .recording{ font-size:13px; color:var(--muted) }
+  .verified-line{ font-weight:600; font-size:15px }
+
+  .gaze-bubble {
+    position:fixed;
+    width:18px;
+    height:18px;
+    border-radius:50%;
+    background:rgba(30,144,255,0.95);
+    box-shadow:0 6px 14px rgba(30,144,255,0.2);
+    pointer-events:none;
+    transform:translate(-50%,-50%);
+    z-index:9999;
+    transition: box-shadow 0.12s;
+  }
+  .gaze-bubble.alert {
+    background: rgba(255,107,107,0.95);
+    box-shadow: 0 8px 20px rgba(255,107,107,0.25);
+  }
+  .strike-indicator {
+    position: absolute;
+    right:14px;
+    top:14px;
+    font-size:13px;
+    color:var(--muted);
+    background:rgba(0,0,0,0.12);
+    padding:6px 8px;
+    border-radius:8px;
+  }
+  .score-box{
+    margin-top:12px;
+    font-weight:600;
+    font-size:15px;
+    color:var(--accent);
+  }
+  @media (max-width:900px){
+    .wrap{ grid-template-columns: 1fr; }
+    .camera-panel{ order:-1 }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">EXAM PORTAL</div>
+  <div class="timer" id="countdown">Time Left: 60:00</div>
+  <button id="connectBtn" class="btn">🔌 Connect Arduino</button>
+</div>
+
+<div class="wrap">
+  <div class="card" id="examCard">
+    <div class="strike-indicator" id="strikeBox">Strikes: 0</div>
+    <div id="examContent">
+      <h2>Question 1</h2>
+      <div class="question">
+        <p style="margin:0 0 8px">What is the capital of France?</p>
+        <div class="options">
+          <label><input type="radio" name="q1" value="Berlin"> Berlin</label>
+          <label><input type="radio" name="q1" value="Madrid"> Madrid</label>
+          <label><input type="radio" name="q1" value="Paris" checked> <strong>Paris</strong></label>
+          <label><input type="radio" name="q1" value="Rome"> Rome</label>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap">
+      <div style="display:flex; gap:8px; align-items:center">
+        <button class="btn" id="submitBtn">Submit Exam</button>
+      </div>
+      <div style="color:var(--muted); font-size:13px">Recording: <span id="recState">Active</span></div>
+    </div>
+    <div class="score-box" id="scoreBox">Score: 0/1</div>
+  </div>
+
+  <div class="camera-panel">
+    <div class="cam-viewport">
+      <video id="input_video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="status-row">
+      <div id="faceStatus" class="face-status bad">
+        <span id="faceIcon">⛔</span>
+        <div>
+          <div class="verified-line" id="faceText">Face not verified</div>
+          <div style="font-size:12px; color:var(--muted)">Please center your face in the box and keep eyes on the screen</div>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div class="recording" id="recLabel">Recording. Active</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="gazeBubble" class="gaze-bubble" style="left:50%; top:50%; display:block;"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+// ========== ARDUINO SERIAL CONNECTION ==========
+let port;
+let writer;
+
+document.getElementById('connectBtn').addEventListener('click', async () => {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 9600 });
+    const textEncoder = new TextEncoderStream();
+    const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+    writer = textEncoder.writable.getWriter();
+    alert("Connected to Arduino!");
+  } catch (err) {
+    alert("Connection failed: " + err);
+  }
+});
+
+async function sendToArduino(message) {
+  if (!writer) return;
+  await writer.write(message + "\n");
+  console.log("Sent to Arduino:", message);
+}
+// ===============================================
+
+
+// ========== EXISTING EXAM CODE (UNCHANGED) ==========
+const videoElement=document.getElementById('input_video');
+const canvasElement=document.getElementById('overlay');
+const canvasCtx=canvasElement.getContext('2d');
+const faceStatus=document.getElementById('faceStatus');
+const faceText=document.getElementById('faceText');
+const faceIcon=document.getElementById('faceIcon');
+const countdownEl=document.getElementById('countdown');
+const submitBtn=document.getElementById('submitBtn');
+const examCard=document.getElementById('examCard');
+const gazeBubble=document.getElementById('gazeBubble');
+const strikeBox=document.getElementById('strikeBox');
+const scoreBox=document.getElementById('scoreBox');
+
+let totalSeconds=60*60;
+function updateTimer(){
+  const m=Math.floor(totalSeconds/60).toString().padStart(2,'0');
+  const s=(totalSeconds%60).toString().padStart(2,'0');
+  countdownEl.textContent=`Time Left: ${m}:${s}`;
+}
+updateTimer();
+setInterval(()=>{ if(totalSeconds>0) totalSeconds--; updateTimer(); },1000);
+
+const faceMesh=new FaceMesh({
+  locateFile: (file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+});
+faceMesh.setOptions({
+  maxNumFaces:1,
+  refineLandmarks:true,
+  minDetectionConfidence:0.55,
+  minTrackingConfidence:0.55
+});
+
+let verified=false;
+let lastVerifiedChange=Date.now();
+const STABLE_MS=300;
+let strikes=0;
+let blocked=false;
+
+let bubbleX=window.innerWidth/2, bubbleY=window.innerHeight/2;
+let targetX=bubbleX, targetY=bubbleY;
+const SENSITIVITY=10.4;
+
+function onResults(results){
+  const vw=videoElement.clientWidth;
+  const vh=videoElement.clientHeight;
+  canvasElement.width=vw; canvasElement.height=vh;
+  canvasCtx.clearRect(0,0,canvasElement.width,canvasElement.height);
+
+  if(!results.multiFaceLandmarks || results.multiFaceLandmarks.length===0){
+    setVerification(false,"Face not found");
+    targetX=window.innerWidth/2; targetY=window.innerHeight/2;
+    updateBubble(); return;
+  }
+
+  const lm=results.multiFaceLandmarks[0];
+  const leftIris=lm[468];
+  const rightIris=lm[473];
+  const leftEyeFallback=lm[159];
+  const rightEyeFallback=lm[386];
+
+  let irisXNorm, irisYNorm;
+  if(leftIris && rightIris){ irisXNorm=(leftIris.x+rightIris.x)/2; irisYNorm=(leftIris.y+rightIris.y)/2; }
+  else if(leftIris){ irisXNorm=leftIris.x; irisYNorm=leftIris.y; }
+  else if(rightIris){ irisXNorm=rightIris.x; irisYNorm=rightIris.y; }
+  else{ irisXNorm=(leftEyeFallback.x+rightEyeFallback.x)/2; irisYNorm=(leftEyeFallback.y+rightEyeFallback.y)/2; }
+
+  const irisXVideo=(1-irisXNorm)*vw;
+  const irisYVideo=irisYNorm*vh;
+
+  canvasCtx.beginPath();
+  canvasCtx.fillStyle='rgba(30,144,255,0.95)';
+  canvasCtx.arc(irisXVideo,irisYVideo,5,0,Math.PI*2);
+  canvasCtx.fill();
+
+  const offsetX=(irisXVideo-vw/2)/vw;
+  const offsetY=(irisYVideo-vh/2)/vh;
+
+  const examRect=examCard.getBoundingClientRect();
+  const examCx=examRect.left+examRect.width/2;
+  const examCy=examRect.top+examRect.height/2;
+
+  targetX=examCx+offsetX*examRect.width*SENSITIVITY;
+  targetY=examCy+offsetY*examRect.height*SENSITIVITY;
+
+  const pad=8;
+  targetX=Math.max(pad, Math.min(window.innerWidth-pad,targetX));
+  targetY=Math.max(pad, Math.min(window.innerHeight-pad,targetY));
+
+  const INSET_PCT=0.06;
+  const safeLeft=examRect.left+examRect.width*INSET_PCT;
+  const safeRight=examRect.right-examRect.width*INSET_PCT;
+  const safeTop=examRect.top+examRect.height*INSET_PCT;
+  const safeBottom=examRect.bottom-examRect.height*INSET_PCT;
+
+  const gazeOk=(targetX>=safeLeft && targetX<=safeRight && targetY>=safeTop && targetY<=safeBottom);
+
+  if(!gazeOk){
+    examCard.classList.add('alert'); gazeBubble.classList.add('alert');
+    setVerification(false,"Looking away detected");
+    registerStrikeOnce();
+    sendToArduino("STRIKE");
+  } else {
+    examCard.classList.remove('alert'); gazeBubble.classList.remove('alert');
+    setVerification(true,"Face & eyes centered");
+    sendToArduino("OK");
+  }
+  updateBubble();
+}
+
+let lastAway=0;
+function registerStrikeOnce(){
+  const now=Date.now();
+  if(now-lastAway<1200) return;
+  lastAway=now;
+  strikes++;
+  strikeBox.textContent=`Strikes: ${strikes}`;
+  if(strikes>=3){
+    blocked=true; submitBtn.disabled=true; submitBtn.textContent="Blocked — Too many strikes";
+  }
+  console.log("Strikes updated:", strikes);
+}
+
+function setVerification(ok, reason){
+  const now=Date.now();
+  if(ok!==verified && (now-lastVerifiedChange)<STABLE_MS) return;
+  if(ok!==verified){
+    verified=ok; lastVerifiedChange=now;
+    if(verified){ faceStatus.classList.remove('bad'); faceStatus.classList.add('ok'); faceIcon.textContent='✔'; }
+    else{ faceStatus.classList.remove('ok'); faceStatus.classList.add('bad'); faceIcon.textContent='⚠'; }
+  }
+  faceText.textContent=reason || (verified?"Face verified":"Face not verified");
+}
+
+function updateBubble(){
+  bubbleX+=(targetX-bubbleX)*0.18;
+  bubbleY+=(targetY-bubbleY)*0.18;
+  gazeBubble.style.left=`${bubbleX}px`;
+  gazeBubble.style.top=`${bubbleY}px`;
+}
+
+function animLoop(){ updateBubble(); requestAnimationFrame(animLoop); }
+animLoop();
+
+let camera=null;
+try{
+  camera=new Camera(videoElement,{ onFrame:async()=>{await faceMesh.send({image:videoElement});}, width:640, height:800 });
+  faceMesh.onResults(onResults);
+  camera.start();
+}catch(err){
+  console.warn("Camera start failed:", err);
+  faceText.textContent="Camera unavailable — try localhost or allow camera access.";
+  faceIcon.textContent="⚠";
+}
+
+submitBtn.addEventListener('click',()=>{
+  if(blocked){ alert('Cannot submit: exam blocked due to repeated off-screen gaze.'); return; }
+  if(!verified){ alert('Cannot submit: face/eyes not verified. Please center yourself.'); return; }
+
+  const answer=document.querySelector('input[name="q1"]:checked')?.value || null;
+  const correctAnswer="Paris";
+  const score=(answer===correctAnswer)?1:0;
+  scoreBox.textContent=`Score: ${score}/1`;
+
+  // Placeholder: send strikes/score to Flutter/Firebase
+  console.log("Exam submitted:", { strikes, score });
+  alert('Exam submitted (mock). Results displayed above.');
+});
+
+function loadExamFromFlutter(examHtml){
+  document.getElementById('examContent').innerHTML=examHtml;
+  strikes=0; strikeBox.textContent=`Strikes: ${strikes}`;
+  blocked=false; submitBtn.disabled=false; submitBtn.textContent="Submit Exam";
+  scoreBox.textContent="Score: 0/1";
+  setVerification(false,"Face not verified");
+}
+
+window.addEventListener('resize',()=>{ bubbleX=window.innerWidth/2; bubbleY=window.innerHeight/2; targetX=bubbleX; targetY=bubbleY; });
+
+console.log("Eye-bubble exam loaded. Run via localhost or allow camera access.");
+// ================================================================
+</script>
+</body>
+</html>

@@ -1,0 +1,1146 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Exam Portal — Full FaceMesh with Eye Bubble</title>
+
+  <!-- Firebase + App Initialization FIRST -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+    import { getFirestore, collection, getDocs, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+
+    // ====== Firebase Config from your FlutterFire options ======
+    const firebaseConfig = {
+      apiKey: 'AIzaSyD3QA26qrdwXjt1eRn_OBqX0zw8kbiyV3o',
+      appId: '1:348602182315:web:e5b92040815a2ef94665ee',
+      messagingSenderId: '348602182315',
+      projectId: 'rd-final',
+      authDomain: 'rd-final.firebaseapp.com',
+      databaseURL: 'https://rd-final-default-rtdb.asia-southeast1.firebasedatabase.app',
+      storageBucket: 'rd-final.firebasestorage.app',
+      measurementId: 'G-WBN9RY3QKG'
+    };
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    window.db = db; // make db global so your exam code can access it
+    async function initAndLoad() {
+      let examId = window.examData?.examId;
+      let studentId = window.examData?.studentId;
+      let currentQuestionIndex = 0;
+      if (!examId || !studentId) {
+        console.warn("Missing examId or studentId");
+        return;
+      }
+
+      const lastExamId = localStorage.getItem("examId");
+
+      // 🔹 Clear old answers if user started a different exam
+      if (lastExamId && lastExamId !== examId) {
+        Object.keys(localStorage).forEach(key => {
+          if (
+            key.startsWith("answer_") ||
+            key === "examId" ||
+            key === "currentIndex" ||
+            key === "questionOrder"
+          ) {
+            localStorage.removeItem(key);
+          }
+        });
+      }
+
+      // 🔹 Restore progress
+      const savedIndex = parseInt(localStorage.getItem("currentIndex") || "0");
+      const savedOrder = JSON.parse(localStorage.getItem("questionOrder") || "null");
+
+      // 🔹 Fetch exam document
+      const examDocRef = doc(db, "exams", examId);
+      const examSnap = await getDoc(examDocRef);
+      const teacherId = examSnap.exists() ? examSnap.data().teacherId || "" : "";
+
+      // 🔹 Fetch questions
+      const questionsCol = collection(db, "exams", examId, "questions");
+      const questionsSnap = await getDocs(questionsCol);
+      let allQuestions = questionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 🔹 Restore or shuffle order
+      if (savedOrder && savedOrder.length === allQuestions.length) {
+        allQuestions.sort((a, b) => savedOrder.indexOf(a.id) - savedOrder.indexOf(b.id));
+      } else {
+        allQuestions.sort(() => Math.random() - 0.5);
+        localStorage.setItem("questionOrder", JSON.stringify(allQuestions.map(q => q.id)));
+      }
+
+      // 🔹 Restore answers
+      const restoredAnswers = {};
+      allQuestions.forEach((q, i) => {
+        const ans = localStorage.getItem(`answer_${i}`);
+        if (ans) restoredAnswers[i] = ans;
+      });
+
+      window.questions = allQuestions;
+      window.answers = restoredAnswers;
+      localStorage.setItem("examId", examId);
+
+      // 🔹 Ensure Firestore result document
+      const resultRef = doc(db, "examResults", examId, studentId, "result");
+      const resultSnap = await getDoc(resultRef);
+      if (!resultSnap.exists()) {
+        await setDoc(resultRef, {
+          examId,
+          studentId,
+          lastSavedAt: new Date(),
+          cheatingCount: 0,
+        });
+      } else {
+        const data = resultSnap.data();
+        window.cheatingCount = data.cheatingCount || 0;
+      }
+
+      console.log("✅ Exam initialized & loaded:", { examId, studentId, teacherId });
+      await loadExamQuestions(examId);
+    }
+
+
+    // ===================== Load Questions from Firestore =====================
+    async function loadExamQuestions(examId) {
+      if (!examId) return;
+
+      try {
+        const questionsCol = collection(db, "exams", examId, "questions");
+        const snapshot = await getDocs(questionsCol);
+
+        if (snapshot.empty) {
+          document.getElementById('examContent').innerHTML = "<p>No questions found.</p>";
+          return;
+        }
+
+        // Collect questions in order
+        const rawQuestions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        questions = shuffleArray(rawQuestions).map((q, idx) => ({
+          ...q,
+          index: idx // embed shuffled index per student
+        }));
+
+        matchingPool = Array.from(new Set(
+          questions
+            .filter(q => q.type?.toLowerCase() === "matching" && Array.isArray(q.options))
+            .flatMap(q => q.options)
+        ));
+
+        // Generate HTML
+        showQuestion(currentQuestionIndex);
+
+
+        // Reset UI state
+        strikes = 0;
+        strikeBox.textContent = `Strikes: ${strikes}`;
+        blocked = false;
+        // submitBtn.disabled = false;
+        // submitBtn.textContent = "Submit Exam";
+        scoreBox.textContent = `Score: 0/${questions.length}`;
+        setVerification(false, "Face not verified");
+
+
+      } catch (err) {
+        console.error("Failed to load exam questions:", err);
+        document.getElementById('examContent').innerHTML = `<p>Error loading questions: ${err.message}</p>`;
+      }
+    }
+
+
+    // ===================== Usage =====================
+    // If running inside Flutter WebView
+    examId = window.flutterExamData?.examId ?? examId;
+    studentId = window.flutterExamData?.studentId ?? studentId;
+    answers = window.flutterExamData?.answers ?? answers;
+
+    if (!examId || !studentId) {
+      const urlParams = new URLSearchParams(window.location.search);
+      examId = urlParams.get('examId');
+      studentId = urlParams.get('studentId');
+    }
+
+    if (examId && studentId) {
+      initAndLoad().then(() => restoreAnswersFromFirestore());
+    }
+    let cheatingCount = 0;
+    let examFinished = false;
+
+    async function logCheatingEvent() {
+      if (examFinished) return;
+      try {
+        const examId = window.examData?.examId;
+        const studentId = window.examData?.studentId;
+        if (!examId || !studentId) return;
+
+        const resultRef = doc(db, "examResults", examId, studentId, "result");
+        const snap = await getDoc(resultRef);
+        const currentStatus = snap.exists() ? snap.data().status : null;
+
+        if (currentStatus === "completed" || currentStatus === "incomplete") return;
+
+        await setDoc(resultRef, {
+          examId: examId,
+          studentId: studentId,
+          status: currentStatus ?? "in-progress",
+          lastCheatingUpdate: new Date(),
+          cheatingCount: (snap.exists() && snap.data().cheatingCount
+            ? snap.data().cheatingCount + 1
+            : 1)
+        }, { merge: true });
+
+        cheatingCount++;
+        console.log(`Cheating logged! Count: ${cheatingCount}`);
+      } catch (err) {
+        console.error("logCheatingEvent error:", err);
+      }
+    }
+    // Detect leaving tab or switching away
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        console.warn("User left tab or minimized browser!");
+        logCheatingEvent();
+      }
+    });
+
+    // Detect closing / refreshing the page
+    window.addEventListener("beforeunload", (e) => {
+      logCheatingEvent();
+      markIncompleteIfNeeded();
+    });
+
+    window.examData = { examId, studentId, answers };
+    console.log("Exam ID:", examId, "Student ID:", studentId, "Answers:", answers);
+  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --navy: #0f2b45;
+      --card: #0f3b61;
+      --accent: #1e90ff;
+      --bg: #0b1220;
+      --ok: #2ecc71;
+      --warn: #ff6b6b;
+      --muted: #b7c7d6;
+    }
+
+    * {
+      box-sizing: border-box
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial;
+      background: linear-gradient(180deg, #061225 0%, #071728 100%);
+      color: #e6f0f8;
+      -webkit-font-smoothing: antialiased;
+      position: relative;
+      min-height: 100vh;
+    }
+
+    .topbar {
+      height: 64px;
+      background: var(--navy);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, .4);
+    }
+
+    .topbar .brand {
+      font-weight: 700;
+      letter-spacing: 0.6px
+    }
+
+    .topbar .timer {
+      font-size: 14px;
+      color: var(--muted)
+    }
+
+    .wrap {
+      max-width: 1100px;
+      margin: 28px auto;
+      display: grid;
+      grid-template-columns: 1fr 420px;
+      gap: 20px;
+      padding: 0 16px;
+    }
+
+    .card {
+      background: #0b2a44;
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .4);
+      position: relative;
+      overflow: visible;
+    }
+
+    .card h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      color: #f3fbff
+    }
+
+    .question {
+      background: #071a2b;
+      border-radius: 8px;
+      padding: 14px;
+      color: #dbeefc;
+      margin-bottom: 18px;
+    }
+
+    .options label {
+      display: block;
+      padding: 8px 12px;
+      margin: 8px 0;
+      border-radius: 6px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.03);
+    }
+
+    .options input {
+      margin-right: 10px
+    }
+
+    .btn {
+      background: var(--accent);
+      color: #06203a;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 6px 18px rgba(30, 144, 255, .16);
+    }
+
+    .card::after {
+      content: "";
+      position: absolute;
+      inset: 6px;
+      border: 3px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      pointer-events: none;
+      transition: border-color 0.18s, box-shadow 0.18s;
+    }
+
+    .card.alert::after {
+      border-color: var(--warn);
+      box-shadow: 0 0 30px rgba(255, 107, 107, 0.12);
+    }
+
+    .camera-panel {
+      background: #071a2b;
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: stretch;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+    }
+
+    .cam-viewport {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4/5;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    video#input_video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+
+    canvas#overlay {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      transform: scaleX(-1);
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 6px;
+    }
+
+    .face-status {
+      padding: 8px 12px;
+      border-radius: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.15);
+      color: var(--muted);
+    }
+
+    .face-status.ok {
+      background: rgba(46, 204, 113, 0.12);
+      color: var(--ok);
+      border: 1px solid rgba(46, 204, 113, 0.18)
+    }
+
+    .face-status.bad {
+      background: rgba(255, 107, 107, 0.08);
+      color: var(--warn);
+      border: 1px solid rgba(255, 107, 107, 0.12)
+    }
+
+    .recording {
+      font-size: 13px;
+      color: var(--muted)
+    }
+
+    .verified-line {
+      font-weight: 600;
+      font-size: 15px
+    }
+
+    .gaze-bubble {
+      position: fixed;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(30, 144, 255, 0.95);
+      box-shadow: 0 6px 14px rgba(30, 144, 255, 0.2);
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      z-index: 9999;
+      transition: box-shadow 0.12s;
+    }
+
+    .gaze-bubble.alert {
+      background: rgba(255, 107, 107, 0.95);
+      box-shadow: 0 8px 20px rgba(255, 107, 107, 0.25);
+    }
+
+    .strike-indicator {
+      position: absolute;
+      right: 14px;
+      top: 14px;
+      font-size: 13px;
+      color: var(--muted);
+      background: rgba(0, 0, 0, 0.12);
+      padding: 6px 8px;
+      border-radius: 8px;
+    }
+
+    .score-box {
+      margin-top: 12px;
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--accent);
+    }
+
+    @media (max-width:900px) {
+      .wrap {
+        grid-template-columns: 1fr;
+      }
+
+      .camera-panel {
+        order: -1
+      }
+    }
+  </style>
+</head>
+<script>
+  // ================== Unified Flutter/Web Support ==================
+
+  // 1️⃣ Try to get data from Flutter WebView injection
+  let examId = window.flutterExamData?.examId;
+  let studentId = window.flutterExamData?.studentId;
+  let answers = window.flutterExamData?.answers || {};
+
+  // 2️⃣ Fallback for Web/IFrame query parameters
+  if (!examId || !studentId) {
+    const urlParams = new URLSearchParams(window.location.search);
+    examId = urlParams.get('examId');
+    studentId = urlParams.get('studentId');
+  }
+
+  // 3️⃣ Optional: listen to postMessage (for IFrame parent)
+  window.addEventListener('message', (event) => {
+    if (event.data?.examId && event.data?.studentId) {
+      examId = event.data.examId;
+      studentId = event.data.studentId;
+      answers = event.data.answers || {};
+      console.log("Received exam data via postMessage", event.data);
+    }
+  });
+
+  // 4️⃣ Example: make Firestore references globally available
+  window.examData = { examId, studentId, answers };
+  console.log("Exam ID:", examId, "Student ID:", studentId, "Answers:", answers);
+</script>
+
+<body>
+
+  <div class="topbar">
+    <div class="brand">EXAM PORTAL</div>
+    <div class="timer" id="countdown">Time Left: 60:00</div>
+    <button id="connectBtn" class="btn">🔌 Connect Arduino</button>
+  </div>
+
+
+  <div class="wrap">
+    <div class="card" id="examCard">
+      <div class="strike-indicator" id="strikeBox">Strikes: 0</div>
+      <div id="examContent">
+        <h2>Question 1</h2>
+        <div class="question">
+          <p>Loading questions...</p>
+        </div>
+      </div>
+      <!-- Add your Next/Previous buttons here -->
+      <!-- Existing Submit and Recording section
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:16px;">
+        <button class="btn" id="submitBtn">Submit Exam</button>
+        <div style="color:var(--muted); font-size:13px">Recording: <span id="recState">Active</span></div>
+      </div> -->
+
+      <div class="score-box" id="scoreBox">Score: 0/1</div>
+
+      <div class="camera-panel">
+        <div class="cam-viewport">
+          <video id="input_video" autoplay playsinline muted></video>
+          <canvas id="overlay"></canvas>
+        </div>
+        <div class="status-row">
+          <div id="faceStatus" class="face-status bad">
+            <span id="faceIcon">⛔</span>
+            <div>
+              <div class="verified-line" id="faceText">Face not verified</div>
+              <div style="font-size:12px; color:var(--muted)">Please center your face in the box and keep eyes on the
+                screen</div>
+            </div>
+          </div>
+          <div style="text-align:right">
+            <div class="recording" id="recLabel">Recording. Active</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="gazeBubble" class="gaze-bubble" style="left:50%; top:50%; display:block;"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+    <script>
+      // ========== ARDUINO SERIAL CONNECTION ==========
+      let port;
+      let writer;
+
+      document.getElementById('connectBtn').addEventListener('click', async () => {
+        try {
+          port = await navigator.serial.requestPort();
+          await port.open({ baudRate: 9600 });
+          const textEncoder = new TextEncoderStream();
+          const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+          writer = textEncoder.writable.getWriter();
+          alert("Connected to Arduino!");
+        } catch (err) {
+          alert("Connection failed: " + err);
+        }
+      });
+
+      async function sendToArduino(message) {
+        if (!writer) return;
+        await writer.write(message + "\n");
+        console.log("Sent to Arduino:", message);
+      }
+      // ===============================================
+
+
+      // ========== EXISTING EXAM CODE (UNCHANGED) ==========
+      const videoElement = document.getElementById('input_video');
+      const canvasElement = document.getElementById('overlay');
+      const canvasCtx = canvasElement.getContext('2d');
+      const faceStatus = document.getElementById('faceStatus');
+      const faceText = document.getElementById('faceText');
+      const faceIcon = document.getElementById('faceIcon');
+      const countdownEl = document.getElementById('countdown');
+      // const submitBtn = document.getElementById('submitBtn');
+      const examCard = document.getElementById('examCard');
+      const gazeBubble = document.getElementById('gazeBubble');
+      const strikeBox = document.getElementById('strikeBox');
+      const scoreBox = document.getElementById('scoreBox');
+      const nextBtn = document.getElementById("nextBtn");
+
+      let totalSeconds = 60 * 60;
+      async function startCountdownFromFirestore(examId) {
+  const examRef = doc(db, "exams", examId);
+  const examSnap = await getDoc(examRef);
+
+  if (!examSnap.exists()) {
+    countdownEl.textContent = "Exam not found!";
+    return;
+  }
+
+  // Load exam ONCE only
+  await loadExamQuestions(examId);
+
+  const data = examSnap.data();
+  const endTime = data.endTime.toDate().getTime();
+
+  const timer = setInterval(() => {
+    const startTime = data.startTime.toDate().getTime();
+    const durationMs = endTime - startTime;
+    const elapsedMs = Date.now() - startTime;
+    const remainingMs = Math.max(durationMs - elapsedMs, 0);
+    if (remainingMs <= 0) {
+      clearInterval(timer);
+      countdownEl.textContent = "Time's up!";
+      return;
+    }
+    countdownEl.textContent = "Time Left: " + formatRemaining(remainingMs);
+  }, 1000);
+}
+      function formatRemaining(ms) {
+        const totalSec = Math.max(0, Math.floor(ms / 1000));
+        const hours = Math.floor(totalSec / 3600);
+        const minutes = Math.floor((totalSec % 3600) / 60);
+        const seconds = totalSec % 60;
+        if (hours > 0) {
+          return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+      }
+
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.55,
+        minTrackingConfidence: 0.55
+      });
+
+      let verified = false;
+      let lastVerifiedChange = Date.now();
+      const STABLE_MS = 300;
+      let strikes = 0;
+      let blocked = false;
+
+      let bubbleX = window.innerWidth / 2, bubbleY = window.innerHeight / 2;
+      let targetX = bubbleX, targetY = bubbleY;
+      const SENSITIVITY = 10.4;
+
+      function onResults(results) {
+        const vw = videoElement.clientWidth;
+        const vh = videoElement.clientHeight;
+        canvasElement.width = vw; canvasElement.height = vh;
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+          setVerification(false, "Face not found");
+          targetX = window.innerWidth / 2; targetY = window.innerHeight / 2;
+          updateBubble(); return;
+        }
+
+        const lm = results.multiFaceLandmarks[0];
+        const leftIris = lm[468];
+        const rightIris = lm[473];
+        const leftEyeFallback = lm[159];
+        const rightEyeFallback = lm[386];
+
+        let irisXNorm, irisYNorm;
+        if (leftIris && rightIris) { irisXNorm = (leftIris.x + rightIris.x) / 2; irisYNorm = (leftIris.y + rightIris.y) / 2; }
+        else if (leftIris) { irisXNorm = leftIris.x; irisYNorm = leftIris.y; }
+        else if (rightIris) { irisXNorm = rightIris.x; irisYNorm = rightIris.y; }
+        else { irisXNorm = (leftEyeFallback.x + rightEyeFallback.x) / 2; irisYNorm = (leftEyeFallback.y + rightEyeFallback.y) / 2; }
+
+        const irisXVideo = (1 - irisXNorm) * vw;
+        const irisYVideo = irisYNorm * vh;
+
+        canvasCtx.beginPath();
+        canvasCtx.fillStyle = 'rgba(30,144,255,0.95)';
+        canvasCtx.arc(irisXVideo, irisYVideo, 5, 0, Math.PI * 2);
+        canvasCtx.fill();
+
+        const offsetX = (irisXVideo - vw / 2) / vw;
+        const offsetY = (irisYVideo - vh / 2) / vh;
+
+        const examRect = examCard.getBoundingClientRect();
+        const examCx = examRect.left + examRect.width / 2;
+        const examCy = examRect.top + examRect.height / 2;
+
+        targetX = examCx + offsetX * examRect.width * SENSITIVITY;
+        targetY = examCy + offsetY * examRect.height * SENSITIVITY;
+
+        const pad = 8;
+        targetX = Math.max(pad, Math.min(window.innerWidth - pad, targetX));
+        targetY = Math.max(pad, Math.min(window.innerHeight - pad, targetY));
+
+        const INSET_PCT = 0.06;
+        const safeLeft = examRect.left + examRect.width * INSET_PCT;
+        const safeRight = examRect.right - examRect.width * INSET_PCT;
+        const safeTop = examRect.top + examRect.height * INSET_PCT;
+        const safeBottom = examRect.bottom - examRect.height * INSET_PCT;
+
+        const gazeOk = (targetX >= safeLeft && targetX <= safeRight && targetY >= safeTop && targetY <= safeBottom);
+
+        if (!gazeOk) {
+          examCard.classList.add('alert'); gazeBubble.classList.add('alert');
+          setVerification(false, "Looking away detected");
+          registerStrikeOnce();
+          sendToArduino("STRIKE");
+        } else {
+          examCard.classList.remove('alert'); gazeBubble.classList.remove('alert');
+          setVerification(true, "Face & eyes centered");
+          sendToArduino("OK");
+        }
+        updateBubble();
+      }
+      faceMesh.onResults(onResults);
+
+let camera = new Camera(videoElement, {
+  onFrame: async () => {
+    await faceMesh.send({ image: videoElement });
+  },
+  width: 640,
+  height: 800
+});
+camera.start();
+
+      let lastAway = 0;
+      function registerStrikeOnce() {
+        const now = Date.now();
+        if (now - lastAway < 1200) return;
+        lastAway = now;
+        strikes++;
+        strikeBox.textContent = `Strikes: ${strikes}`;
+        logCheatingEvent();
+        // if (strikes >= 3) {
+        //   blocked = true; submitBtn.disabled = true; submitBtn.textContent = "Blocked — Too many strikes";
+        // }
+        console.log("Strikes updated:", strikes);
+      }
+
+      function setVerification(ok, reason) {
+        const now = Date.now();
+        if (ok !== verified && (now - lastVerifiedChange) < STABLE_MS) return;
+        if (ok !== verified) {
+          verified = ok; lastVerifiedChange = now;
+          if (verified) { faceStatus.classList.remove('bad'); faceStatus.classList.add('ok'); faceIcon.textContent = '✔'; }
+          else { faceStatus.classList.remove('ok'); faceStatus.classList.add('bad'); faceIcon.textContent = '⚠'; }
+        }
+        faceText.textContent = reason || (verified ? "Face verified" : "Face not verified");
+      }
+
+      function updateBubble() {
+        bubbleX += (targetX - bubbleX) * 0.18;
+        bubbleY += (targetY - bubbleY) * 0.18;
+        gazeBubble.style.left = `${bubbleX}px`;
+        gazeBubble.style.top = `${bubbleY}px`;
+      }
+
+      function animLoop() { updateBubble(); requestAnimationFrame(animLoop); }
+      animLoop();
+
+      try {
+        camera = new Camera(videoElement, { onFrame: async () => { await faceMesh.send({ image: videoElement }); }, width: 640, height: 800 });
+        faceMesh.onResults(onResults);
+        camera.start();
+      } catch (err) {
+        console.warn("Camera start failed:", err);
+        faceText.textContent = "Camera unavailable — try localhost or allow camera access.";
+        faceIcon.textContent = "⚠";
+      }
+      let matchingPool = [];
+      let questions = [];
+
+      function generateQuestionHtml(q, currentIndex, answers, matchingPool) {
+  const selectedAnswer = answers[q.id] ?? null;
+  const qType = q.type.toLowerCase();
+
+  // 🟦 Instruction logic (like Flutter switch-case)
+  let instruction = "";
+  switch (qType) {
+    case "multiple-choice":
+      instruction = "- Select the correct answer from the options below.";
+      break;
+    case "true-false":
+      instruction = "- Choose whether the statement is True or False.";
+      break;
+    case "matching":
+      instruction = "- Select the correct match from the dropdown list.";
+      break;
+    default:
+      instruction = "- Answer the following question:";
+  }
+
+  // 🟨 Build the HTML structure
+  let html = `
+    <div class="question-wrapper">
+      <!-- Header -->
+      <div class="header">
+        <h2>Question ${currentIndex + 1} of ${questions.length}</h2>
+      </div>
+
+      <!-- Instruction box -->
+      <div class="instruction-box">
+        <strong>Instructions:</strong>
+        <p>
+          - Don’t switch tabs<br>
+          - Don’t leave the app<br>
+          - Look at the screen; it may trigger as cheating.<br>
+          ${instruction}
+        </p>
+      </div>
+
+      <!-- Question text -->
+      <p class="question-text">${q.questionText}</p>
+
+      <!-- Remaining time -->
+      <p id="remainingTime" class="remaining-time">Remaining Time: ${formatRemainingTime()}</p>
+
+      <!-- Options -->
+      <div class="options" data-qid="${q.id}" data-qtype="${qType}">
+  `;
+
+  // 🟩 Generate answer inputs
+  if (qType === 'multiple-choice') {
+    (q.options || []).forEach(opt => {
+      const checked = opt === selectedAnswer ? 'checked' : '';
+      html += `<label><input type="radio" name="${q.id}" value="${opt}" ${checked}> ${opt}</label>`;
+    });
+  } else if (qType === 'true-false') {
+    ['True', 'False'].forEach(opt => {
+      const checked = opt === selectedAnswer ? 'checked' : '';
+      html += `<label><input type="radio" name="${q.id}" value="${opt}" ${checked}> ${opt}</label>`;
+    });
+  } else if (qType === 'matching') {
+    html += `<select name="${q.id}">`;
+    matchingPool.forEach(m => {
+      const selected = m === selectedAnswer ? 'selected' : '';
+      html += `<option value="${m}" ${selected}>${m}</option>`;
+    });
+    html += `</select>`;
+  } else if (qType === 'text') {
+    html += `<input type="text" name="${q.id}" value="${selectedAnswer || ''}" placeholder="Type your answer">`;
+  }
+
+  // 🟦 Footer controls
+  html += `
+      </div>
+      <div id="examControls" style="text-align:right; margin-top:24px;">
+        <button id="nextBtn" class="btn">Next</button>
+      </div>
+    </div>
+  `;
+
+  return html;
+}
+
+      let currentQuestionIndex = 0;
+
+      function showQuestion(index) {
+        const q = questions[index];
+        if (!q) return;
+        document.getElementById('examContent').innerHTML = generateQuestionHtml(q, index, answers, matchingPool);
+        scoreBox.textContent = `Score: 0/${questions.length}`;
+      }
+      // After loading all questions
+      showQuestion(currentQuestionIndex);
+      function formatRemainingTime() {
+  if (!window.endTime) return "00:00";
+  const diff = Math.max(0, window.endTime - Date.now());
+  const mins = Math.floor(diff / 60000);
+  const secs = Math.floor((diff % 60000) / 1000);
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+setInterval(() => {
+  const el = document.getElementById("remainingTime");
+  if (el) el.textContent = `Remaining Time: ${formatRemainingTime()}`;
+}, 1000);
+
+
+      answers = collectAnswers();  // key = questionId / index, value = selected answer
+      function renderQuestion(question) {
+        const qEl = document.createElement('div');
+        qEl.className = 'question';
+        qEl.dataset.qid = question.id;
+
+        const qText = document.createElement('p');
+        qText.textContent = question.questionText;
+        qEl.appendChild(qText);
+
+        const optionsDiv = document.createElement('div');
+        optionsDiv.className = 'options';
+
+        switch (question.type) {
+          case 'multiple-choice':
+            question.options.forEach(opt => {
+              const label = document.createElement('label');
+              label.innerHTML = `<input type="radio" name="${question.id}" value="${opt}"> ${opt}`;
+              optionsDiv.appendChild(label);
+            });
+            break;
+          case 'checkbox':
+            question.options.forEach(opt => {
+              const label = document.createElement('label');
+              label.innerHTML = `<input type="checkbox" name="${question.id}" value="${opt}"> ${opt}`;
+              optionsDiv.appendChild(label);
+            });
+            break;
+          case 'text':
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.name = question.id;
+            input.placeholder = 'Type your answer';
+            optionsDiv.appendChild(input);
+            break;
+        }
+
+        qEl.appendChild(optionsDiv);
+        return qEl;
+      }
+      document.addEventListener('click', async (e) => {
+  if (e.target.id === 'nextBtn') {
+    const btn = e.target;
+    btn.disabled = true;
+
+    if (currentQuestionIndex + 1 < questions.length) {
+      await saveAnswer(currentQuestionIndex, window.answers[currentQuestionIndex]);
+      currentQuestionIndex++;
+      showQuestion(currentQuestionIndex);
+    } else {
+      const answeredCount = Object.keys(window.answers).length;
+      const total = questions.length;
+      if (confirm(`You have answered ${answeredCount} out of ${total} questions. Submit now?`)) {
+        await submitExam(false);
+      }
+    }
+
+    btn.disabled = false;
+  }
+});
+
+
+
+
+
+      function collectAnswers() {
+        const questionElements = document.querySelectorAll('.question');
+        const answers = {};
+
+        questionElements.forEach(qEl => {
+          const qId = qEl.dataset.qid;
+          const type = qEl.dataset.qtype;
+
+          if (type === 'multiple-choice') {
+            answers[qId] = qEl.querySelector('input[type="radio"]:checked')?.value || null;
+          } else if (type === 'checkbox') {
+            answers[qId] = Array.from(qEl.querySelectorAll('input[type="checkbox"]:checked')).map(i => i.value);
+          } else if (type === 'text') {
+            answers[qId] = qEl.querySelector('input[type="text"]').value || '';
+          }
+        });
+
+        return answers;
+      }
+
+      async function saveAnswer(displayIndex, answerStr) {
+        if (!answerStr) return;
+        const q = window.questions[displayIndex];
+        window.answers[displayIndex] = answerStr;
+
+        try {
+          const examId = window.examData?.examId;
+          const studentId = window.examData?.studentId;
+
+          if (!examId || !studentId) return;
+
+          const resultRef = doc(db, "examResults", examId, studentId, "result");
+          const answerRef = doc(resultRef, "answers", q.id);
+
+          await setDoc(answerRef, {
+            questionId: q.id,
+            question: q.questionText,
+            answer: answerStr,
+            correctAnswer: q.correctAnswer ?? null,
+            displayIndex: displayIndex,
+            savedAt: new Date(),
+          }, { merge: true });
+
+          saveProgressLocally();
+        } catch (err) {
+          console.error("saveAnswer error:", err);
+        }
+      }
+
+      // Restore answers from Firestore
+      async function restoreAnswersFromFirestore() {
+        try {
+          const examId = window.examData?.examId;
+          const studentId = window.examData?.studentId;
+          if (!examId || !studentId) return;
+
+          const answersSnap = await getDocs(collection(db, "examResults", examId, studentId, "result", "answers"));
+          const restored = {};
+          answersSnap.forEach(docSnap => {
+            const data = docSnap.data();
+            const qId = data.questionId;
+            const ans = data.answer;
+            const idx = window.questions.findIndex(q => q.id === qId);
+            if (idx !== -1) restored[idx] = ans;
+          });
+
+          window.answers = restored;
+          console.log("✅ Restored answers:", restored);
+        } catch (err) {
+          console.error("restoreAnswersFromFirestore error:", err);
+        }
+      }
+      function saveProgressLocally() {
+        localStorage.setItem("currentIndex", currentQuestionIndex);
+        Object.entries(window.answers).forEach(([i, value]) => {
+          localStorage.setItem(`answer_${i}`, value);
+        });
+        localStorage.setItem("examId", window.examData.examId);
+        localStorage.setItem("studentId", window.examData.studentId);
+      }
+
+      function shuffleArray(arr) {
+        return arr
+          .map(value => ({ value, sort: Math.random() }))
+          .sort((a, b) => a.sort - b.sort)
+          .map(({ value }) => value);
+      }
+
+
+      updateNextButton();
+
+
+      function updateNextButton() {
+        if (currentQuestionIndex + 1 < questions.length) {
+          nextBtn.textContent = "Next";
+        } else {
+          nextBtn.textContent = "Submit";
+        }
+      }
+
+      // Handle click event
+      nextBtn.addEventListener("click", async () => {
+        if (currentQuestionIndex + 1 < questions.length) {
+          // Not the last question
+          await saveAnswer(currentQuestionIndex, window.answers[currentQuestionIndex]);
+          currentQuestionIndex++;
+          localStorage.setItem("currentIndex", currentQuestionIndex);
+          showQuestion(currentQuestionIndex);
+          updateNextButton();
+        } else {
+          // Last question -> Confirm submit
+          const answeredCount = Object.keys(window.answers).length;
+          const total = questions.length;
+
+          if (confirm(`You have answered ${answeredCount} out of ${total} questions. Do you want to submit?`)) {
+            await submitExam(false);
+          }
+        }
+      });
+      async function submitExam(auto = false) {
+        try {
+          const examId = window.examData.examId;
+          const studentId = window.examData.studentId;
+
+          // Compute score
+          let computedScore = 0;
+          for (let i = 0; i < window.questions.length; i++) {
+            const q = window.questions[i];
+            const ans = window.answers[i];
+            if (!ans) continue;
+            const correct = q.correctAnswer;
+
+            if (Array.isArray(correct)) {
+              if (correct.map(c => c.toLowerCase()).includes(ans.toLowerCase())) computedScore++;
+            } else if (correct && ans.toLowerCase() === correct.toString().toLowerCase()) {
+              computedScore++;
+            }
+          }
+
+          const resultRef = doc(db, "examResults", examId, studentId, "result");
+          await setDoc(resultRef, {
+            examId,
+            studentId,
+            score: computedScore,
+            total: window.questions.length,
+            status: "completed",
+            submittedAt: new Date(),
+          }, { merge: true });
+
+          alert(`✅ Exam submitted! Score: ${computedScore}/${window.questions.length}`);
+          localStorage.clear();
+
+          window.examFinished = true;
+        } catch (err) {
+          console.error("submitExam error:", err);
+          await markIncompleteIfNeeded();
+        }
+      }
+      async function markIncompleteIfNeeded() {
+        try {
+          if (window.examFinished) return;
+
+          const examId = window.examData.examId;
+          const studentId = window.examData.studentId;
+          const resultRef = doc(db, "examResults", examId, studentId, "result");
+          const snap = await getDoc(resultRef);
+
+          if (snap.exists() && snap.data().status !== "completed") {
+            await setDoc(resultRef, {
+              status: "incomplete",
+              submittedAt: new Date(),
+            }, { merge: true });
+          }
+        } catch (err) {
+          console.error("markIncomplete error:", err);
+        }
+      }
+
+
+
+
+      function loadExamFromFlutter(examHtml) {
+        document.getElementById('examContent').innerHTML = examHtml;
+
+        // Reset UI state
+        strikes = 0;
+        strikeBox.textContent = `Strikes: ${strikes}`;
+        // blocked = false;
+        // submitBtn.disabled = false;
+        // submitBtn.textContent = "Submit Exam";
+        scoreBox.textContent = "Score: 0/1";
+        setVerification(false, "Face not verified");
+      }
+
+      // On page load
+      if (window.flutterExamData?.examHtml) {
+  document.getElementById('examContent').innerHTML = window.flutterExamData.examHtml;
+} else {
+  initAndLoad(); // fallback: fetch from Firestore
+}
+      window.addEventListener('resize', () => { bubbleX = window.innerWidth / 2; bubbleY = window.innerHeight / 2; targetX = bubbleX; targetY = bubbleY; });
+
+      console.log("Eye-bubble exam loaded. Run via localhost or allow camera access.");
+      // ================================================================
+    </script>
+</body>
+
+</html>
