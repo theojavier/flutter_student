@@ -40,8 +40,40 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  /// Given the exam documents, fetch the student's result for each exam in parallel,
-  /// then compute schedule/results/completed/upcoming counts.
+  Future<List<Map<String, dynamic>>> _fetchResultsForMissingExams() async {
+    if (studentId == null) return [];
+
+    try {
+      final snap = await db
+          .collectionGroup("students")
+          .where("studentId", isEqualTo: studentId)
+          .get();
+
+      List<Map<String, dynamic>> list = [];
+
+      for (var doc in snap.docs) {
+        final data = doc.data();
+        final examId = doc.reference.parent.parent!.id;
+
+        final examExists = await db.collection("exams").doc(examId).get();
+        if (!examExists.exists) {
+          list.add({
+            "subject": data["subject"] ?? "",
+            "score": data["score"] ?? "—",
+            "status": data["status"] ?? "incomplete",
+            "examDate": data["examDate"],
+          });
+        }
+      }
+
+      return list;
+    } catch (e) {
+      print("Error fetching missing exams: $e");
+      return [];
+    }
+  }
+
+
   Future<Map<String, dynamic>> _processExamsWithResults(
     List<QueryDocumentSnapshot> examDocs,
   ) async {
@@ -58,8 +90,8 @@ class _HomePageState extends State<HomePage> {
       final resultSnap = await db
           .collection("examResults")
           .doc(examId)
-          .collection(studentId!)
-          .doc("result")
+          .collection("students")
+          .doc(studentId!)
           .get();
 
       final rData = resultSnap.exists
@@ -115,6 +147,13 @@ class _HomePageState extends State<HomePage> {
       if (isToday) {
         todayExamCount++;
         todaysSchedule.add(item["doc"] as QueryDocumentSnapshot);
+      }
+    }
+    final missing = await _fetchResultsForMissingExams();
+    results.addAll(missing);
+    for (var r in missing) {
+      if (r["status"] == "completed") {
+        completedCount++;
       }
     }
 
@@ -198,23 +237,30 @@ class _HomePageState extends State<HomePage> {
                     Row(
                       children: [
                         Expanded(
-                          child: _dashboardCard(
-                            title: "Today's Exams",
-                            count: todayExamCount,
-                            color: Colors.blue,
-                            countColor: Color(0xFFE6F0F8),
+                          child: SizedBox(
+                            height: 150,
+                            child: _dashboardCard(
+                              title: "Today's Exams",
+                              count: todayExamCount,
+                              color: Colors.blue,
+                              countColor: Color(0xFFE6F0F8),
+                            ),
                           ),
                         ),
                         Expanded(
-                          child: _dashboardCard(
-                            title: "Completed Exams",
-                            count: completedCount,
-                            color: Colors.green,
-                            countColor: Color(0xFFE6F0F8),
+                          child: SizedBox(
+                            height: 150,
+                            child: _dashboardCard(
+                              title: "Completed Exams",
+                              count: completedCount,
+                              color: Colors.green,
+                              countColor: Color(0xFFE6F0F8),
+                            ),
                           ),
                         ),
                       ],
                     ),
+
                     const SizedBox(height: 16),
                     const Text(
                       "Exam Schedule for today",
@@ -332,6 +378,7 @@ class _HomePageState extends State<HomePage> {
     required int count,
     required Color color,
     required Color countColor,
+    TextStyle? titleStyle, // optional
   }) {
     return Card(
       color: color,
@@ -341,15 +388,31 @@ class _HomePageState extends State<HomePage> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFFE6F0F8),
-              ),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                double width = constraints.maxWidth;
+
+                double fontSize = width < 150 ? 12 : 16;
+
+                return Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      titleStyle ??
+                      TextStyle(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFE6F0F8),
+                      ),
+                );
+              },
             ),
+
             const SizedBox(height: 8),
             Text(
               count.toString(),

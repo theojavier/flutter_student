@@ -9,14 +9,13 @@
   <!-- Firebase + App Initialization FIRST -->
   <script type="module">
     window.isPageReload = performance.getEntriesByType("navigation")[0].type === "reload";
-    console.log("Reload detected?", window.isPageReload);
     window.isReloadSession = false;
     window.skipIncompleteOnNextUnload = false;
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
     import { getFirestore, collection, getDocs, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
     import { serverTimestamp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
     import { deleteField } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
-    // ====== Firebase Config from your FlutterFire options ======
+    import { onSnapshot } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
     const firebaseConfig = {
       apiKey: 'AIzaSyD3QA26qrdwXjt1eRn_OBqX0zw8kbiyV3o',
       appId: '1:348602182315:web:e5b92040815a2ef94665ee',
@@ -38,6 +37,117 @@
     window.strikes = window.strikes ?? 0;
     window.examFinished = window.examFinished ?? false;
     window.cheatingCount = window.cheatingCount ?? 0;
+    let studentId;
+    let answers = {};
+    // Flag to track if DOMContentLoaded ran
+    window.domReady = false;
+    window.hasSubmitted = window.hasSubmitted || false;
+    // Listen for Flutter injection
+    window.addEventListener("message", (event) => {
+      const { examId, studentId } = event.data || {};
+      if (examId && studentId) {
+        window.examData = { examId, studentId, answers: {} };
+
+        // If DOM is already ready, continue exam flow
+        if (window.domReady) {
+          restoreOrStartExam();
+        }
+      }
+    });
+
+    // Listen for DOM ready
+    window.addEventListener("DOMContentLoaded", () => {
+      window.domReady = true;
+
+      // If examData is already injected, continue exam flow
+      if (window.examData?.examId && window.examData?.studentId) {
+        restoreOrStartExam();
+      }
+    });
+    function listenForStatusChanges(examId, studentId) {
+      const resultRef = doc(db, "examResults", examId, "students", studentId);
+
+      onSnapshot(resultRef, (snap) => {
+        if (!snap.exists()) return;
+
+        const data = snap.data();
+        const currentIndex = data.currentIndex;
+
+        if (currentIndex === "stopped" && !window.hasSubmitted) {
+          const interval = setInterval(async () => {
+            if (window.examReady && !window.hasSubmitted) {
+              clearInterval(interval);
+              window.hasSubmitted = true;
+              await setDoc(
+                resultRef,
+                {
+                  status: "incomplete",
+                },
+                { merge: true }
+              );
+              alert("The exam has been stopped.");
+              window.submitExam(true);
+            }
+          }, 50);
+
+          // Safety timeout to clear interval anyway
+          setTimeout(() => clearInterval(interval), 10000);
+        }
+      });
+    }
+
+
+    // Shared function
+    async function restoreOrStartExam() {
+      const { examId, studentId } = window.examData;
+      const wasUnloading = sessionStorage.getItem("is_unloading");
+      listenForStatusChanges(examId, studentId);
+
+      if (wasUnloading) {
+        window.isReloadSession = true;
+        sessionStorage.removeItem("is_unloading");
+
+        const resultRef = doc(
+          window.db,
+          "examResults",
+          examId,
+          "students",
+          studentId
+        );
+        await setDoc(resultRef, { status: "in-progress" }, { merge: true });
+      } else {
+        window.isReloadSession = false;
+      }
+
+      const wasStarted = sessionStorage.getItem("examStarted") === "1";
+      if (wasStarted) {
+        window.examStarted = true;
+        window.allowStrikes = true;
+        document.getElementById("examGate").style.display = "none";
+        document.getElementById("examCard").style.display = "block";
+      } else {
+        window.examStarted = false;
+        window.allowStrikes = false;
+        document.getElementById("examGate").style.display = "block";
+        document.getElementById("examCard").style.display = "none";
+      }
+
+      // Kick off exam flow if fresh
+      markInProgress();
+      startCountdownFromFirestore(examId);
+      await loadExamQuestions(examId);
+      window.strikesLoadedPromise = loadExistingStrikes();
+      await window.strikesLoadedPromise;
+      window.examReady = true;
+      setTimeout(() => {
+        window.isReloadSession = false;
+        //loadExistingStrikes();
+      }, 50);
+    }
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const examId = urlParams.get("examId");
+    history.replaceState({}, "", examId ? `?examId=${encodeURIComponent(examId)}` : window.location.pathname);
     window.logCheatingEvent = async function logCheatingEvent() {
       if (window.examFinished) return;
       try {
@@ -45,7 +155,13 @@
         const studentId = window.examData?.studentId;
         if (!examId || !studentId) return;
 
-        const resultRef = doc(db, "examResults", examId, studentId, "result");
+        const resultRef = doc(
+          db,
+          "examResults",
+          examId,
+          "students",
+          studentId
+        );
         const snap = await getDoc(resultRef);
         const currentStatus = snap.exists() ? snap.data().status : null;
         if (currentStatus === "completed" || currentStatus === "incomplete") return;
@@ -59,7 +175,6 @@
         }, { merge: true });
 
         window.cheatingCount++;
-        console.log(`Cheating logged! Count: ${window.cheatingCount}`);
       } catch (err) {
         console.error("logCheatingEvent error:", err);
       }
@@ -70,7 +185,7 @@
         const studentId = window.examData?.studentId;
         if (!examId || !studentId) return;
 
-        const resultRef = doc(window.db, "examResults", examId, studentId, "result");
+        const resultRef = doc(window.db, "examResults", examId, "students", studentId);
         const snap = await getDoc(resultRef);
 
         if (snap.exists()) {
@@ -80,7 +195,7 @@
             window.parent.postMessage({
               action: 'finishExam',
               examId: examId,
-              studentId: studentId
+              //studentId: studentId
             }, "*");
             return;
           }
@@ -92,7 +207,6 @@
           startedAt: new Date()
         }, { merge: true });
 
-        console.log("Exam marked in-progress");
       } catch (err) {
         console.error("markInProgress error:", err);
       }
@@ -103,17 +217,71 @@
     // Single canonical strike register
     window.registerStrikeOnce = (function () {
       let lastAway = 0;
-      return function registerStrikeOnce() {
+      return async function registerStrikeOnce() {
+        if (window.strikesLoadedPromise) await window.strikesLoadedPromise;
         const now = Date.now();
         if (now - lastAway < 1200) return;
         lastAway = now;
-        window.strikes++;
+
+        window.strikes = (window.strikes || 0) + 1;
+
         document.getElementById("strikeBox").textContent = `Strikes: ${window.strikes}`;
+
+        // Always log local
         window.logCheatingEvent();
-        console.log("Strikes updated:", window.strikes);
-        sendToArduino("STRIKE");////still being tested when connected to arduino
+
+        // Push increment to Firestore (never decreases)
+        const examId = window.examData?.examId;
+        const studentId = window.examData?.studentId;
+        pushStrikeToFirestore(examId, studentId);
+
+        console.log("Strike registered:", window.strikes);
+        sendToArduino("STRIKE");
       };
     })();
+    (function () {
+      const threshold = 160;
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      let devtoolsOpen = false;
+      if (isMobile || window.innerWidth < 500) return;
+
+      if (isMobile) return;  
+
+      setInterval(() => {
+        const widthDiff = window.outerWidth - window.innerWidth;
+        const heightDiff = window.outerHeight - window.innerHeight;
+
+        if (widthDiff > threshold || heightDiff > threshold) {
+          if (!devtoolsOpen) {
+            devtoolsOpen = true;
+
+            console.warn("DevTools opened!");
+
+            if (typeof window.registerStrikeOnce === "function") {
+              window.registerStrikeOnce();
+            }
+
+            window.cheatingCount = (window.cheatingCount || 0) + 1;
+
+            if (window.cheatingCount >= 3) {
+              console.warn("DevTools attempts exceeded — auto-ending exam.");
+              if (typeof window.submitExam === "function") {
+                window.submitExam(true);
+              }
+            }
+          }
+        } else {
+          devtoolsOpen = false;
+        }
+      }, 600);
+    })();
+    async function pushStrikeToFirestore(examId, studentId) {
+      const resultRef = doc(window.db, "examResults", examId, "students", studentId);
+
+      await setDoc(resultRef, {
+        cheatingCount: increment(1)
+      }, { merge: true });
+    }
 
     // Mark incomplete (keep this in module so beforeunload can call it safely)
     window.markIncompleteIfNeeded = function () {
@@ -123,13 +291,11 @@
         const studentId = window.examData?.studentId;
         if (!examId || !studentId) return;
 
-        const resultRef = doc(window.db, "examResults", examId, studentId, "result");
+        const resultRef = doc(window.db, "examResults", examId, "students", studentId);
         setDoc(resultRef, {
           status: "incomplete",
           submittedAt: new Date()
         }, { merge: true });
-
-        console.log("Exam marked incomplete");
       } catch (err) {
         console.error("markIncomplete error:", err);
       }
@@ -139,11 +305,10 @@
     window.saveAnswerToFirestore = async function (q, val, displayIndex) {
       const examId = window.examData?.examId;
       const studentId = window.examData?.studentId;
-      if (!examId || !studentId) return;
+      if (!examId || !studentId) return false;
 
-      const studentCollection = collection(doc(window.db, "examResults", examId), studentId);
-      const resultRef = doc(studentCollection, "result");
-      const answerRef = doc(collection(resultRef, "answers"), q.id);
+      const studentDoc = doc(window.db, "examResults", examId, "students", studentId);
+      const answerRef = doc(collection(studentDoc, "answers"), q.id);
 
       let answerValue = val;
       if (q.type?.toLowerCase() === "checkbox") {
@@ -157,17 +322,18 @@
           questionId: q.id,
           question: q.questionText,
           answer: answerValue,
-          correctAnswer: q.correctAnswer,
+          //correctAnswer: q.correctAnswer,
           displayIndex
         }, { merge: true });
         window.answers[q.id] = answerValue;
-        console.log("Answer saved:", answerValue);
+        return true;
       } catch (err) {
         console.error("Firestore save failed:", err);
+        return false;
       }
     };
 
-    window.submitExam = async function submitExam() {
+    window.submitExam = async function submitExam(forceIncomplete = false) {
       try {
         const examId = window.examData?.examId;
         const studentId = window.examData?.studentId;
@@ -176,10 +342,10 @@
           return;
         }
 
-        // 1) Fetch all saved answers from Firestore
-        const studentCollection = collection(doc(window.db, "examResults", examId), studentId);
-        const resultRef = doc(studentCollection, "result");
-        const answersCol = collection(resultRef, "answers");
+        //Fetch all saved answers from Firestore
+        const studentDoc = doc(window.db, "examResults", examId, "students", studentId);
+
+        const answersCol = collection(studentDoc, "answers");
         const answersSnap = await getDocs(answersCol);
 
         const savedAnswers = {};
@@ -188,11 +354,12 @@
           savedAnswers[data.questionId] = data.answer;
         });
 
-        // 2) Compute score using saved answers + correctAnswer from window.questions
+        //Compute score using saved answers + correctAnswer from window.questions
         let computedScore = 0;
+
         for (let i = 0; i < window.questions.length; i++) {
           const q = window.questions[i];
-          const ans = savedAnswers[q.id];   // use Firestore answers
+          const ans = savedAnswers[q.id];
           const correct = q.correctAnswer;
 
           if (ans && correct) {
@@ -201,8 +368,7 @@
             }
           }
         }
-
-        // 3) Get subject from exam doc
+        //Get subject from exam doc
         let subject = "";
         try {
           const examDoc = await getDoc(doc(window.db, "exams", examId));
@@ -214,21 +380,20 @@
         }
 
         // Write result to Firestore
-        await setDoc(resultRef, {
-          status: "completed",
+        await setDoc(studentDoc, {
+          status: forceIncomplete ? "incomplete" : "completed",
           score: computedScore,
           total: window.questions.length,
-          subject,
-          submittedAt: serverTimestamp()
+          submittedAt: serverTimestamp(),
+          currentIndex: forceIncomplete ? "stopped" : "finished",
         }, { merge: true });
 
-        console.log(" Exam submitted. Score:", computedScore);
 
         // Redirect to result page
         window.parent.postMessage({
           action: 'finishExam',
           examId: examId,
-          studentId: studentId
+          //studentId: studentId
         }, "*");
         // Mark exam finished
         window.examFinished = true;
@@ -244,11 +409,9 @@
         console.error(" submitExam error:", err.message, err);
       }
     };
-    // inside <script type="module">
     async function startCountdownFromFirestore(examId) {
-      console.log(" startCountdownFromFirestore called with examId:", examId);
 
-      const examRef = doc(db, "exams", examId);   //  doc is available here
+      const examRef = doc(db, "exams", examId);
       const examSnap = await getDoc(examRef);
 
       if (!examSnap.exists()) {
@@ -258,7 +421,6 @@
       }
 
       const data = examSnap.data();
-      console.log(" Exam data:", data);
 
       const endTime = data.endTime?.toDate?.().getTime?.();
       const startTime = data.startTime?.toDate?.().getTime?.();
@@ -280,52 +442,47 @@
           window.parent.postMessage({
             action: 'finishExam',
             examId: examId,
-            studentId: studentId
+            //studentId: studentId
           }, "*");
           return;
         }
         countdownEl.textContent = "Time Left: " + formatRemaining(remainingMs);
       }, 1000);
-      console.log(" Firestore db object:", window.db);
-      console.log(" typeof doc:", typeof doc);
     }
 
 
-    // Visibility change → log strike if not reload/shell
+    // Visibility change  log strike if not reload/shell
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         setTimeout(() => {
           if (document.hidden && !window.skipIncompleteOnNextUnload) {
             window.registerStrikeOnce();
           }
-        }, 1200); // throttle to avoid flicker
+        }, 1200);
       }
     });
     //Detect window shrink on mobile + iframe + Flutter
-    const MIN_WIDTH = 600;   // set your minimum safe exam size
+    const MIN_WIDTH = 600;
     const MIN_HEIGHT = 450;
 
-    // Observes the real viewport (fires even inside iframe/mobile)
     new ResizeObserver(() => {
       const vw = document.documentElement.clientWidth;
       const vh = document.documentElement.clientHeight;
 
       if ((vw < MIN_WIDTH || vh < MIN_HEIGHT) && !window.skipIncompleteOnNextUnload) {
-        console.log("Viewport too small — strike");
         window.registerStrikeOnce();
       }
     }).observe(document.documentElement);
 
-    // Extra layer: detect iframe/body being resized by Flutter shell
+    //detect iframe/body being resized by Flutter shell
     new ResizeObserver(() => {
       const rect = document.body.getBoundingClientRect();
 
       if ((rect.width < MIN_WIDTH || rect.height < MIN_HEIGHT) && !window.skipIncompleteOnNextUnload) {
-        console.log("Iframe/body shrink detected — strike");
         window.registerStrikeOnce();
       }
     }).observe(document.body);
-    // Detect parent-shell losing visibility (app switch, minimize, home button, etc.)
+    // Detect parent-shell losing visibility
     window.addEventListener("message", (event) => {
       if (!event.data) return;
 
@@ -349,204 +506,74 @@
       }
 
       if (window.isPageReload || window.skipIncompleteOnNextUnload) {
-        console.log("Reload detected → skip markIncomplete");
         return;
       }
 
-      console.log("Tab close/back nav → markIncomplete");
+      window.markIncompleteIfNeeded();
+    });
+    window.addEventListener("pagehide", (event) => {
+      if (event.persisted) return;
+
+      sessionStorage.setItem("is_unloading", "true");
+
+      if (window.examStarted) {
+        sessionStorage.setItem("examStarted", "1");
+      }
+
+      if (window.isPageReload || window.skipIncompleteOnNextUnload) {
+        return;
+      }
+
       window.markIncompleteIfNeeded();
     });
 
-    //Pagehide: same logic
-    // window.addEventListener("pagehide", (event) => {
-    //   if (event.persisted || window.isReloadSession || window.skipIncompleteOnNextUnload) {
-    //     console.log("Reload/back nav/shell detected, skip markIncomplete");
-    //     return;
-    //   }
-    //   console.log("Reload/back nav pagehide");
-    //   window.markIncompleteIfNeeded();
-    // });
-
-    // On load: check flag and set reload session
-    window.addEventListener("DOMContentLoaded", async () => {
-      const examId = window.examData?.examId;
-      const studentId = window.examData?.studentId;
-
-      const wasUnloading = sessionStorage.getItem("is_unloading");
-
-      if (wasUnloading) {
-        console.log("Page reloaded → restoring session state");
-
-        window.isReloadSession = true;
-
-        sessionStorage.removeItem("is_unloading");
-
-        if (examId && studentId) {
-          const resultRef = doc(window.db, "examResults", examId, studentId, "result");
-          await setDoc(resultRef, { status: "in-progress" }, { merge: true });
-          console.log("Exam restored to in-progress");
-          await loadExistingStrikes();
-        } else {
-          console.warn("Reload but examId/studentId were not ready yet");
-        }
-      } else {
-        console.log("Fresh load or tab reopened");
-        window.isReloadSession = false;
-      }
-      const wasStarted = sessionStorage.getItem("examStarted") === "1";
-
-      if (wasStarted) {
-        console.log("Restoring exam view after reload");
-
-        window.examStarted = true;
-        window.allowStrikes = true;
-
-        document.getElementById("examGate").style.display = "none";
-        document.getElementById("examCard").style.display = "block";
-
-      } else {
-        window.examStarted = false;
-        window.allowStrikes = false;
-
-        document.getElementById("examGate").style.display = "block";
-        document.getElementById("examCard").style.display = "none";
-      }
-
-      setTimeout(() => {
-        window.isReloadSession = false;
-        console.log("Reload session cleared → next unload is normal");
-      }, 50);
-    });
-    // this is the replacement for pagehide
-    // window.addEventListener("pagehide", () => {
-    //   const examId = window.examData?.examId;
-    //   const studentId = window.examData?.studentId;
-
-    //   if (!examId || !studentId) return;
-
-    //   const payload = JSON.stringify({ examId, studentId });
-    //   const blob = new Blob([payload], { type: "application/json" });
-
-    //   navigator.sendBeacon(
-    //     "https://asia-southeast1-rd-final.cloudfunctions.net/markIncomplete",
-    //     blob
-    //   );
-
-    //   console.log("Beacon sent: markIncomplete triggered");
-    // });
-    //==================this the node,js===========
-    // exports.markIncomplete = functions.https.onRequest(async (req, res) => {
-    //   try {
-    //     // Only allow POST requests
-    //     if (req.method !== "POST") {
-    //       return res.status(405).send("Method Not Allowed");
-    //     }
-
-    //     // Enable CORS for all origins (or restrict to your domain)
-    //     res.set("Access-Control-Allow-Origin", "*");
-    //     res.set("Access-Control-Allow-Methods", "POST");
-    //     res.set("Access-Control-Allow-Headers", "Content-Type");
-
-    //     // Parse JSON body
-    //     let body = req.body;
-    //     if (typeof body === "string") body = JSON.parse(body);
-
-    //     const { examId, studentId } = body;
-
-    //     if (!examId || !studentId) {
-    //       return res.status(400).json({ error: "Missing examId or studentId" });
-    //     }
-
-    //     // Reference to Firestore document: examResults/{examId}/{studentId}/result
-    //     const resultRef = db
-    //       .collection("examResults")
-    //       .doc(examId)
-    //       .collection(studentId)
-    //       .doc("result");
-
-    //     await resultRef.set(
-    //       {
-    //         status: "incomplete",
-    //         submittedAt: admin.firestore.FieldValue.serverTimestamp(),
-    //       },
-    //       { merge: true }
-    //     );
-
-    //     console.log(`Exam ${examId} for student ${studentId} marked incomplete`);
-
-    //     return res.status(200).json({ success: true });
-    //   } catch (err) {
-    //     console.error("markIncomplete error:", err);
-    //     return res.status(500).json({ error: err.message });
-    //   }
-    // });
-
-
-
-    // ===================== Load Questions from Firestore =====================
-    // async function loadExamQuestions(examId) {
-    //   if (!examId) return;
-    //   window.questions = [];
-    //   window.answers = {}; // start fresh
-    //   currentQuestionIndex = 0;
-    //   document.getElementById('examContent').innerHTML = `
-    //     <h2>Loading…</h2>
-    //     <div class="question"><p>Fetching questions…</p></div>
-    //     `;
-
-    //   try {
-    //     const questionsCol = collection(db, "exams", examId, "questions");
-    //     const snapshot = await getDocs(questionsCol);
-
-    //     if (snapshot.empty) {
-    //       document.getElementById('examContent').innerHTML = "<p>No questions found.</p>";
-    //       return;
-    //     }
-
-    //     // Collect questions in order
-    //     const rawQuestions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    //     questions = shuffleArray(rawQuestions).map((q, idx) => ({
-    //       ...q,
-    //       index: idx // embed shuffled index per student
-    //     }));
-    //     window.questions = questions;
-
-    //     matchingPool = Array.from(new Set(
-    //       questions
-    //         .filter(q => q.type?.toLowerCase() === "matching" && Array.isArray(q.options))
-    //         .flatMap(q => q.options)
-    //     ));
-    //     // strikes = 0;
-    //     // strikeBox.textContent = `Strikes: ${strikes}`;
-    //     // scoreBox.textContent = `Score: 0/${window.questions.length}`;
-    //     setVerification(false, "Face not verified");
-
-    //     // Generate HTML
-    //     showQuestion(currentQuestionIndex);
-
-
-    //     // Reset UI state
-    //     // strikes = 0;
-    //     // strikeBox.textContent = `Strikes: ${strikes}`;
-    //     // blocked = false;
-    //     // submitBtn.disabled = false;
-    //     // submitBtn.textContent = "Submit Exam";
-    //     // scoreBox.textContent = `Score: 0/${questions.length}`;
-    //     setVerification(false, "Face not verified");
-
-
-    //   } catch (err) {
-    //     console.error("Failed to load exam questions:", err);
-    //     document.getElementById('examContent').innerHTML = `<p>Error loading questions: ${err.message}</p>`;
-    //   }
-    // }
     let currentQuestionIndex = 0;
+    function isQuestionAnswered(q) {
+      const type = q.type?.toLowerCase();
+
+      //Multiple Choice / True-False
+      if (type === "multiple-choice" || type === "true-false") {
+        const el = document.querySelector(`input[name="${q.id}"]:checked`);
+        if (!el) return null;
+        return el.value;
+      }
+
+      //Matching / Dropdown
+      if (type === "matching" || type === "dropdown") {
+        const sel = document.querySelector(`select[name="${q.id}"]`);
+        if (!sel || sel.value.trim() === "") return null;
+        return sel.value;
+      }
+
+      //Multiple answers
+      if (type === "checkbox") {
+        const inputs = document.querySelectorAll(`input[name="${q.id}"]:checked`);
+        const values = Array.from(inputs).map(i => i.value);
+        return values.length > 0 ? values : null;
+      }
+
+      return null;
+    }
+
+    function getSelectedAnswer(q) {
+      return isQuestionAnswered(q);
+    }
+
+    window.handleAnswerChange = async function (index) {
+      const q = window.questions[index];
+      if (!q) return;
+
+      const val = getSelectedAnswer(q);
+      const btn = document.getElementById("nextQuestion");
+      if (btn) btn.disabled = !val;
+
+      if (!val) return;
+
+      await window.saveAnswerToFirestore(q, val, index);
+    };
     function showQuestion(index) {
       const q = window.questions?.[index];
-      if (!q) {
-        console.warn("showQuestion invalid index:", index, "len:", window.questions?.length ?? 0);
-        return;
-      }
+      if (!q) return;
 
       try {
         document.getElementById('examContent').innerHTML =
@@ -559,45 +586,81 @@
     `;
       }
 
+      const btn = document.getElementById("nextQuestion");
+      if (!btn) return;
+      btn.disabled = !isQuestionAnswered(q);
+
+      // Listen to changes (ensure button state)
+      const inputs = document.querySelectorAll(`input[name="${q.id}"], select[name="${q.id}"]`);
+      inputs.forEach(inp => {
+        inp.addEventListener("change", () => {
+          btn.disabled = !isQuestionAnswered(q);
+        });
+      });
+
       renderNextOrSubmitButton();
     }
     function renderNextOrSubmitButton() {
       const btn = document.getElementById("nextQuestion");
       if (!btn) return;
+      const q = window.questions[currentQuestionIndex];
 
-      if (currentQuestionIndex < (window.questions?.length ?? 0) - 1) {
+      btn.disabled = false;
+
+      if (currentQuestionIndex < window.questions.length - 1) {
         btn.textContent = "Next";
         btn.onclick = async () => {
-          currentQuestionIndex++;
-          showQuestion(currentQuestionIndex);
+          if (!isQuestionAnswered(q)) return;
+
+          btn.disabled = true;
+          btn.textContent = "Saving...";
+
+          const val = getSelectedAnswer(q);
+          const saved = await window.saveAnswerToFirestore(q, val, currentQuestionIndex);
+          if (!saved) {
+            alert("Saving failed. Check your internet and try again.");
+            btn.disabled = false;
+            btn.textContent = "Next";
+            return;
+          }
 
           try {
             const examId = window.examData.examId;
             const studentId = window.examData.studentId;
+            const studentCollection = doc(window.db, "examResults", examId, "students", studentId);
 
-            const studentCollection = collection(
-              doc(window.db, "examResults", examId),
-              studentId
-            );
-
-            const resultRef = doc(studentCollection, "result");
-
-            await setDoc(resultRef, {
-              currentIndex: currentQuestionIndex
-            }, { merge: true });
-
-            console.log("Saved currentIndex:", currentQuestionIndex);
-
+            await setDoc(studentCollection, { currentIndex: currentQuestionIndex + 1 }, { merge: true });
           } catch (err) {
             console.error("Failed to save currentIndex:", err);
           }
-        };
-      } else {
-        btn.textContent = "Submit";
-        btn.onclick = () => window.submitExam();
 
+          currentQuestionIndex++;
+          showQuestion(currentQuestionIndex);
+        };
+      }
+      // Submit button (last question)
+      else {
+        btn.textContent = "Submit";
+        btn.onclick = async () => {
+          if (!isQuestionAnswered(q)) return;
+
+          btn.disabled = true;
+          btn.textContent = "Saving...";
+
+          const val = getSelectedAnswer(q);
+          const saved = await window.saveAnswerToFirestore(q, val, currentQuestionIndex);
+          if (!saved) {
+            alert("Saving failed. Check your internet.");
+            btn.disabled = false;
+            btn.textContent = "Submit";
+            return;
+          }
+
+          window.submitExam();
+        };
       }
     }
+
 
     async function loadExamQuestions(examId) {
       if (!examId) {
@@ -612,12 +675,10 @@
   `;
 
       try {
-        console.log(" Fetching questions from Firestore for examId:", examId);
 
-        // 1) Fetch all question docs
+        //Fetch all question docs
         const questionsCol = collection(db, "exams", examId, "questions");
         const snapshot = await getDocs(questionsCol);
-        console.log("Snapshot size:", snapshot.size);
 
         if (snapshot.empty) {
           console.error("No questions found in Firestore for exam:", examId);
@@ -626,7 +687,6 @@
         }
 
         const rawQuestions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        console.log("Raw questions fetched:", rawQuestions.map(q => q.id));
         const groups = {
           "true-false": [],
           "multiple-choice": [],
@@ -651,24 +711,18 @@
           ...groups["matching"]
         ];
 
-        // This replaces the old rawQuestions order
         const finalQuestions = sortedRandom;
 
-        // 2) Get saved order or shuffle and save once
-        const resultRef = doc(db, "examResults", examId, window.examData.studentId, "result");
+        const resultRef = doc(db, "examResults", examId, "students", window.examData.studentId);
         const resultSnap = await getDoc(resultRef);
 
         let orderedIds;
         if (resultSnap.exists() && resultSnap.data().questionOrder) {
           orderedIds = resultSnap.data().questionOrder;
-          console.log("Restored questionOrder from Firestore:", orderedIds);
         } else {
           orderedIds = finalQuestions.map(q => q.id);
           await setDoc(resultRef, { questionOrder: orderedIds }, { merge: true });
-          console.log("Saved grouped+random questionOrder:", orderedIds);
         }
-
-        // 3) Build orderedQuestions AFTER we have orderedIds
         const orderedQuestions = orderedIds.map((qid, idx) => {
           const q = rawQuestions.find(rq => rq.id === qid);
           if (!q) {
@@ -678,7 +732,6 @@
           return {
             ...q,
             index: idx,
-            // normalize fields defensively
             questionText: q.questionText ?? q.text ?? "",
             type: (q.type ?? q.kind ?? "multiple-choice").toLowerCase(),
             options: Array.isArray(q.options) ? q.options : (Array.isArray(q.choices) ? q.choices : [])
@@ -688,16 +741,13 @@
         window.questions = orderedQuestions;
         window.answers = window.answers || {};
 
-        // 4) Build matching pool now that window.questions exists
+        //Build matching pool now that window.questions exists
         window.matchingPool = Array.from(new Set(
           window.questions
             .filter(q => q.type === 'matching' && Array.isArray(q.options))
             .flatMap(q => q.options)
         ));
-        console.log("Ordered questions array built:", window.questions);
-        console.log("Matching pool:", window.matchingPool);
 
-        // 5) Restore current index if saved
         if (resultSnap.exists() && resultSnap.data().currentIndex !== undefined) {
           currentQuestionIndex = resultSnap.data().currentIndex;
           console.log("Restored currentIndex:", currentQuestionIndex);
@@ -705,11 +755,9 @@
           console.log("ℹNo currentIndex saved, starting at 0");
         }
 
-        // 6) Render first question safely
         try {
           showQuestion(currentQuestionIndex);
           renderNextOrSubmitButton();
-          console.log("First question rendered at index:", currentQuestionIndex);
         } catch (err) {
           console.error("showQuestion/render failed:", err);
           document.getElementById('examContent').innerHTML = `<p>Error rendering question: ${err.message}</p>`;
@@ -720,75 +768,32 @@
         document.getElementById('examContent').innerHTML = `<p>Error loading questions: ${err.message}</p>`;
       }
     }
+    window.strikesLoadedPromise = null;
 
     async function loadExistingStrikes() {
       const examId = window.examData?.examId;
       const studentId = window.examData?.studentId;
       if (!examId || !studentId) return;
 
-      const resultRef = doc(db, "examResults", examId, studentId, "result");
+      const resultRef = doc(window.db, "examResults", examId, "students", studentId);
       const snap = await getDoc(resultRef);
 
       if (snap.exists()) {
-        const saved = snap.data().cheatingCount ?? 0;
-        window.strikes = saved;            // update global strike counter
-        window.cheatingCount = saved;      // keep both in sync
-        const strikeBox = document.getElementById("strikeBox");
-        if (strikeBox) {
-          strikeBox.textContent = `Strikes: ${saved}`;
+        const saved = snap.data().cheatingCount;
+        if (typeof saved === "number") {
+          // never lower local strikes
+          window.strikes = Math.max(window.strikes || 0, saved);
         }
-        document.getElementById("strikeBox").textContent =
-          `Strikes: ${saved}`;
-        console.log("Restored strikes:", saved);
-      } else {
-        console.log("No existing result doc. Starting at 0 strikes.");
       }
+
+      // If Firestore is offline or empty → keep local value
+      window.cheatingCount = window.strikes;
+      document.getElementById("strikeBox").textContent = `Strikes: ${window.strikes}`;
     }
 
 
-    // ===================== Usage =====================
-    let examId;
-    let studentId;
-    let answers = {};
 
-    console.log(" Initial examId:", examId, "studentId:", studentId);
 
-    // Prefer Flutter injection, fallback to URL
-    examId = window.flutterExamData?.examId ?? examId;
-    studentId = window.flutterExamData?.studentId ?? studentId;
-    answers = {}; // reset answers for a new exam
-
-    console.log(" After Flutter injection:", examId, studentId);
-
-    if (!examId || !studentId) {
-      const urlParams = new URLSearchParams(window.location.search);
-      console.log(" window.location.search:", window.location.search);
-      examId = urlParams.get('examId');
-      studentId = urlParams.get('studentId');
-      console.log(" Parsed examId from URL:", examId, "studentId:", studentId);
-    }
-
-    // Set examData ONCE
-    window.examData = { examId, studentId, answers };
-    await loadExistingStrikes();
-    markInProgress();
-    console.log(" window.examData set:", window.examData);
-
-    if (examId && studentId) {
-      document.getElementById('examContent').innerHTML = `
-    <h2>Loading…</h2>
-    <div class="question"><p>Loading…</p></div>
-  `;
-      console.log(" Calling loadExamQuestions with examId:", examId);
-      loadExamQuestions(examId);
-
-      console.log(" Starting countdown for examId:", examId);
-      startCountdownFromFirestore(examId);
-    } else {
-      console.error(" Missing examId or studentId, cannot load exam.");
-    }
-
-    console.log(" Final examId:", examId, "Final studentId:", studentId);
   </script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
   <style>
@@ -1095,7 +1100,7 @@
           <p style="text-align:center;">Please look at the screen to start your exam.</p>
 
           <div style="display:flex; justify-content:center; margin-top:12px;">
-            <img src="assets/image/fots_student.png" style="width:180px; border-radius:8px;">
+            <img src="image/fots_student.png" style="width:180px; border-radius:8px;">
           </div>
         </div>
       </div>
@@ -1152,7 +1157,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
   <script>
-    // ========== ARDUINO SERIAL CONNECTION ==========
+    //ARDUINO SERIAL CONNECTION
     let port;
     let writer;
 
@@ -1320,7 +1325,6 @@
         }
       }
       faceText.textContent = reason || (verified ? "Face verified" : "Face not verified");
-      // --- FACE VERIFIED → FIRST TIME ONLY ---
       if (verified && !window.examStarted) {
 
         window.examStarted = true;
@@ -1363,19 +1367,21 @@
     let matchingPool = [];
     let questions = [];
 
-    function generateQuestionHtml(q, currentIndex, answers, matchingPool) {
+    function generateQuestionHtml(q, currentQuestionIndex, answers, matchingPool) {
       const selectedAnswer = answers?.[q.id] ?? null;
-      const qType = (q.type || 'multiple-choice').toString().toLowerCase();
+      const qType = (q.type || 'multiple-choice').toLowerCase();
+
+      // Save helper
+      const save = () => `onchange="handleAnswerChange(${currentQuestionIndex})"`;
 
       let html = `
-    <h2>Question ${currentIndex + 1}</h2>
+    <h2>Question ${currentQuestionIndex + 1}</h2>
     <div class="question">
       <p>${q.questionText ?? ""}</p>
       <div class="options" data-qid="${q.id}" data-qtype="${qType}">
   `;
 
-      const save = (val) => `onchange="saveAnswerToFirestore(window.questions[${currentIndex}], this.value, ${currentIndex})"`;
-
+      //multiple-choice
       if (qType === 'multiple-choice') {
         (q.options ?? []).forEach(opt => {
           const checked = opt === selectedAnswer ? 'checked' : '';
@@ -1385,7 +1391,10 @@
           ${opt}
         </label>`;
         });
-      } else if (qType === 'true-false') {
+      }
+
+      //true-false
+      else if (qType === 'true-false') {
         ['True', 'False'].forEach(opt => {
           const checked = opt === selectedAnswer ? 'checked' : '';
           html += `
@@ -1394,109 +1403,40 @@
           ${opt}
         </label>`;
         });
-      } else if (qType === 'matching') {
+      }
+
+      // checkbox
+      else if (qType === 'checkbox') {
+        (q.options ?? []).forEach(opt => {
+          const checked = Array.isArray(selectedAnswer) && selectedAnswer.includes(opt) ? 'checked' : '';
+          html += `
+        <label>
+          <input type="checkbox" name="${q.id}" value="${opt}" ${checked} ${save()}>
+          ${opt}
+        </label>`;
+        });
+      }
+
+      //matching
+      else if (qType === 'matching' || qType === 'dropdown') {
         const pool = Array.isArray(matchingPool) ? matchingPool : [];
-        html += `<select name="${q.id}" ${save()}>  
-  <option value="" disabled selected>Select answer</option>
-`;
+        html += `<select name="${q.id}" data-qid="${q.id}" ${save()}>  
+      <option value="">Select answer</option>
+    `;
         pool.forEach(m => {
           const selected = m === selectedAnswer ? 'selected' : '';
           html += `<option value="${m}" ${selected}>${m}</option>`;
         });
         html += `</select>`;
-      } else if (qType === 'checkbox') {
-        (q.options ?? []).forEach(opt => {
-          const checked = Array.isArray(selectedAnswer) && selectedAnswer.includes(opt) ? 'checked' : '';
-          // Note: saveAnswerToFirestore stores the last change; consider batching for full checkbox selection.
-          html += `
-        <label>
-          <input type="checkbox" name="${q.id}" value="${opt}" ${checked}
-            onchange="saveAnswerToFirestore(window.questions[${currentIndex}], this.checked ? '${opt}' : null, ${currentIndex})">
-          ${opt}
-        </label>`;
-        });
-      } else if (qType === 'text') {
-        html += `
-      <input type="text" name="${q.id}" value="${selectedAnswer ?? ''}"
-        ${save()}>
-    `;
-      } else {
+      }
+
+      //unsupported type
+      else {
         html += `<p>Unsupported question type: ${qType}</p>`;
       }
 
       html += `</div></div>`;
       return html;
-    }
-
-
-
-
-
-    // After loading all questions
-    //showQuestion(currentQuestionIndex);
-
-
-    answers = collectAnswers();  // key = questionId / index, value = selected answer
-    function renderQuestion(question) {
-      const qEl = document.createElement('div');
-      qEl.className = 'question';
-      qEl.dataset.qid = question.id;
-
-      const qText = document.createElement('p');
-      qText.textContent = question.questionText;
-      qEl.appendChild(qText);
-
-      const optionsDiv = document.createElement('div');
-      optionsDiv.className = 'options';
-
-      switch (question.type) {
-        case 'multiple-choice':
-          question.options.forEach(opt => {
-            const label = document.createElement('label');
-            label.innerHTML = `<input type="radio" name="${question.id}" value="${opt}"> ${opt}`;
-            optionsDiv.appendChild(label);
-          });
-          break;
-        case 'checkbox':
-          question.options.forEach(opt => {
-            const label = document.createElement('label');
-            label.innerHTML = `<input type="checkbox" name="${question.id}" value="${opt}"> ${opt}`;
-            optionsDiv.appendChild(label);
-          });
-          break;
-        case 'text':
-          const input = document.createElement('input');
-          input.type = 'text';
-          input.name = question.id;
-          input.placeholder = 'Type your answer';
-          optionsDiv.appendChild(input);
-          break;
-      }
-
-      qEl.appendChild(optionsDiv);
-      return qEl;
-    }
-
-
-
-    function collectAnswers() {
-      const questionElements = document.querySelectorAll('.question');
-      const answers = {};
-
-      questionElements.forEach(qEl => {
-        const qId = qEl.dataset.qid;
-        const type = qEl.dataset.qtype;
-
-        if (type === 'multiple-choice') {
-          answers[qId] = qEl.querySelector('input[type="radio"]:checked')?.value || null;
-        } else if (type === 'checkbox') {
-          answers[qId] = Array.from(qEl.querySelectorAll('input[type="checkbox"]:checked')).map(i => i.value);
-        } else if (type === 'text') {
-          answers[qId] = qEl.querySelector('input[type="text"]').value || '';
-        }
-      });
-
-      return answers;
     }
 
     function shuffleArray(arr) {
@@ -1506,61 +1446,9 @@
         .map(({ value }) => value);
     }
 
-
-    // submitBtn.addEventListener('click', async () => {
-    //   if (blocked || !verified) return alert('Cannot submit');
-
-    //   const answers = collectAnswers();
-
-    //   let score = 0;
-    //   for (const qId in answers) {
-    //     if (correctAnswers[qId] != null) {
-    //       const ans = answers[qId];
-    //       const correct = correctAnswers[qId];
-    //       // For arrays (checkbox), compare sets
-    //       if (Array.isArray(correct) && Array.isArray(ans)) {
-    //         if (ans.sort().toString() === correct.sort().toString()) score++;
-    //       } else if (ans === correct) score++;
-    //     }
-    //   }
-
-    //   scoreBox.textContent = `Score: ${score}/${Object.keys(correctAnswers).length}`;
-
-    //   const resultRef = doc(db, "examResults", examId, studentId, "result");
-    //   await setDoc(resultRef, {
-    //     studentId, examId, answers, score,
-    //     submittedAt: new Date().toISOString(),
-    //     status: "completed"
-    //   }, { merge: true });
-
-    //   alert(`Exam submitted! Score: ${score}/${Object.keys(correctAnswers).length}`);
-    // });
-
-
-    function loadExamFromFlutter(examHtml) {
-      markInProgress();
-      startCountdownFromFirestore(window.examData.examId);
-      document.getElementById('examContent').innerHTML = examHtml;
-
-      // Reset UI state
-      // strikes = 0;
-      // strikeBox.textContent = `Strikes: ${strikes}`;
-      // blocked = false;
-      // submitBtn.disabled = false;
-      // submitBtn.textContent = "Submit Exam";
-      // scoreBox.textContent = "Score: 0/1";
-      setVerification(false, "Face not verified");
-    }
-
-    // On page load
-    if (window.flutterExamData?.examHtml) {
-      loadExamFromFlutter(window.flutterExamData.examHtml);
-    }
-
     window.addEventListener('resize', () => { bubbleX = window.innerWidth / 2; bubbleY = window.innerHeight / 2; targetX = bubbleX; targetY = bubbleY; });
 
     console.log("Eye-bubble exam loaded. Run via localhost or allow camera access.");
-    // ================================================================
   </script>
 </body>
 

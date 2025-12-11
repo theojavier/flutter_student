@@ -207,7 +207,136 @@ class _TakeExamPageState extends State<TakeExamPage>
                     return const Center(child: CircularProgressIndicator());
                   }
                   if (!snapshot.data!.exists) {
-                    return const Center(child: Text("Exam not found"));
+                    // Fallback: examResults
+                    return StreamBuilder<DocumentSnapshot>(
+                      stream: db
+                          .collection("examResults")
+                          .doc(widget.examId)
+                          .collection("students")
+                          .doc(studentId!)
+                          .snapshots(),
+                      builder: (context, resultSnap) {
+                        if (!resultSnap.hasData || !resultSnap.data!.exists) {
+                          return const Center(child: Text("Exam not found"));
+                        }
+
+                        final resultData =
+                            resultSnap.data!.data() as Map<String, dynamic>? ??
+                            {};
+
+                        final subject = resultData["subject"];
+                        final startedAt = resultData["startedAt"];
+                        final submittedAt = resultData["submittedAt"];
+                        final status = resultData["status"];
+
+                        return Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (subject != null)
+                                Text(
+                                  subject,
+                                  style: const TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFFE6F0F8),
+                                  ),
+                                ),
+                              if (startedAt != null)
+                                Text(
+                                  "Started: ${DateFormat("MMM d, yyyy h:mm a").format(startedAt.toDate())}",
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    color: Color(0xFFE6F0F8),
+                                  ),
+                                )
+                              else if (submittedAt != null)
+                                Text(
+                                  "Submitted: ${DateFormat("MMM d, yyyy h:mm a").format(submittedAt.toDate())}",
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    color: Color(0xFFE6F0F8),
+                                  ),
+                                ),
+                              if (status != null)
+                                Text(
+                                  "Status: $status",
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    color: Color(0xFFE6F0F8),
+                                  ),
+                                ),
+                              const SizedBox(height: 16),
+
+                              // Instructions Box (added here)
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F3B61),
+                                  border: Border.all(
+                                    color: Colors.red,
+                                    width: 2,
+                                  ),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: RichText(
+                                  textAlign: TextAlign.start,
+                                  text: const TextSpan(
+                                    style: TextStyle(
+                                      color: Color(0xFFE6F0F8),
+                                      fontSize: 14,
+                                      height: 1.4,
+                                    ),
+                                    children: [
+                                      TextSpan(
+                                        text: "IMPORTANT:\n",
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text:
+                                            "Instructions:\n- Don’t switch tabs\n- Don’t leave the app\n- Look at the screen it may trigger as cheating.",
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (submittedAt != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: Text(
+                                    "Submitted: ${DateFormat("MMM d, yyyy h:mm a").format(submittedAt.toDate())}",
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      color: Color(0xFFE6F0F8),
+                                    ),
+                                  ),
+                                ),
+
+                              const Spacer(),
+
+                              // Same View Result button design
+                              if (status == "completed")
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.viewResult,
+                                  ),
+                                  child: const Text("View Result"),
+                                  onPressed: () {
+                                    context.goNamed(
+                                      'examResult',
+                                      pathParameters: {'examId': widget.examId},
+                                    );
+                                  },
+                                ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
                   }
 
                   final data = snapshot.data!.data() as Map<String, dynamic>;
@@ -278,29 +407,12 @@ class _TakeExamPageState extends State<TakeExamPage>
                         Divider(color: Colors.grey[400]),
 
                         //  Teacher name
-                        FutureBuilder<DocumentSnapshot>(
-                          future: teacherId.isNotEmpty
-                              ? db.collection("users").doc(teacherId).get()
-                              : Future.value(null),
-                          builder: (context, teacherSnap) {
-                            String teacherText = "Teacher: Unknown";
-                            if (teacherSnap.hasData &&
-                                teacherSnap.data != null &&
-                                teacherSnap.data!.exists) {
-                              final teacherData =
-                                  teacherSnap.data!.data()
-                                      as Map<String, dynamic>;
-                              final name = teacherData["name"];
-                              if (name != null) teacherText = "Teacher: $name";
-                            }
-                            return Text(
-                              teacherText,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                color: Color(0xFFE6F0F8),
-                              ),
-                            );
-                          },
+                        Text(
+                          "Teacher: ${data["creator"] ?? data["teacher"] ?? data["createdBy"] ?? "Unknown"}",
+                          style: const TextStyle(
+                            fontSize: 16,
+                            color: Color(0xFFE6F0F8),
+                          ),
                         ),
 
                         //  Duration
@@ -320,8 +432,8 @@ class _TakeExamPageState extends State<TakeExamPage>
                           stream: db
                               .collection("examResults")
                               .doc(widget.examId)
-                              .collection(studentId!)
-                              .doc("result")
+                              .collection("students")
+                              .doc(studentId!)
                               .snapshots(),
                           builder: (context, resultSnap) {
                             if (!resultSnap.hasData) {
@@ -347,7 +459,7 @@ class _TakeExamPageState extends State<TakeExamPage>
                                     'examResult',
                                     pathParameters: {
                                       'examId': widget.examId,
-                                      'studentId': studentId!,
+                                      //'studentId': studentId!,
                                     },
                                   );
                                 },
@@ -432,43 +544,39 @@ class _TakeExamPageState extends State<TakeExamPage>
 
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
-                                    content: Text(
-                                      "Camera test completed!",
-                                    ),
+                                    content: Text("Camera test completed!"),
                                     backgroundColor: Colors.green,
                                   ),
                                 );
-
-                                await db
-                                    .collection("examResults")
-                                    .doc(widget.examId)
-                                    .set({
-                                      "teacherId":
-                                          teacherId, // from exam document
-                                    }, SetOptions(merge: true));
 
                                 // Save student exam result
                                 await db
                                     .collection("examResults")
                                     .doc(widget.examId)
-                                    .collection(studentId!)
-                                    .doc("result")
+                                    .collection("students")
+                                    .doc(studentId!)
                                     .set({
                                       "examId": widget.examId,
                                       "studentId": studentId,
                                       "status": "in-progress",
                                       "cheatingCount": 0,
                                       "currentIndex": 0,
+                                      "subject": subject,
                                     });
 
-                                // Start Exam
                                 context.goNamed(
                                   'examhtml',
-                                  pathParameters: {
-                                    "examId": widget.examId,
-                                    "studentId": studentId!,
-                                  },
+                                  pathParameters: {"examId": widget.examId},
                                 );
+
+                                // Start Exam
+                                // context.goNamed(
+                                //   'examhtml',
+                                //   pathParameters: {
+                                //     "examId": widget.examId,
+                                //     "studentId": studentId!,
+                                //   },
+                                // );
                               },
                             );
                           },

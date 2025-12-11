@@ -16,7 +16,6 @@ class CheatDetector {
   Future<void> start({bool autoConnect = true}) async {
     _enabled = true;
 
-    // Track tab switching
     _visListener = html.document.onVisibilityChange.listen((event) {
       if (!_enabled) return;
       if (html.document.visibilityState == 'hidden') {
@@ -27,7 +26,6 @@ class CheatDetector {
 
     if (autoConnect) {
       try {
-        // JS function in arduino_bridge.js
         js.context.callMethod('connectUSB');
       } catch (_) {
         print("Auto-connect failed: permission required or JS not loaded.");

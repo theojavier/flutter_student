@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'nav_header.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
 import '../helpers/notifications_helper.dart';
 import '../widgets/notifications_list.dart';
@@ -17,18 +18,20 @@ import 'dart:io' show Platform;
 class ResponsiveScaffold extends StatefulWidget {
   final int selectedIndex;
   final Widget child;
+   final String? userId;
 
   const ResponsiveScaffold({
     super.key,
     required this.selectedIndex,
     required this.child,
+    this.userId,
   });
 
   @override
-  State<ResponsiveScaffold> createState() => _ResponsiveScaffoldState();
+  State<ResponsiveScaffold> createState() => ResponsiveScaffoldState();
 }
 
-class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
+class ResponsiveScaffoldState extends State<ResponsiveScaffold>  {
   String? profileImageUrl;
   String headerName = "Loading...";
   String headerSection = "";
@@ -51,8 +54,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   StreamSubscription<DocumentSnapshot>? _profileSubscription;
 
   Future<void> _loadUserProfile() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('userId');
+    final userId = widget.userId ?? await _getUserIdFromPrefs();
 
     if (userId == null) {
       if (_cachedProfile == null && mounted) {
@@ -72,6 +74,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     if (_cachedProfile != null) {
       _updateProfileUI(_cachedProfile!);
     }
+    _userId = userId;
 
     // cancel old subscription before listening
     await _profileSubscription?.cancel();
@@ -96,6 +99,13 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
           _updateProfileUI(data);
         });
   }
+    void refreshUserProfile() {
+    _loadUserProfile();
+  }
+  Future<String?> _getUserIdFromPrefs() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getString('userId');
+}
 
   void _refreshProfile() async {
     if (_userId == null) return;
@@ -343,6 +353,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               .collection('users')
               .doc(_userId)
               .collection('notifications')
+              .orderBy('createdAt', descending: true) 
               .snapshots(),
           builder: (context, snap) {
             final unread = snap.hasData
@@ -404,10 +415,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                     right: 8,
                     top: 8,
                     child: Container(
-                      color: Color(0xFF0F2B45),
                       padding: const EdgeInsets.all(4),
                       decoration: const BoxDecoration(
-                        color: Colors.red,
+                        color: Color(0xFF0F2B45),
                         shape: BoxShape.circle,
                       ),
                       constraints: const BoxConstraints(
@@ -430,19 +440,33 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
           },
         ),
       PopupMenuButton<String>(
-        icon: const Icon(Icons.more_vert, color: Colors.white),
-        onSelected: (value) async {
-          if (value == 'logout') {
+      icon: const Icon(Icons.more_vert, color: Colors.white),
+      onSelected: (value) async {
+        if (value == 'logout') {
+          try {
+            await FirebaseAuth.instance.signOut();
+
             final prefs = await SharedPreferences.getInstance();
             await prefs.clear();
             _cachedProfile = null;
-            if (mounted) context.go('/login');
+            profileImageUrl = null;
+            headerName = "Logged out";
+            await Future.delayed(const Duration(milliseconds: 50));
+
+            if (!mounted) return;
+            context.go('/login');
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Logout failed: $e')),
+            );
           }
-        },
-        itemBuilder: (ctx) => const [
-          PopupMenuItem(value: 'logout', child: Text('Logout')),
-        ],
-      ),
+        }
+      },
+      itemBuilder: (ctx) => const [
+        PopupMenuItem(value: 'logout', child: Text('Logout')),
+      ],
+    ),
     ];
   }
 

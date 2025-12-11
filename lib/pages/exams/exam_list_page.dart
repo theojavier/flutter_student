@@ -146,7 +146,7 @@ class _ExamListPageState extends State<ExamListPage> {
                     return const Center(
                       child: Text(
                         'No exams scheduled for this week',
-                        style: TextStyle(fontSize: 16),
+                        style: TextStyle(fontSize: 16, color: Color(0xFFE6F0F8),),
                       ),
                     );
                   }

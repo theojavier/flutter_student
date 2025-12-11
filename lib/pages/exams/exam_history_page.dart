@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart'; 
+import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -41,8 +41,8 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
       for (var doc in snapshot.docs) {
         final resultSnap = await examResultsRef
             .doc(doc.id)
-            .collection(studentId!)
-            .doc("result")
+            .collection("students")
+            .doc(studentId!)
             .get();
         if (resultSnap.exists) {
           results.add(ExamHistoryModel.fromDoc(resultSnap, doc.id));
@@ -60,9 +60,7 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
   @override
   Widget build(BuildContext context) {
     if (studentId == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
@@ -77,7 +75,7 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
               margin: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: const Color(0xFF0F2B45),
-                borderRadius: BorderRadius.circular(16)
+                borderRadius: BorderRadius.circular(16),
               ),
               child: const Center(
                 child: Text(
@@ -109,7 +107,14 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
                         children: [
                           Icon(Icons.history, size: 48, color: Colors.grey),
                           SizedBox(height: 8),
-                          Text("No exam history found"),
+                          Text(
+                            "No exam history found",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 50,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ],
                       ),
                     );
