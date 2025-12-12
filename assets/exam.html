@@ -239,42 +239,6 @@
         sendToArduino("STRIKE");
       };
     })();
-    (function () {
-      const threshold = 160;
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      let devtoolsOpen = false;
-      if (isMobile || window.innerWidth < 500) return;
-
-      if (isMobile) return;  
-
-      setInterval(() => {
-        const widthDiff = window.outerWidth - window.innerWidth;
-        const heightDiff = window.outerHeight - window.innerHeight;
-
-        if (widthDiff > threshold || heightDiff > threshold) {
-          if (!devtoolsOpen) {
-            devtoolsOpen = true;
-
-            console.warn("DevTools opened!");
-
-            if (typeof window.registerStrikeOnce === "function") {
-              window.registerStrikeOnce();
-            }
-
-            window.cheatingCount = (window.cheatingCount || 0) + 1;
-
-            if (window.cheatingCount >= 3) {
-              console.warn("DevTools attempts exceeded — auto-ending exam.");
-              if (typeof window.submitExam === "function") {
-                window.submitExam(true);
-              }
-            }
-          }
-        } else {
-          devtoolsOpen = false;
-        }
-      }, 600);
-    })();
     async function pushStrikeToFirestore(examId, studentId) {
       const resultRef = doc(window.db, "examResults", examId, "students", studentId);
 
@@ -411,7 +375,7 @@
     };
     async function startCountdownFromFirestore(examId) {
 
-      const examRef = doc(db, "exams", examId);
+      const examRef = doc(db, "exams", examId);   
       const examSnap = await getDoc(examRef);
 
       if (!examSnap.exists()) {
@@ -458,11 +422,11 @@
           if (document.hidden && !window.skipIncompleteOnNextUnload) {
             window.registerStrikeOnce();
           }
-        }, 1200);
+        }, 1200); 
       }
     });
     //Detect window shrink on mobile + iframe + Flutter
-    const MIN_WIDTH = 600;
+    const MIN_WIDTH = 600;  
     const MIN_HEIGHT = 450;
 
     new ResizeObserver(() => {
