@@ -26,10 +26,16 @@ class ExamHtmlPage extends StatefulWidget {
 
 class _ExamHtmlPageState extends State<ExamHtmlPage> {
   String? _resolvedStudentId;
+  String? _authUid;
 
   @override
   void initState() {
     super.initState();
+    _authUid = FirebaseAuth.instance.currentUser?.uid;
+    if (_authUid == null) {
+      debugPrint("No authenticated user — blocking exam");
+      return;
+    }
 
     if (kIsWeb) {
       fetchStudentAndCheckEligibility().then((allowed) {
@@ -44,9 +50,8 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
         // Student is allowed - proceed with iframe
         if (_resolvedStudentId != null) {
-          final nav = html.window.performance?.getEntriesByType("navigation");
+          final nav = html.window.performance.getEntriesByType("navigation");
           final isReload =
-              nav != null &&
               nav.isNotEmpty &&
               (nav.first as html.PerformanceNavigationTiming).type == "reload";
 
@@ -192,13 +197,14 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     super.dispose();
 
     if (kIsWeb) {
-
       final wasReload = html.window.sessionStorage['isReloading'] == 'true';
 
       if (wasReload) {
         debugPrint("Page reload detected  skip marking incomplete");
         return;
       }
+      final uid = _authUid;
+      if (uid == null) return;
 
       // Continue normal incomplete marking
       //final examId = widget.examId;
@@ -207,7 +213,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
             .collection("examResults")
             .doc(widget.examId)
             .collection("students")
-            .doc(_resolvedStudentId!);
+            .doc(uid);
 
         resultRef
             .get()
@@ -230,6 +236,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
       }
     }
     html.window.sessionStorage.clear();
+    html.window.localStorage.remove('cheatingCount');
   }
 
   @override

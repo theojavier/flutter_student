@@ -12,10 +12,29 @@
     window.isReloadSession = false;
     window.skipIncompleteOnNextUnload = false;
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-    import { getFirestore, collection, getDocs, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
-    import { serverTimestamp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
-    import { deleteField } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
-    import { onSnapshot } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+
+    import {
+      getFirestore,
+      collection,
+      getDocs,
+      doc,
+      setDoc,
+      getDoc,
+      serverTimestamp,
+      deleteField,
+      onSnapshot,
+      increment
+    } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+
+    import {
+      getAuth,
+      onAuthStateChanged,
+      setPersistence,
+      browserLocalPersistence,
+      getIdToken
+    } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
+
+
     const firebaseConfig = {
       apiKey: 'AIzaSyD3QA26qrdwXjt1eRn_OBqX0zw8kbiyV3o',
       appId: '1:348602182315:web:e5b92040815a2ef94665ee',
@@ -32,11 +51,37 @@
     // Initialize Firebase
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
+    const auth = getAuth(app);
+    let authReady = false;
+    async function safeSetDoc(ref, data, options) {
+      const user = auth.currentUser;
+      if (!user) throw new Error("No user signed in");
+      await getIdToken(user, true);
+      return setDoc(ref, data, options);
+    }
+
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        authReady = true;
+        window.authUid = user.uid;
+        console.log("Iframe sees same user:", user.uid);
+        await setPersistence(auth, browserLocalPersistence);
+
+        // If DOM and examData are already ready, start exam now
+        if (window.domReady && window.examData?.examId && window.examData?.studentId) {
+          restoreOrStartExam();
+        }
+      } else {
+        console.log("No user signed in inside iframe");
+      }
+    });
+
     window.answers = {};
     window.db = db; // make db global so your exam code can access it
     window.strikes = window.strikes ?? 0;
     window.examFinished = window.examFinished ?? false;
-    window.cheatingCount = window.cheatingCount ?? 0;
+    window.disableGazeDetection = false;
+    window.cheatingCount = parseInt(localStorage.getItem("cheatingCount") ?? "0", 10);
     let studentId;
     let answers = {};
     // Flag to track if DOMContentLoaded ran
@@ -47,6 +92,8 @@
       const { examId, studentId } = event.data || {};
       if (examId && studentId) {
         window.examData = { examId, studentId, answers: {} };
+        sessionStorage.setItem("examId", examId);
+        sessionStorage.setItem("studentId", studentId);
 
         // If DOM is already ready, continue exam flow
         if (window.domReady) {
@@ -58,14 +105,17 @@
     // Listen for DOM ready
     window.addEventListener("DOMContentLoaded", () => {
       window.domReady = true;
+      const examId = sessionStorage.getItem("examId");
+      const studentId = sessionStorage.getItem("studentId");
 
       // If examData is already injected, continue exam flow
       if (window.examData?.examId && window.examData?.studentId) {
         restoreOrStartExam();
       }
     });
-    function listenForStatusChanges(examId, studentId) {
-      const resultRef = doc(db, "examResults", examId, "students", studentId);
+    function listenForStatusChanges(examId, studentId) { if (!authReady) { const interval = setInterval(() => { if (authReady) { clearInterval(interval); attachSnapshot(examId, studentId); } }, 50); } else { attachSnapshot(examId, studentId); } }
+    function attachSnapshot(examId, studentId) {
+      const resultRef = getStudentDocRef(examId);
 
       onSnapshot(resultRef, (snap) => {
         if (!snap.exists()) return;
@@ -78,7 +128,7 @@
             if (window.examReady && !window.hasSubmitted) {
               clearInterval(interval);
               window.hasSubmitted = true;
-              await setDoc(
+              await safeSetDoc(
                 resultRef,
                 {
                   status: "incomplete",
@@ -95,10 +145,20 @@
         }
       });
     }
+    function getStudentDocRef(examId) {
+      const uid = window.authUid;
+      if (!uid) throw new Error("UID not ready yet");
+      return doc(window.db, "examResults", examId, "students", uid);
+    }
 
 
     // Shared function
     async function restoreOrStartExam() {
+      if (!authReady) {
+        console.log(
+          "Auth not ready yet, delaying exam start...");
+        return;
+      }
       const { examId, studentId } = window.examData;
       const wasUnloading = sessionStorage.getItem("is_unloading");
       listenForStatusChanges(examId, studentId);
@@ -107,13 +167,7 @@
         window.isReloadSession = true;
         sessionStorage.removeItem("is_unloading");
 
-        const resultRef = doc(
-          window.db,
-          "examResults",
-          examId,
-          "students",
-          studentId
-        );
+        const resultRef = getStudentDocRef(examId)
         await setDoc(resultRef, { status: "in-progress" }, { merge: true });
       } else {
         window.isReloadSession = false;
@@ -148,6 +202,7 @@
     const urlParams = new URLSearchParams(window.location.search);
     const examId = urlParams.get("examId");
     history.replaceState({}, "", examId ? `?examId=${encodeURIComponent(examId)}` : window.location.pathname);
+    // Metadata logger (no cheatingCount increment here)
     window.logCheatingEvent = async function logCheatingEvent() {
       if (window.examFinished) return;
       try {
@@ -155,13 +210,7 @@
         const studentId = window.examData?.studentId;
         if (!examId || !studentId) return;
 
-        const resultRef = doc(
-          db,
-          "examResults",
-          examId,
-          "students",
-          studentId
-        );
+        const resultRef = getStudentDocRef(examId);
         const snap = await getDoc(resultRef);
         const currentStatus = snap.exists() ? snap.data().status : null;
         if (currentStatus === "completed" || currentStatus === "incomplete") return;
@@ -170,11 +219,9 @@
           examId,
           studentId,
           status: currentStatus ?? "in-progress",
-          lastCheatingUpdate: new Date(),
-          cheatingCount: (snap.exists() && snap.data().cheatingCount ? snap.data().cheatingCount + 1 : 1)
+          lastCheatingUpdate: new Date()
         }, { merge: true });
 
-        window.cheatingCount++;
       } catch (err) {
         console.error("logCheatingEvent error:", err);
       }
@@ -185,7 +232,7 @@
         const studentId = window.examData?.studentId;
         if (!examId || !studentId) return;
 
-        const resultRef = doc(window.db, "examResults", examId, "students", studentId);
+        const resultRef = getStudentDocRef(examId)
         const snap = await getDoc(resultRef);
 
         if (snap.exists()) {
@@ -214,35 +261,44 @@
 
 
 
-    // Single canonical strike register
     window.registerStrikeOnce = (function () {
       let lastAway = 0;
       return async function registerStrikeOnce() {
-        if (window.strikesLoadedPromise) await window.strikesLoadedPromise;
         const now = Date.now();
         if (now - lastAway < 1200) return;
         lastAway = now;
 
-        window.strikes = (window.strikes || 0) + 1;
+        if (window.strikesLoadedPromise) await window.strikesLoadedPromise;
 
-        document.getElementById("strikeBox").textContent = `Strikes: ${window.strikes}`;
+        // Local counter (use cheatingCount consistently)
+        window.cheatingCount = (window.cheatingCount || 0) + 1;
+        localStorage.setItem("cheatingCount", window.cheatingCount);
 
-        // Always log local
-        window.logCheatingEvent();
+        document.getElementById("strikeBox").textContent = `Strikes: ${window.cheatingCount}`;
 
-        // Push increment to Firestore (never decreases)
+        // Update status metadata (no increment here)
+        await window.logCheatingEvent();
+
+        // Push increment to Firestore (atomic, never decreases)
         const examId = window.examData?.examId;
         const studentId = window.examData?.studentId;
-        pushStrikeToFirestore(examId, studentId);
+        if (examId && studentId) {
+          const resultRef = getStudentDocRef(examId);
+          await safeSetDoc(resultRef, {
+            cheatingCount: increment(1)
+          }, { merge: true });
+        }
 
-        console.log("Strike registered:", window.strikes);
+        console.log("Strike registered:", window.cheatingCount);
         sendToArduino("STRIKE");
       };
     })();
-    async function pushStrikeToFirestore(examId, studentId) {
-      const resultRef = doc(window.db, "examResults", examId, "students", studentId);
 
-      await setDoc(resultRef, {
+
+    async function pushStrikeToFirestore(examId, studentId) {
+      const resultRef = getStudentDocRef(examId)
+
+      await safeSetDoc(resultRef, {
         cheatingCount: increment(1)
       }, { merge: true });
     }
@@ -255,8 +311,8 @@
         const studentId = window.examData?.studentId;
         if (!examId || !studentId) return;
 
-        const resultRef = doc(window.db, "examResults", examId, "students", studentId);
-        setDoc(resultRef, {
+        const resultRef = getStudentDocRef(examId)
+        safeSetDoc(resultRef, {
           status: "incomplete",
           submittedAt: new Date()
         }, { merge: true });
@@ -271,7 +327,7 @@
       const studentId = window.examData?.studentId;
       if (!examId || !studentId) return false;
 
-      const studentDoc = doc(window.db, "examResults", examId, "students", studentId);
+      const studentDoc = getStudentDocRef(examId)
       const answerRef = doc(collection(studentDoc, "answers"), q.id);
 
       let answerValue = val;
@@ -307,8 +363,7 @@
         }
 
         //Fetch all saved answers from Firestore
-        const studentDoc = doc(window.db, "examResults", examId, "students", studentId);
-
+        const studentDoc = getStudentDocRef(examId)
         const answersCol = collection(studentDoc, "answers");
         const answersSnap = await getDocs(answersCol);
 
@@ -343,14 +398,16 @@
           console.warn("Could not fetch subject:", err);
         }
 
+
         // Write result to Firestore
-        await setDoc(studentDoc, {
+        await safeSetDoc(studentDoc, {
           status: forceIncomplete ? "incomplete" : "completed",
           score: computedScore,
           total: window.questions.length,
           submittedAt: serverTimestamp(),
           currentIndex: forceIncomplete ? "stopped" : "finished",
         }, { merge: true });
+        
 
 
         // Redirect to result page
@@ -359,6 +416,7 @@
           examId: examId,
           //studentId: studentId
         }, "*");
+        localStorage.removeItem("cheatingCount");
         // Mark exam finished
         window.examFinished = true;
         window.questions = [];
@@ -375,7 +433,7 @@
     };
     async function startCountdownFromFirestore(examId) {
 
-      const examRef = doc(db, "exams", examId);   
+      const examRef = doc(db, "exams", examId);
       const examSnap = await getDoc(examRef);
 
       if (!examSnap.exists()) {
@@ -422,45 +480,30 @@
           if (document.hidden && !window.skipIncompleteOnNextUnload) {
             window.registerStrikeOnce();
           }
-        }, 1200); 
+        }, 1200);
       }
     });
-    //Detect window shrink on mobile + iframe + Flutter
-    const MIN_WIDTH = 600;  
-    const MIN_HEIGHT = 450;
+    // //Detect window shrink on mobile + iframe + Flutter
+    // const MIN_WIDTH = 600;
+    // const MIN_HEIGHT = 450;
 
-    new ResizeObserver(() => {
-      const vw = document.documentElement.clientWidth;
-      const vh = document.documentElement.clientHeight;
+    // new ResizeObserver(() => {
+    //   const vw = document.documentElement.clientWidth;
+    //   const vh = document.documentElement.clientHeight;
 
-      if ((vw < MIN_WIDTH || vh < MIN_HEIGHT) && !window.skipIncompleteOnNextUnload) {
-        window.registerStrikeOnce();
-      }
-    }).observe(document.documentElement);
+    //   if ((vw < MIN_WIDTH || vh < MIN_HEIGHT) && !window.skipIncompleteOnNextUnload) {
+    //     window.registerStrikeOnce();
+    //   }
+    // }).observe(document.documentElement);
 
-    //detect iframe/body being resized by Flutter shell
-    new ResizeObserver(() => {
-      const rect = document.body.getBoundingClientRect();
+    // //detect iframe/body being resized by Flutter shell
+    // new ResizeObserver(() => {
+    //   const rect = document.body.getBoundingClientRect();
 
-      if ((rect.width < MIN_WIDTH || rect.height < MIN_HEIGHT) && !window.skipIncompleteOnNextUnload) {
-        window.registerStrikeOnce();
-      }
-    }).observe(document.body);
-    // Detect parent-shell losing visibility
-    window.addEventListener("message", (event) => {
-      if (!event.data) return;
-
-      // if (event.data.action === "shell-blur") {
-      //   if (!window.skipIncompleteOnNextUnload) {
-      //     console.log("parent window blur (app switch/minimize) — strike");
-      //     window.registerStrikeOnce();
-      //   }
-      // }
-
-      if (event.data.action === "shell-focus") {
-        console.log("Shell refocused");
-      }
-    });
+    //   if ((rect.width < MIN_WIDTH || rect.height < MIN_HEIGHT) && !window.skipIncompleteOnNextUnload) {
+    //     window.registerStrikeOnce();
+    //   }
+    // }).observe(document.body);
     window.addEventListener("beforeunload", () => {
 
       sessionStorage.setItem("is_unloading", "true");
@@ -472,6 +515,7 @@
       if (window.isPageReload || window.skipIncompleteOnNextUnload) {
         return;
       }
+      localStorage.removeItem("cheatingCount");
 
       window.markIncompleteIfNeeded();
     });
@@ -591,8 +635,7 @@
           try {
             const examId = window.examData.examId;
             const studentId = window.examData.studentId;
-            const studentCollection = doc(window.db, "examResults", examId, "students", studentId);
-
+            const studentCollection = getStudentDocRef(examId)
             await setDoc(studentCollection, { currentIndex: currentQuestionIndex + 1 }, { merge: true });
           } catch (err) {
             console.error("Failed to save currentIndex:", err);
@@ -620,9 +663,25 @@
             return;
           }
 
-          window.submitExam();
+          // Show custom modal instead of confirm()
+          document.getElementById("confirmModal").style.display = "block";
+
+          // Handle Yes/No clicks
+          document.getElementById("confirmYes").onclick = () => {
+            document.getElementById("confirmModal").style.display = "none";
+            window.disableGazeDetection = true;
+            window.submitExam();
+          };
+
+          document.getElementById("confirmNo").onclick = () => {
+            document.getElementById("confirmModal").style.display = "none";
+            btn.disabled = false;
+            btn.textContent = "Submit";
+          };
         };
       }
+
+
     }
 
 
@@ -677,7 +736,7 @@
 
         const finalQuestions = sortedRandom;
 
-        const resultRef = doc(db, "examResults", examId, "students", window.examData.studentId);
+        const resultRef = getStudentDocRef(examId);
         const resultSnap = await getDoc(resultRef);
 
         let orderedIds;
@@ -739,21 +798,36 @@
       const studentId = window.examData?.studentId;
       if (!examId || !studentId) return;
 
-      const resultRef = doc(window.db, "examResults", examId, "students", studentId);
+      // Start from localStorage
+      window.cheatingCount = parseInt(localStorage.getItem("cheatingCount") ?? "0", 10);
+
+      const resultRef = getStudentDocRef(examId);
       const snap = await getDoc(resultRef);
 
+      let remote = 0;
       if (snap.exists()) {
         const saved = snap.data().cheatingCount;
         if (typeof saved === "number") {
+          remote = saved;
           // never lower local strikes
-          window.strikes = Math.max(window.strikes || 0, saved);
+          window.cheatingCount = Math.max(window.cheatingCount, saved);
+          localStorage.setItem("cheatingCount", window.cheatingCount);
         }
       }
 
-      // If Firestore is offline or empty → keep local value
-      window.cheatingCount = window.strikes;
-      document.getElementById("strikeBox").textContent = `Strikes: ${window.strikes}`;
+      // If local is higher than remote, push absolute value
+      if (window.cheatingCount > remote) {
+        await safeSetDoc(resultRef, {
+          cheatingCount: window.cheatingCount
+        }, { merge: true });
+        console.log("Synced strikes to Firestore:", window.cheatingCount);
+      }
+
+      document.getElementById("strikeBox").textContent = `Strikes: ${window.cheatingCount}`;
+
     }
+
+
 
 
 
@@ -770,6 +844,28 @@
       --warn: #ff6b6b;
       --muted: #b7c7d6;
     }
+
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 9999;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.6);
+    }
+
+    .modal-content {
+      background: var(--card);
+      padding: 20px;
+      margin: 15% auto;
+      width: 320px;
+      text-align: center;
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    }
+
 
     * {
       box-sizing: border-box
@@ -1112,9 +1208,18 @@
     </div>
 
   </div>
+  <!-- Confirmation Modal -->
+  <div id="confirmModal" class="modal">
+    <div class="modal-content">
+      <p>Are you sure you want to submit the exam?</p>
+      <button id="confirmYes" class="btn" style="background:var(--ok); color:#fff;">Yes</button>
+      <button id="confirmNo" class="btn" style="background:var(--warn); color:#fff;">No</button>
+    </div>
+  </div>
 
   <!-- Gaze bubble must stay OUTSIDE wrap -->
   <div id="gazeBubble" class="gaze-bubble" style="left:50%; top:50%; display:block;"></div>
+
 
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
@@ -1194,6 +1299,10 @@
     const SENSITIVITY = 10.4;
 
     function onResults(results) {
+      if (window.disableGazeDetection) {
+        return;
+        // skip all gaze checks once disabled
+      }
       const vw = videoElement.clientWidth;
       const vh = videoElement.clientHeight;
       canvasElement.width = vw; canvasElement.height = vh;
@@ -1298,8 +1407,6 @@
         setTimeout(() => {
           document.getElementById("examGate").style.display = "none";
           document.getElementById("examCard").style.display = "block";
-
-          loadExamQuestions(window.examData.examId);
           console.log("Face verified → starting exam…");
         }, 150);
         setTimeout(() => {

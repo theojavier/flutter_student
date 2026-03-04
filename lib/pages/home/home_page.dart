@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -24,151 +25,112 @@ class _HomePageState extends State<HomePage> {
   String? studentId;
   String? program;
   String? yearBlock;
+  String? _authUid;
 
   @override
   void initState() {
     super.initState();
+
+    _authUid = FirebaseAuth.instance.currentUser?.uid;
+    if (_authUid == null) return;
+
     _loadPrefs();
   }
 
   Future<void> _loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      studentId = prefs.getString("studentId");
       program = prefs.getString("program");
       yearBlock = prefs.getString("yearBlock");
     });
   }
 
-  Future<List<Map<String, dynamic>>> _fetchResultsForMissingExams() async {
-    if (studentId == null) return [];
-
-    try {
-      final snap = await db
-          .collectionGroup("students")
-          .where("studentId", isEqualTo: studentId)
-          .get();
-
-      List<Map<String, dynamic>> list = [];
-
-      for (var doc in snap.docs) {
-        final data = doc.data();
-        final examId = doc.reference.parent.parent!.id;
-
-        final examExists = await db.collection("exams").doc(examId).get();
-        if (!examExists.exists) {
-          list.add({
-            "subject": data["subject"] ?? "",
-            "score": data["score"] ?? "—",
-            "status": data["status"] ?? "incomplete",
-            "examDate": data["examDate"],
-          });
-        }
-      }
-
-      return list;
-    } catch (e) {
-      print("Error fetching missing exams: $e");
-      return [];
-    }
-  }
-
-
-  Future<Map<String, dynamic>> _processExamsWithResults(
-    List<QueryDocumentSnapshot> examDocs,
-  ) async {
+  Future<Map<String, dynamic>> _processExamsAndResults() async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
-    // parallel fetch of result docs for this student
-    final futures = examDocs.map((examDoc) async {
-      final data = examDoc.data() as Map<String, dynamic>;
+    //Exams schedule
+    final examsSnap = await db
+        .collection("exams")
+        .where("program", isEqualTo: program)
+        .where("yearBlock", isEqualTo: yearBlock)
+        .get();
+
+    List<QueryDocumentSnapshot> todaysSchedule = [];
+    int todayExamCount = 0;
+
+    for (final examDoc in examsSnap.docs) {
+      final data = examDoc.data();
       final startTime = _toDate(data["startTime"]);
-      final examId = examDoc.id;
 
-      // read student's result (may not exist)
-      final resultSnap = await db
-          .collection("examResults")
-          .doc(examId)
-          .collection("students")
-          .doc(studentId!)
-          .get();
-
-      final rData = resultSnap.exists
-          ? resultSnap.data() as Map<String, dynamic>
-          : null;
-
-      bool isToday = false;
       if (startTime != null) {
         final examDay = DateTime(
           startTime.year,
           startTime.month,
           startTime.day,
         );
-        isToday = examDay == today;
+        if (examDay == today) {
+          todayExamCount++;
+          todaysSchedule.add(examDoc);
+        }
       }
+    }
 
-      return {
-        "doc": examDoc,
-        "data": data,
-        "startTime": startTime,
-        "rData": rData,
-        "isToday": isToday,
-      };
-    }).toList();
+    //Student results 
+    final examResultsSnap = await db
+        .collection("examResults")
+        .where("program", isEqualTo: program)
+        .where("yearBlock", isEqualTo: yearBlock)
+        .get();
 
-    final items = await Future.wait(futures);
-
-    List<QueryDocumentSnapshot> todaysSchedule = [];
     List<Map<String, dynamic>> results = [];
     int completedCount = 0;
-    int todayExamCount = 0;
 
-    for (var item in items) {
-      final data = item["data"] as Map<String, dynamic>;
-      final rData = item["rData"] as Map<String, dynamic>?;
-      final bool isToday = item["isToday"] == true;
+    for (final examResultDoc in examResultsSnap.docs) {
+      final studentSnap = await examResultDoc.reference
+          .collection("students")
+          .doc(_authUid!)
+          .get();
 
-      if (rData != null) {
+      if (studentSnap.exists) {
+        final rData = studentSnap.data() as Map<String, dynamic>;
         final status = rData["status"] ?? "incomplete";
         final score = rData["score"] ?? "—";
+        final submittedAt = _toDate(rData["submittedAt"]);
 
         if (status == "completed") {
           completedCount++;
         }
 
         results.add({
-          "subject": data["subject"] ?? "—",
+          "subject":
+              rData["subject"] ?? "—", // subject stored in student result
           "score": score,
           "status": status,
+          "submittedAt": submittedAt,
         });
       }
+    }
 
-      if (isToday) {
-        todayExamCount++;
-        todaysSchedule.add(item["doc"] as QueryDocumentSnapshot);
-      }
-    }
-    final missing = await _fetchResultsForMissingExams();
-    results.addAll(missing);
-    for (var r in missing) {
-      if (r["status"] == "completed") {
-        completedCount++;
-      }
-    }
+    // Sort results by submittedAt (newest first)
+    results.sort((a, b) {
+      final aTime = a["submittedAt"] ?? DateTime(1970);
+      final bTime = b["submittedAt"] ?? DateTime(1970);
+      return bTime.compareTo(aTime);
+    });
 
     return {
       "todayExamCount": todayExamCount,
       "completedCount": completedCount,
-      "schedule": todaysSchedule,
-      "results": results,
+      "schedule": todaysSchedule, // sorted by startTime 
+      "results": results, // sorted by submittedAt 
     };
   }
 
   @override
   Widget build(BuildContext context) {
-    // still show spinner while prefs load
-    if (studentId == null || program == null || yearBlock == null) {
+    // still show spin while prefs load
+    if (_authUid == null || program == null || yearBlock == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
@@ -185,12 +147,9 @@ class _HomePageState extends State<HomePage> {
           if (!examsSnapshot.hasData) {
             return _buildSkeletonUI();
           }
-
-          final examDocs = examsSnapshot.data!.docs;
-
-          // Now fetch per-exam student results in parallel and build UI after that completes
+          // Now fetch per-exam student results in 
           return FutureBuilder<Map<String, dynamic>>(
-            future: _processExamsWithResults(examDocs),
+            future: _processExamsAndResults(),
             builder: (context, processedSnapshot) {
               if (processedSnapshot.connectionState ==
                   ConnectionState.waiting) {
@@ -378,7 +337,7 @@ class _HomePageState extends State<HomePage> {
     required int count,
     required Color color,
     required Color countColor,
-    TextStyle? titleStyle, // optional
+    TextStyle? titleStyle, 
   }) {
     return Card(
       color: color,
@@ -430,27 +389,43 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildScheduleTable(List<QueryDocumentSnapshot> exams) {
     if (exams.isEmpty) {
-      return const Center(
-        child: Text(
-          "No exam schedule found",
-          style: TextStyle(
-            color: Color(0xFFE6F0F8),
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
+      return Card(
+        color: const Color(0xFF0F2B45),
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(8),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.info_outline, color: Color(0xFFE6F0F8), size: 35),
+              SizedBox(height: 12),
+              Text(
+                "No exam schedule found",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFFE6F0F8),
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    // Sort by startTime (newest first)
+    // Sort by startTime (earliest first)
     exams.sort((a, b) {
       final aTime =
           _toDate((a.data() as Map<String, dynamic>)["startTime"]) ??
-          DateTime(0);
+          DateTime(9999);
       final bTime =
           _toDate((b.data() as Map<String, dynamic>)["startTime"]) ??
-          DateTime(0);
-      return bTime.compareTo(aTime);
+          DateTime(9999);
+
+      return aTime.compareTo(bTime);
     });
 
     return Card(
@@ -560,24 +535,37 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildResultsTable(List<Map<String, dynamic>> results) {
     if (results.isEmpty) {
-      return const Center(
-        child: Text(
-          "No results found",
-          style: TextStyle(
-            color: Color(0xFFE6F0F8),
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
+      return Card(
+        color: const Color(0xFF0F2B45),
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(8),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(
+                Icons.assignment_turned_in_outlined,
+                color: Color(0xFFE6F0F8),
+                size: 35,
+              ),
+              SizedBox(height: 12),
+              Text(
+                "No results found",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFFE6F0F8),
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    //  Sort by examDate (newest first) if available
-    results.sort((a, b) {
-      final aTime = _toDate(a["examDate"]) ?? DateTime(0);
-      final bTime = _toDate(b["examDate"]) ?? DateTime(0);
-      return bTime.compareTo(aTime);
-    });
 
     return Card(
       color: const Color(0xFF0F2B45),

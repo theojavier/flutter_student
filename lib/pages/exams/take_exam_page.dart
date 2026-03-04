@@ -6,7 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import '../../helpers/cheat_detector.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class TakeExamPage extends StatefulWidget {
   final String examId;
@@ -34,9 +34,9 @@ class _TakeExamPageState extends State<TakeExamPage>
   int? end;
   bool isWarningShown = false;
 
-  bool _hasCamera = false;
-  bool _checkingCamera = true;
-  MediaStream? _cameraStream;
+  // bool _hasCamera = false;
+  // bool _checkingCamera = true;
+  // MediaStream? _cameraStream;
 
   @override
   void initState() {
@@ -44,6 +44,13 @@ class _TakeExamPageState extends State<TakeExamPage>
     WidgetsBinding.instance.addObserver(this);
     _loadStudentId();
   }
+
+  // void _showSnack(String msg, {Color color = Colors.red}) {
+  //   if (!mounted) return;
+  //   ScaffoldMessenger.of(
+  //     context,
+  //   ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
+  // }
 
   @override
   void dispose() {
@@ -82,8 +89,8 @@ class _TakeExamPageState extends State<TakeExamPage>
           builder: (ctx) {
             // Auto-close after 5 seconds
             Future.delayed(const Duration(seconds: 5), () {
-              if (Navigator.of(ctx).canPop()) {
-                Navigator.of(ctx).pop();
+              if (ctx.mounted && Navigator.canPop(ctx)) {
+                Navigator.pop(ctx);
               }
             });
 
@@ -160,8 +167,12 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   @override
   Widget build(BuildContext context) {
-    if (studentId == null) {
-      return const Scaffold(body: Center(child: Text(" Not logged in")));
+    final user = FirebaseAuth.instance.currentUser;
+    final uid = user?.uid;
+    if (uid == null) {
+      return const Scaffold(
+        body: Center(child: Text("User not authenticated")),
+      );
     }
 
     return Scaffold(
@@ -213,11 +224,15 @@ class _TakeExamPageState extends State<TakeExamPage>
                           .collection("examResults")
                           .doc(widget.examId)
                           .collection("students")
-                          .doc(studentId!)
+                          .doc(FirebaseAuth.instance.currentUser!.uid)
                           .snapshots(),
                       builder: (context, resultSnap) {
                         if (!resultSnap.hasData || !resultSnap.data!.exists) {
-                          return const Center(child: Text("Exam not found"));
+                          return const Center(child: Text("Exam not found", style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 25,
+                              fontWeight: FontWeight.bold,
+                            ),));
                         }
 
                         final resultData =
@@ -341,7 +356,7 @@ class _TakeExamPageState extends State<TakeExamPage>
 
                   final data = snapshot.data!.data() as Map<String, dynamic>;
                   final subject = data["subject"] ?? "Unknown";
-                  final teacherId = data["teacherId"] ?? "";
+                  // final teacherId = data["teacherId"] ?? "";
                   start =
                       widget.startMillis ??
                       data["startTime"]?.toDate().millisecondsSinceEpoch;
@@ -433,7 +448,7 @@ class _TakeExamPageState extends State<TakeExamPage>
                               .collection("examResults")
                               .doc(widget.examId)
                               .collection("students")
-                              .doc(studentId!)
+                              .doc(FirebaseAuth.instance.currentUser!.uid)
                               .snapshots(),
                           builder: (context, resultSnap) {
                             if (!resultSnap.hasData) {
@@ -542,21 +557,15 @@ class _TakeExamPageState extends State<TakeExamPage>
                                   return; // Stop here if no camera
                                 }
 
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text("Camera test completed!"),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-
                                 // Save student exam result
                                 await db
                                     .collection("examResults")
                                     .doc(widget.examId)
                                     .collection("students")
-                                    .doc(studentId!)
+                                    .doc(uid)
                                     .set({
                                       "examId": widget.examId,
+                                      "uid": uid,
                                       "studentId": studentId,
                                       "status": "in-progress",
                                       "cheatingCount": 0,

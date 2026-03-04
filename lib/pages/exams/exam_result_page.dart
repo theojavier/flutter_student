@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 //import 'dart:html' as html;
 
@@ -22,6 +21,7 @@ class ExamResultPage extends StatefulWidget {
 }
 
 class _ExamResultPageState extends State<ExamResultPage> {
+  String? _authUid;
   //StreamSubscription<html.PopStateEvent>? _popSub;
   Future<String?> fetchStudentId() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -40,40 +40,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
   @override
   void initState() {
     super.initState();
-
-    // if (kIsWeb && widget.fromExamPage) {
-    //   // Push a new browser state so pressing back won't immediately navigate away
-    //   html.window.history.replaceState(
-    //     {'locked': true},
-    //     "Result",
-    //     html.window.location.href,
-    //   );
-
-    //   // Listen for browser back button
-    //   _popSub = html.window.onPopState.listen((event) {
-    //     final stateData = event.state;
-
-    //     // Only block if our custom lock state exists
-    //     if (stateData is Map && stateData['locked'] == true) {
-    //       // Re-push same state to keep browser from leaving
-    //       html.window.history.replaceState(
-    //         {'locked': true},
-    //         "Result",
-    //         html.window.location.href,
-    //       );
-
-    //       // Show the snack message
-    //       ScaffoldMessenger.of(context).showSnackBar(
-    //         const SnackBar(
-    //           content: Text(
-    //             "Back navigation is disabled after submitting the exam.",
-    //           ),
-    //           duration: Duration(seconds: 2),
-    //         ),
-    //       );
-    //     }
-    //   });
-    // }
+    _authUid = FirebaseAuth.instance.currentUser?.uid;
   }
 
   @override
@@ -119,7 +86,7 @@ class _ExamResultPageState extends State<ExamResultPage> {
                   .collection("examResults")
                   .doc(widget.examId)
                   .collection("students")
-                  .doc(studentId)
+                  .doc(_authUid)
                   .get(),
 
               builder: (context, snapshot) {

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import '../../models/exam_history_model.dart';
 import '../../widgets/exam_history_item.dart';
 
@@ -14,48 +15,83 @@ class ExamHistoryPage extends StatefulWidget {
 
 class _ExamHistoryPageState extends State<ExamHistoryPage> {
   String? studentId;
+  String? program;
+  String? yearBlock;
+  String? _authUid;
+  bool loading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadStudentId();
+
+    _authUid = FirebaseAuth.instance.currentUser?.uid;
+    if (_authUid == null) {
+      setState(() => loading = false);
+      return;
+    }
+
+    _loadStudentData();
   }
 
-  Future<void> _loadStudentId() async {
-    final prefs = await SharedPreferences.getInstance();
+  Future<void> _loadStudentData() async {
+    final uid = _authUid;
+    if (uid == null) {
+      setState(() => loading = false);
+      return;
+    }
+
+    final userSnap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .get();
+
+    if (!userSnap.exists) {
+      setState(() => loading = false);
+      return;
+    }
+
     setState(() {
-      studentId = prefs.getString('studentId') ?? '';
+      studentId = userSnap['studentId'];
+      program = userSnap['program'];
+      yearBlock = userSnap['yearBlock'];
+      loading = false;
     });
   }
 
   Stream<List<ExamHistoryModel>> getExamHistoryStream() {
-    if (studentId == null || studentId!.isEmpty) {
-      // return empty stream if no studentId yet
-      return Stream.value([]);
+  if (loading || studentId == null || program == null || yearBlock == null) {
+    return Stream.value([]);
+  }
+
+  final examResultsRef = FirebaseFirestore.instance
+      .collection("examResults")
+      .where("program", isEqualTo: program)
+      .where("yearBlock", isEqualTo: yearBlock);
+
+  return examResultsRef.snapshots().asyncMap((snapshot) async {
+    final results = <ExamHistoryModel>[];
+
+    for (final examDoc in snapshot.docs) {
+      final studentSnap = await examDoc.reference
+          .collection("students")
+          .doc(_authUid)
+          .get();
+
+      if (studentSnap.exists) {
+        results.add(ExamHistoryModel.fromDoc(studentSnap, examDoc.id));
+      }
     }
 
-    final examResultsRef = FirebaseFirestore.instance.collection("examResults");
-
-    return examResultsRef.snapshots().asyncMap((snapshot) async {
-      final results = <ExamHistoryModel>[];
-      for (var doc in snapshot.docs) {
-        final resultSnap = await examResultsRef
-            .doc(doc.id)
-            .collection("students")
-            .doc(studentId!)
-            .get();
-        if (resultSnap.exists) {
-          results.add(ExamHistoryModel.fromDoc(resultSnap, doc.id));
-        }
-      }
-      results.sort((a, b) {
-        final aTime = a.submittedAt?.toDate() ?? DateTime(1970);
-        final bTime = b.submittedAt?.toDate() ?? DateTime(1970);
-        return bTime.compareTo(aTime);
-      });
-      return results;
+    results.sort((a, b) {
+      final aTime = a.submittedAt?.toDate() ?? DateTime(1970);
+      final bTime = b.submittedAt?.toDate() ?? DateTime(1970);
+      return bTime.compareTo(aTime);
     });
-  }
+
+    return results;
+  });
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -111,7 +147,7 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
                             "No exam history found",
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: 50,
+                              fontSize: 25,
                               fontWeight: FontWeight.bold,
                             ),
                           ),

@@ -132,8 +132,8 @@ class MyApp extends StatelessWidget {
               pageBuilder: (context, state) => NoTransitionPage(
                 child: ExamHtmlPage(
                   examId: state.pathParameters['examId']!,
-                  studentId:
-                      '',
+                  studentId: FirebaseAuth.instance.currentUser?.uid ?? '',
+
                 ),
               ),
             ),

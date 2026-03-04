@@ -7,7 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
 import '../helpers/notifications_helper.dart';
 import '../widgets/notifications_list.dart';
-import '../pages/exams/exam_html.dart';
+// import '../pages/exams/exam_html.dart';
 import '../pages/notifications/notification_item.dart';
 import 'dart:async';
 
@@ -39,7 +39,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold>  {
   Map<String, dynamic>? _cachedProfile;
   bool _isDrawerOpen = false;
 
-  late final List<Widget> _pages;
+  // late final List<Widget> _pages;
 
   @override
   void initState() {
