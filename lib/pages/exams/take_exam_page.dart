@@ -2,11 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../../helpers/SecureStorageHelper.dart';
 
 class TakeExamPage extends StatefulWidget {
   final String examId;
@@ -59,9 +59,9 @@ class _TakeExamPageState extends State<TakeExamPage>
   }
 
   Future<void> _loadStudentId() async {
-    final prefs = await SharedPreferences.getInstance();
+    final storedstudentId = await SecureStorageHelper.read('studentId');
     setState(() {
-      studentId = prefs.getString("studentId");
+      studentId = storedstudentId;
     });
   }
 

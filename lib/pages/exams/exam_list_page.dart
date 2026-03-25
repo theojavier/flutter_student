@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/exam_model.dart';
 import '../../widgets/exam_item_card.dart';
+import '../../helpers/SecureStorageHelper.dart';
 
 class ExamListPage extends StatefulWidget {
   const ExamListPage({super.key});
@@ -25,15 +25,18 @@ class _ExamListPageState extends State<ExamListPage> {
     //_initSessionAndLoadStudent();
   }
   Future<void> _loadPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _studentId = prefs.getString('studentId');
-      _program = prefs.getString('program');
-      _yearBlock = prefs.getString('yearBlock');
-      _loading = false;
-    });
+  final studentId = await SecureStorageHelper.read('studentId');
+  final program = await SecureStorageHelper.read('program');
+  final yearBlock = await SecureStorageHelper.read('yearBlock');
 
-  }
+  setState(() {
+    _studentId = studentId;
+    _program = program;
+    _yearBlock = yearBlock;
+    _loading = false;
+  });
+}
+
 
   // Future<void> _initSessionAndLoadStudent() async {
   //   final prefs = await SharedPreferences.getInstance();

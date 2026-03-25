@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../helpers/SecureStorageHelper.dart';
+
+final secureStorage = FlutterSecureStorage();
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -75,12 +78,15 @@ class _LoginPageState extends State<LoginPage> {
 
       // Proceed only if student role
       if (role.toString().toLowerCase() == "student") {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString("userId", userCredential.user!.uid);
-        await prefs.setString("studentId", studentId);
+        await SecureStorageHelper.write("userId", userCredential.user!.uid);
+        await SecureStorageHelper.write("studentId", studentId);
 
-        if (program != null) await prefs.setString("program", program);
-        if (yearBlock != null) await prefs.setString("yearBlock", yearBlock);
+        if (program != null) {
+          await SecureStorageHelper.write("program", program);
+        }
+        if (yearBlock != null) {
+          await SecureStorageHelper.write("yearBlock", yearBlock);
+        }
 
         ScaffoldMessenger.of(
           context,

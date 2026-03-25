@@ -8,10 +8,16 @@
 
   <!-- Firebase + App Initialization FIRST -->
   <script type="module">
-    window.isPageReload = performance.getEntriesByType("navigation")[0].type === "reload";
+    window.isPageReload = window.performance.navigation.type === 1 ||
+      performance.getEntriesByType('navigation')[0]?.type === 'reload';
     window.isReloadSession = false;
     window.skipIncompleteOnNextUnload = false;
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+    import {
+      getFunctions,
+      httpsCallable
+    } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-functions.js";
+
 
     import {
       getFirestore,
@@ -53,6 +59,9 @@
     const db = getFirestore(app);
     const auth = getAuth(app);
     let authReady = false;
+    const functions = getFunctions(app, 'asia-southeast1');
+    window.functions = functions;
+    window.httpsCallable = httpsCallable;
     async function safeSetDoc(ref, data, options) {
       const user = auth.currentUser;
       if (!user) throw new Error("No user signed in");
@@ -304,22 +313,22 @@
     }
 
     // Mark incomplete (keep this in module so beforeunload can call it safely)
-    window.markIncompleteIfNeeded = function () {
-      try {
-        if (window.examFinished) return;
-        const examId = window.examData?.examId;
-        const studentId = window.examData?.studentId;
-        if (!examId || !studentId) return;
+    // window.markStoppedIfNeeded = function () {
+    //   try {
+    //     if (window.examFinished) return;
+    //     const examId = window.examData?.examId;
+    //     const studentId = window.examData?.studentId;
+    //     if (!examId || !studentId) return;
 
-        const resultRef = getStudentDocRef(examId)
-        safeSetDoc(resultRef, {
-          status: "incomplete",
-          submittedAt: new Date()
-        }, { merge: true });
-      } catch (err) {
-        console.error("markIncomplete error:", err);
-      }
-    };
+    //     const resultRef = getStudentDocRef(examId)
+    //     safeSetDoc(resultRef, {
+    //       currentIndex: "stopped",
+    //       submittedAt: new Date()
+    //     }, { merge: true });
+    //   } catch (err) {
+    //     console.error("markIncomplete error:", err);
+    //   }
+    // };
 
 
     window.saveAnswerToFirestore = async function (q, val, displayIndex) {
@@ -356,68 +365,71 @@
     window.submitExam = async function submitExam(forceIncomplete = false) {
       try {
         const examId = window.examData?.examId;
-        const studentId = window.examData?.studentId;
-        if (!examId || !studentId) {
-          console.error("Missing examId or studentId");
+
+        if (!examId) {
+          console.error("Missing examId");
+          alert("Submission error: Missing exam data.");
           return;
         }
 
-        //Fetch all saved answers from Firestore
-        const studentDoc = getStudentDocRef(examId)
-        const answersCol = collection(studentDoc, "answers");
-        const answersSnap = await getDocs(answersCol);
+        // Get the user's ID token first
+        const user = auth.currentUser;
+        if (!user) {
+          throw new Error("No authenticated user found. Please sign in again.");
+        }
 
-        const savedAnswers = {};
-        answersSnap.forEach(docSnap => {
-          const data = docSnap.data();
-          savedAnswers[data.questionId] = data.answer;
+        // Use the locally scoped functions and httpsCallable
+        const submitExamFunction = httpsCallable(functions, 'submitExam');
+
+        const result = await submitExamFunction({
+          examId: examId,
+          forceIncomplete: forceIncomplete
         });
 
-        //Compute score using saved answers + correctAnswer from window.questions
-        let computedScore = 0;
+        console.log("Exam submitted successfully:", result.data);
+        handleSuccessfulSubmission(examId, result.data);
 
-        for (let i = 0; i < window.questions.length; i++) {
-          const q = window.questions[i];
-          const ans = savedAnswers[q.id];
-          const correct = q.correctAnswer;
+      } catch (err) {
+        console.error("submitExam error:", err);
+        alert(`Submission failed: ${err.message}`);
 
-          if (ans && correct) {
-            if (ans.toString().toLowerCase() === correct.toString().toLowerCase()) {
-              computedScore++;
-            }
-          }
-        }
-        //Get subject from exam doc
-        let subject = "";
-        try {
-          const examDoc = await getDoc(doc(window.db, "exams", examId));
-          if (examDoc.exists()) {
-            subject = examDoc.data().subject || "";
-          }
-        } catch (err) {
-          console.warn("Could not fetch subject:", err);
-        }
+      }
+    };
 
 
-        // Write result to Firestore
-        await safeSetDoc(studentDoc, {
-          status: forceIncomplete ? "incomplete" : "completed",
-          score: computedScore,
-          total: window.questions.length,
-          submittedAt: serverTimestamp(),
-          currentIndex: forceIncomplete ? "stopped" : "finished",
-        }, { merge: true });
-        
 
+    function handleSuccessfulSubmission(examId, result) {
+      // Clear sessionStorage
+      sessionStorage.clear();
 
-        // Redirect to result page
+      // Clear localStorage
+      localStorage.clear();
+
+      window.examFinished = true;
+      window.questions = [];
+      window.answers = {};
+      window.examData = null;
+      window.cheatingCount = 0;
+      window.strikes = 0;
+      sessionStorage.clear();
+
+      // Stop camera if running
+      try { window.camera?.stop?.(); } catch (_) { }
+
+      // Notify parent window or redirect
+      if (window.parent && window.parent !== window) {
         window.parent.postMessage({
           action: 'finishExam',
           examId: examId,
-          //studentId: studentId
         }, "*");
-        localStorage.removeItem("cheatingCount");
-        // Mark exam finished
+      } else {
+        console.error("aaaaaa");
+        // Clear sessionStorage
+        sessionStorage.clear();
+
+        // Clear localStorage
+        localStorage.clear();
+
         window.examFinished = true;
         window.questions = [];
         window.answers = {};
@@ -425,12 +437,22 @@
         window.cheatingCount = 0;
         window.strikes = 0;
         sessionStorage.clear();
-        // Stop camera if running
-        try { camera?.stop?.(); } catch (_) { }
-      } catch (err) {
-        console.error(" submitExam error:", err.message, err);
+        window.parent.postMessage({
+          action: 'finishExam',
+          examId: examId,
+        }, "*");
       }
-    };
+    }
+
+    function resetSubmitButton() {
+      const submitBtn = document.getElementById('submitBtn');
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Submit Exam';
+      }
+    }
+
+
     async function startCountdownFromFirestore(examId) {
 
       const examRef = doc(db, "exams", examId);
@@ -460,7 +482,13 @@
         if (remainingMs <= 0) {
           clearInterval(timer);
           countdownEl.textContent = "Time's up!";
-          window.markIncompleteIfNeeded();
+          // Clear sessionStorage
+          sessionStorage.clear();
+
+          // Clear localStorage
+          localStorage.clear();
+
+          window.markIncompleteIfNeeded2cloudfunction();
           window.parent.postMessage({
             action: 'finishExam',
             examId: examId,
@@ -504,35 +532,70 @@
     //     window.registerStrikeOnce();
     //   }
     // }).observe(document.body);
+    // window.addEventListener("beforeunload", () => {
+
+    //   sessionStorage.setItem("is_unloading", "true");
+
+    //   if (window.examStarted) {
+    //     sessionStorage.setItem("examStarted", "1");
+    //   }
+
+    //   if (window.isPageReload || window.skipIncompleteOnNextUnload) {
+    //     return;
+    //   }
+    //   localStorage.removeItem("cheatingCount");
+
+    //   window.markIncompleteIfNeeded();
+    // });
+    window.markIncompleteIfNeeded2cloudfunction = async function () {
+      try {
+        const examId = window.examData?.examId || sessionStorage.getItem("examId");
+        const uid = window.authUid || window.examData?.studentId;
+
+        console.log("Attempting to mark incomplete. examId:", examId, "uid:", uid);
+
+        if (!examId || !uid) {
+          console.warn("Missing examId or uid, skipping markIncomplete");
+          return;
+        }
+
+        await fetch("https://asia-southeast1-rd-final.cloudfunctions.net/markIncomplete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ examId, uid }),
+          keepalive: true
+        });
+
+
+        console.log("Incomplete exam marked successfully");
+      } catch (err) {
+        console.error("Failed to mark incomplete:", err);
+      }
+    };
+
+    // 2. Create a flag for when the user TRIGGERS a reload/navigation right now
     window.addEventListener("beforeunload", () => {
-
-      sessionStorage.setItem("is_unloading", "true");
-
-      if (window.examStarted) {
-        sessionStorage.setItem("examStarted", "1");
-      }
-
-      if (window.isPageReload || window.skipIncompleteOnNextUnload) {
-        return;
-      }
-      localStorage.removeItem("cheatingCount");
-
-      window.markIncompleteIfNeeded();
+      skipIncompleteOnNextUnload = true;
     });
+
     window.addEventListener("pagehide", (event) => {
       if (event.persisted) return;
 
       sessionStorage.setItem("is_unloading", "true");
 
-      if (window.examStarted) {
+      // CHECK BOTH: 
+      // Was it already a reloaded page OR is the user refreshing right now?
+      if (isPageReload || skipIncompleteOnNextUnload) {
         sessionStorage.setItem("examStarted", "1");
+        return; // Stops the cloud function from firing
       }
 
-      if (window.isPageReload || window.skipIncompleteOnNextUnload) {
-        return;
-      }
+      // This only runs if the tab is closed or a new URL is typed (not a reload)
+      sessionStorage.clear();
 
-      window.markIncompleteIfNeeded();
+      // Clear localStorage
+      localStorage.clear();
+      window.markIncompleteIfNeeded2cloudfunction();
     });
 
     let currentQuestionIndex = 0;

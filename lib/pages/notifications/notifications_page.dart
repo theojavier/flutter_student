@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'notification_item.dart';
 import 'package:go_router/go_router.dart';
 import '../../widgets/notifications_container.dart';
+import '../../helpers/SecureStorageHelper.dart';
 
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key});
@@ -24,8 +24,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   Future<void> _loadUserIdAndNotifications() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('userId');
+    final userId = await SecureStorageHelper.read('userId');
     if (userId == null) return;
 
     setState(() => _userId = userId);
@@ -36,38 +35,37 @@ class _NotificationsPageState extends State<NotificationsPage> {
         .collection('notifications');
 
     _notifRef.snapshots().listen((snap) {
-  final List<NotificationItem> loaded = [];
-  for (var doc in snap.docs) {
-    final data = doc.data() as Map<String, dynamic>;
-    loaded.add(
-      NotificationItem(
-        examId: doc.id,
-        title: data['subject'] ?? 'New Exam', //  use 'subject'
-        createdAt: (data['createdAt'] as Timestamp).toDate(), //  use createdAt
-        viewed: data['viewed'] ?? false,
-      ),
-    );
-  }
-  setState(() => _notifications = loaded);
-});
+      final List<NotificationItem> loaded = [];
+      for (var doc in snap.docs) {
+        final data = doc.data() as Map<String, dynamic>;
+        loaded.add(
+          NotificationItem(
+            examId: doc.id,
+            title: data['subject'] ?? 'New Exam', //  use 'subject'
+            createdAt: (data['createdAt'] as Timestamp)
+                .toDate(), //  use createdAt
+            viewed: data['viewed'] ?? false,
+          ),
+        );
+      }
+      setState(() => _notifications = loaded);
+    });
   }
 
   void _onNotificationClick(NotificationItem item) {
-  // Mark as viewed
-  if (_userId != null) {
-    _notifRef.doc(item.examId).update({'viewed': true});
-  }
+    // Mark as viewed
+    if (_userId != null) {
+      _notifRef.doc(item.examId).update({'viewed': true});
+    }
 
-  // Navigate to /take-exam
-  context.go('/take-exam/${item.examId}');
-}
+    // Navigate to /take-exam
+    context.go('/take-exam/${item.examId}');
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Notifications'),
-      ),
+      appBar: AppBar(title: const Text('Notifications')),
       body: Padding(
         padding: const EdgeInsets.all(8.0),
         child: NotificationsContainer(

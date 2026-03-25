@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_week_view/flutter_week_view.dart';
+import '../../helpers/SecureStorageHelper.dart';
 
 
 class SchedulePage extends StatefulWidget {
@@ -27,10 +27,11 @@ class _SchedulePageState extends State<SchedulePage> {
    _loadPrefs();
   }
   Future<void> _loadPrefs() async {
-  final prefs = await SharedPreferences.getInstance();
+  final storedProgram = await SecureStorageHelper.read('program');
+  final storedYearBlock = await SecureStorageHelper.read('yearBlock');
   setState(() {
-    program = prefs.getString("program");
-    yearBlock = prefs.getString("yearBlock");
+    program = storedProgram;
+    yearBlock = storedYearBlock;
     loadingUser = false;
   });
 }

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../../helpers/SecureStorageHelper.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -38,12 +38,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _loadPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      program = prefs.getString("program");
-      yearBlock = prefs.getString("yearBlock");
-    });
-  }
+  final storedStudentId = await SecureStorageHelper.read('studentId');
+  final storedProgram   = await SecureStorageHelper.read('program');
+  final storedYearBlock = await SecureStorageHelper.read('yearBlock');
+
+  setState(() {
+    studentId = storedStudentId;
+    program   = storedProgram;
+    yearBlock = storedYearBlock;
+  });
+}
+
 
   Future<Map<String, dynamic>> _processExamsAndResults() async {
     final now = DateTime.now();

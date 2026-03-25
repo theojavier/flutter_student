@@ -2,13 +2,13 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:html' as html;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:html' show IFrameElement;
 // ignore: undefined_prefixed_name
 import 'dart:ui_web' as ui;
+import '../../helpers/SecureStorageHelper.dart';
 
 class ExamHtmlPage extends StatefulWidget {
   final String examId;
@@ -36,9 +36,11 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
       debugPrint("No authenticated user — blocking exam");
       return;
     }
+    checkExamStatusAndNavigate();
 
     if (kIsWeb) {
       fetchStudentAndCheckEligibility().then((allowed) {
+        
         if (!allowed) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
@@ -136,6 +138,39 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
     return true;
   }
+  Future<void> checkExamStatusAndNavigate() async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return;
+
+  final resultRef = FirebaseFirestore.instance
+      .collection("examResults")
+      .doc(widget.examId)
+      .collection("students")
+      .doc(uid);
+
+  final resultDoc = await resultRef.get();
+
+  if (resultDoc.exists) {
+    final status = resultDoc.data()?['status'];
+    if (status == 'completed') {
+      // Navigate to result page
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.go('/exam-result/${widget.examId}');
+      });
+      return;
+    } else if (status == 'incomplete') {
+      // Navigate home
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.go('/home');
+      });
+      return;
+    }
+  }
+
+  // If no record or status, continue with normal exam flow
+  _registerIframe(widget.examId, _resolvedStudentId!);
+}
+
 
   void _registerIframe(String examId, String studentId) {
     final viewType = 'exam-html-view-$examId-$studentId';
@@ -176,65 +211,26 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
   }
 
   Future<bool> validateStudentId(String urlStudentId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final storedId = prefs.getString("studentId");
+  final storedId = await SecureStorageHelper.read("studentId");
 
-    if (storedId == null) {
-      debugPrint("No studentId stored in prefs");
-      return false;
-    }
-
-    if (storedId != urlStudentId) {
-      debugPrint("Mismatch! URL studentId=$urlStudentId, stored=$storedId");
-      return false;
-    }
-
-    return true;
+  if (storedId == null) {
+    debugPrint("No studentId stored");
+    return false;
   }
+
+  if (storedId != urlStudentId) {
+    debugPrint("Mismatch! URL studentId=$urlStudentId, stored=$storedId");
+    return false;
+  }
+
+  return true;
+}
+
 
   @override
   void dispose() {
     super.dispose();
 
-    if (kIsWeb) {
-      final wasReload = html.window.sessionStorage['isReloading'] == 'true';
-
-      if (wasReload) {
-        debugPrint("Page reload detected  skip marking incomplete");
-        return;
-      }
-      final uid = _authUid;
-      if (uid == null) return;
-
-      // Continue normal incomplete marking
-      //final examId = widget.examId;
-      if (_resolvedStudentId != null && _resolvedStudentId!.isNotEmpty) {
-        final resultRef = FirebaseFirestore.instance
-            .collection("examResults")
-            .doc(widget.examId)
-            .collection("students")
-            .doc(uid);
-
-        resultRef
-            .get()
-            .then((doc) async {
-              if (doc.exists && doc.data()?['status'] == 'completed') {
-                debugPrint("Exam already completed  skip marking incomplete");
-                return;
-              }
-              await resultRef.set({
-                "status": "incomplete",
-                "submittedAt": FieldValue.serverTimestamp(),
-              }, SetOptions(merge: true));
-              debugPrint(
-                "ExamHtmlPage disposed exam marked incomplete in Firestore",
-              );
-            })
-            .catchError((err) {
-              debugPrint("Failed to mark incomplete on dispose: $err");
-            });
-      }
-    }
     html.window.sessionStorage.clear();
     html.window.localStorage.remove('cheatingCount');
   }

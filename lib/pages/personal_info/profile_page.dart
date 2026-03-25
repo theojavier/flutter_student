@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../../helpers/SecureStorageHelper.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -19,9 +19,10 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadUserId() async {
-    final prefs = await SharedPreferences.getInstance();
+    final storeduserId = await SecureStorageHelper.read('userId');
+
     setState(() {
-      userId = prefs.getString("userId");
+      userId = storeduserId;
     });
   }
 

@@ -51,6 +51,7 @@ dependencies:
   webview_flutter: ^4.13.0
   flutter_week_view: ^1.4.5
   syncfusion_flutter_calendar: ^32.1.23
+  flutter_secure_storage: ^10.0.0 
 
 
 dev_dependencies:

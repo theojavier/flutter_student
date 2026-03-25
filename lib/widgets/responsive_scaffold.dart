@@ -10,7 +10,7 @@ import '../widgets/notifications_list.dart';
 // import '../pages/exams/exam_html.dart';
 import '../pages/notifications/notification_item.dart';
 import 'dart:async';
-
+import '../../helpers/SecureStorageHelper.dart';
 //  Platform + Web detection
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
@@ -18,7 +18,7 @@ import 'dart:io' show Platform;
 class ResponsiveScaffold extends StatefulWidget {
   final int selectedIndex;
   final Widget child;
-   final String? userId;
+  final String? userId;
 
   const ResponsiveScaffold({
     super.key,
@@ -31,7 +31,7 @@ class ResponsiveScaffold extends StatefulWidget {
   State<ResponsiveScaffold> createState() => ResponsiveScaffoldState();
 }
 
-class ResponsiveScaffoldState extends State<ResponsiveScaffold>  {
+class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   String? profileImageUrl;
   String headerName = "Loading...";
   String headerSection = "";
@@ -99,13 +99,15 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold>  {
           _updateProfileUI(data);
         });
   }
-    void refreshUserProfile() {
+
+  void refreshUserProfile() {
     _loadUserProfile();
   }
+
   Future<String?> _getUserIdFromPrefs() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getString('userId');
-}
+    return await SecureStorageHelper.read('userId');
+    ;
+  }
 
   void _refreshProfile() async {
     if (_userId == null) return;
@@ -268,8 +270,9 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold>  {
                       context.go('/profile');
                     },
                     onHistoryTap: () async {
-                      final prefs = await SharedPreferences.getInstance();
-                      final studentId = prefs.getString('studentId');
+                      final studentId = await SecureStorageHelper.read(
+                        'studentId',
+                      );
                       context.go(
                         '/exam-history',
                         extra: {'studentId': studentId},
@@ -353,7 +356,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold>  {
               .collection('users')
               .doc(_userId)
               .collection('notifications')
-              .orderBy('createdAt', descending: true) 
+              .orderBy('createdAt', descending: true)
               .snapshots(),
           builder: (context, snap) {
             final unread = snap.hasData
@@ -440,33 +443,33 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold>  {
           },
         ),
       PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert, color: Colors.white),
-      onSelected: (value) async {
-        if (value == 'logout') {
-          try {
-            await FirebaseAuth.instance.signOut();
+        icon: const Icon(Icons.more_vert, color: Colors.white),
+        onSelected: (value) async {
+          if (value == 'logout') {
+            try {
+              await FirebaseAuth.instance.signOut();
 
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.clear();
-            _cachedProfile = null;
-            profileImageUrl = null;
-            headerName = "Logged out";
-            await Future.delayed(const Duration(milliseconds: 50));
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.clear();
+              _cachedProfile = null;
+              profileImageUrl = null;
+              headerName = "Logged out";
+              await Future.delayed(const Duration(milliseconds: 50));
 
-            if (!mounted) return;
-            context.go('/login');
-          } catch (e) {
-            if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Logout failed: $e')),
-            );
+              if (!mounted) return;
+              context.go('/login');
+            } catch (e) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('Logout failed: $e')));
+            }
           }
-        }
-      },
-      itemBuilder: (ctx) => const [
-        PopupMenuItem(value: 'logout', child: Text('Logout')),
-      ],
-    ),
+        },
+        itemBuilder: (ctx) => const [
+          PopupMenuItem(value: 'logout', child: Text('Logout')),
+        ],
+      ),
     ];
   }
 
