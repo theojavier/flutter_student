@@ -302,6 +302,7 @@
         sendToArduino("STRIKE");
       };
     })();
+    
 
 
     async function pushStrikeToFirestore(examId, studentId) {
@@ -681,7 +682,10 @@
       if (currentQuestionIndex < window.questions.length - 1) {
         btn.textContent = "Next";
         btn.onclick = async () => {
-          if (!isQuestionAnswered(q)) return;
+           if (!isQuestionAnswered(q)) {
+            document.getElementById("answermodelneeded").style.display = "block";
+            return;
+            }
 
           btn.disabled = true;
           btn.textContent = "Saving...";
@@ -712,7 +716,10 @@
       else {
         btn.textContent = "Submit";
         btn.onclick = async () => {
-          if (!isQuestionAnswered(q)) return;
+          if (!isQuestionAnswered(q)) {
+            document.getElementById("answermodelneeded").style.display = "block";
+            return;
+          }
 
           btn.disabled = true;
           btn.textContent = "Saving...";
@@ -889,6 +896,11 @@
       document.getElementById("strikeBox").textContent = `Strikes: ${window.cheatingCount}`;
 
     }
+    // Handle the OK button in the answer required modal
+    document.getElementById("answerOkBtn").onclick = function() {
+      document.getElementById("answermodelneeded").style.display = "none";
+    };
+
 
 
 
@@ -1175,13 +1187,6 @@
       border-radius: 8px;
     }
 
-    .score-box {
-      margin-top: 12px;
-      font-weight: 600;
-      font-size: 15px;
-      color: var(--accent);
-    }
-
     @media (max-width:900px) {
       .wrap {
         grid-template-columns: 1fr;
@@ -1275,8 +1280,16 @@
   <div id="confirmModal" class="modal">
     <div class="modal-content">
       <p>Are you sure you want to submit the exam?</p>
+      <hr style="border: 2px solid blue;">
       <button id="confirmYes" class="btn" style="background:var(--ok); color:#fff;">Yes</button>
       <button id="confirmNo" class="btn" style="background:var(--warn); color:#fff;">No</button>
+    </div>
+  </div>
+  <div id="answermodelneeded" class="modal">
+    <div class="modal-content">
+      <hr style="border: 2px solid red;">
+      <p>Please answer this question before proceeding</p>
+      <button id="answerOkBtn" class="btn" style="background:var(--ok); color:#fff; width:100px;">OK</button>
     </div>
   </div>
 
