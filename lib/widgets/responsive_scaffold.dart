@@ -210,7 +210,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               title: GestureDetector(
                 onTap: () => context.go('/home'),
                 child: Image.asset(
-                  'assets/image/fots_student.png',
+                  'assets/image/Fots.png',
                   height: 80,
                   width: 120,
                 ),
@@ -224,7 +224,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               title: GestureDetector(
                 onTap: () => context.go('/home'),
                 child: Image.asset(
-                  'assets/image/fots_student.png',
+                  'assets/image/Fots.png',
                   height: 80,
                   width: 120,
                 ),

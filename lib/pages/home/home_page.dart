@@ -315,7 +315,7 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           children: [
             Image.asset(
-              'assets/image/fots_student.png',
+              'assets/image/Fots.png',
               height: 200,
               fit: BoxFit.contain,
             ),

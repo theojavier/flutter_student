@@ -56,19 +56,25 @@ class _LoginPageState extends State<LoginPage> {
         region: 'asia-southeast1',
       );
 
-      final result = await functions.httpsCallable('loginWithStudentId').call({
-        'studentId': studentId,
-        'password': password,
-      });
+      final result = await functions
+    .httpsCallable('loginWithStudentId')
+    .call({
+      'studentId': studentId,
+    });
+
 
       final data = result.data;
-      final token = data['token'];
+      final email = data['email'];
       final role = data['role'];
       final program = data['program'];
       final yearBlock = data['yearBlock'];
 
       // Sign in with the custom token
-      final userCredential = await auth.signInWithCustomToken(token);
+      final userCredential =
+    await auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
 
       if (userCredential.user == null) {
         _showError("Login failed: no user returned");
@@ -87,10 +93,6 @@ class _LoginPageState extends State<LoginPage> {
         if (yearBlock != null) {
           await SecureStorageHelper.write("yearBlock", yearBlock);
         }
-
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("Welcome Student!")));
 
         if (program != null && yearBlock != null) {
           startExamListener(userCredential.user!.uid, program, yearBlock);
@@ -128,7 +130,7 @@ class _LoginPageState extends State<LoginPage> {
               await notifRef.set({
                 'viewed': false,
                 'subject': examDoc['subject'],
-                'createdAt': examDoc['createdAt'],
+                'createdAt': examDoc.data().containsKey('createdAt') ? examDoc['createdAt'] : Timestamp.now(),
               });
               debugPrint("Created notif for $userId -> exam $examId");
             }
@@ -164,7 +166,7 @@ class _LoginPageState extends State<LoginPage> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Image.asset(
-                "assets/image/fots_student.png",
+                "assets/image/Fots.png",
                 width: 200,
                 height: 200,
               ),

@@ -167,8 +167,9 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     }
   }
 
-  // If no record or status, continue with normal exam flow
-  _registerIframe(widget.examId, _resolvedStudentId!);
+  // If no record or status, continue with normal exam flow.
+  // The iframe is registered later once studentId is resolved.
+  return;
 }
 
 

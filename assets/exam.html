@@ -299,10 +299,9 @@
         }
 
         console.log("Strike registered:", window.cheatingCount);
-        sendToArduino("STRIKE");
       };
     })();
-    
+
 
 
     async function pushStrikeToFirestore(examId, studentId) {
@@ -573,6 +572,24 @@
         console.error("Failed to mark incomplete:", err);
       }
     };
+    const EXAM_SESSION_KEYS = ["examId", "examStarted", "is_unloading"];
+    const EXAM_LOCAL_KEYS = ["cheatingCount"];
+
+    function clearExamStorage() {
+      EXAM_SESSION_KEYS.forEach((key) => sessionStorage.removeItem(key));
+      EXAM_LOCAL_KEYS.forEach((key) => localStorage.removeItem(key));
+    }
+    function resetExamRuntimeState() {
+      window.examStarted = false;
+      window.cheatingCount = 0;
+      window.strikes = 0;
+      window.examData = null;
+      window.answers = {};
+      window.questions = [];
+      window.hasSubmitted = false;
+      window.allowStrikes = false;
+    }
+
 
     // 2. Create a flag for when the user TRIGGERS a reload/navigation right now
     window.addEventListener("beforeunload", () => {
@@ -587,16 +604,12 @@
       // CHECK BOTH: 
       // Was it already a reloaded page OR is the user refreshing right now?
       if (isPageReload || skipIncompleteOnNextUnload) {
-        sessionStorage.setItem("examStarted", "1");
         return; // Stops the cloud function from firing
       }
 
-      // This only runs if the tab is closed or a new URL is typed (not a reload)
-      sessionStorage.clear();
-
-      // Clear localStorage
-      localStorage.clear();
       window.markIncompleteIfNeeded2cloudfunction();
+      clearExamStorage();
+      resetExamRuntimeState();
     });
 
     let currentQuestionIndex = 0;
@@ -682,10 +695,10 @@
       if (currentQuestionIndex < window.questions.length - 1) {
         btn.textContent = "Next";
         btn.onclick = async () => {
-           if (!isQuestionAnswered(q)) {
+          if (!isQuestionAnswered(q)) {
             document.getElementById("answermodelneeded").style.display = "block";
             return;
-            }
+          }
 
           btn.disabled = true;
           btn.textContent = "Saving...";
@@ -897,7 +910,7 @@
 
     }
     // Handle the OK button in the answer required modal
-    document.getElementById("answerOkBtn").onclick = function() {
+    document.getElementById("answerOkBtn").onclick = function () {
       document.getElementById("answermodelneeded").style.display = "none";
     };
 
@@ -972,6 +985,8 @@
     }
 
     .topbar .timer {
+      position: absolute;
+      left: 40%;
       font-size: 14px;
       color: var(--muted)
     }
@@ -1209,7 +1224,6 @@
   <div class="topbar">
     <div class="brand">EXAM PORTAL</div>
     <div class="timer" id="countdown">Time Left: 00:00</div>
-    <button id="connectBtn" class="btn">🔌 Connect Arduino</button>
   </div>
 
 
@@ -1228,7 +1242,7 @@
           <p style="text-align:center;">Please look at the screen to start your exam.</p>
 
           <div style="display:flex; justify-content:center; margin-top:12px;">
-            <img src="image/fots_student.png" style="width:180px; border-radius:8px;">
+            <img src="image/Fots.png" style="width:180px; border-radius:8px;">
           </div>
         </div>
       </div>
@@ -1303,27 +1317,6 @@
 
   <script>
     //ARDUINO SERIAL CONNECTION
-    let port;
-    let writer;
-
-    document.getElementById('connectBtn').addEventListener('click', async () => {
-      try {
-        port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 9600 });
-        const textEncoder = new TextEncoderStream();
-        const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
-        writer = textEncoder.writable.getWriter();
-        alert("Connected to Arduino!");
-      } catch (err) {
-        alert("Connection failed: " + err);
-      }
-    });
-
-    async function sendToArduino(message) {
-      if (!writer) return;
-      await writer.write(message + "\n");
-      console.log("Sent to Arduino:", message);
-    }
     // ===============================================
 
 
@@ -1443,15 +1436,11 @@
         setVerification(false, "Looking away detected");
         if (window.allowStrikes) {
           registerStrikeOnce();
-          sendToArduino("STRIKE");
         }
       } else {
         examCard.classList.remove('alert');
         gazeBubble.classList.remove('alert');
         setVerification(true, "Face & eyes centered");
-        if (window.allowStrikes) {
-          sendToArduino("OK");
-        }
       }
       updateBubble();
     }
