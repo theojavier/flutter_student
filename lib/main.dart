@@ -50,9 +50,9 @@ class MyApp extends StatelessWidget {
             final location = state.uri.path;
             int selectedIndex = 0;
 
-            if (location.startsWith('/home'))
+            if (location.startsWith('/home')) {
               selectedIndex = 0;
-            else if (location.startsWith('/exam-list'))
+            } else if (location.startsWith('/exam-list'))
               selectedIndex = 1;
             else if (location.startsWith('/schedule'))
               selectedIndex = 2;

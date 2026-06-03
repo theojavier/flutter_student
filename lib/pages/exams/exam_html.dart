@@ -54,9 +54,8 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
     if (kIsWeb) {
       // --- RELOAD DETECTION ---
-      final nav = html.window.performance?.getEntriesByType("navigation");
+      final nav = html.window.performance.getEntriesByType("navigation");
       final isReload =
-          nav != null &&
           nav.isNotEmpty &&
           (nav.first as html.PerformanceNavigationTiming).type == "reload";
 

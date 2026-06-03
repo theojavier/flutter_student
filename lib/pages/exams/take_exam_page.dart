@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import '../../helpers/cheat_detector.dart';
 
 class TakeExamPage extends StatefulWidget {
   final String examId;
@@ -34,8 +33,8 @@ class _TakeExamPageState extends State<TakeExamPage>
   int? end;
   bool isWarningShown = false;
 
-  bool _hasCamera = false;
-  bool _checkingCamera = true;
+  final bool _hasCamera = false;
+  final bool _checkingCamera = true;
   MediaStream? _cameraStream;
 
   @override

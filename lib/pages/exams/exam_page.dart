@@ -31,7 +31,7 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
   int cheatingCount = 0;
   bool _examFinished = false;
   Timer? _saveDebounce;
-  RTCVideoRenderer _localRenderer = RTCVideoRenderer();
+  final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   MediaStream? _localStream;
   bool _showResultUI = false;
   Map<String, dynamic>? _resultData;
@@ -454,11 +454,13 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
         if (correct is List) {
           if (correct
               .map((c) => c.toString().toLowerCase())
-              .contains(ans.toLowerCase()))
+              .contains(ans.toLowerCase())) {
             computedScore++;
+          }
         } else if (correct != null) {
-          if (ans.toLowerCase() == correct.toString().toLowerCase())
+          if (ans.toLowerCase() == correct.toString().toLowerCase()) {
             computedScore++;
+          }
         }
       }
 
@@ -503,7 +505,7 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
       final snapshot = await resultRef.get();
       if (snapshot.exists) {
         setState(() {
-          _resultData = snapshot.data() as Map<String, dynamic>?;
+          _resultData = snapshot.data();
           _showResultUI = true;
         });
       }
@@ -744,10 +746,12 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
       );
     }
 
-    if (loading)
+    if (loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    if (questions.isEmpty)
+    }
+    if (questions.isEmpty) {
       return const Scaffold(body: Center(child: Text("No questions found")));
+    }
 
     final q = questions[currentIndex];
 
@@ -902,7 +906,7 @@ class _ExamPageState extends State<ExamPage> with WidgetsBindingObserver {
                   if (q.type.toLowerCase() == "matching")
                     DropdownButtonFormField<String>(
                       isExpanded: true,
-                      value: answers[currentIndex],
+                      initialValue: answers[currentIndex],
                       hint: const Text("Select match"),
                       items: matchingPool
                           .map(

@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'dart:async';
 //import 'dart:html' as html;
 
 class ExamResultPage extends StatefulWidget {
