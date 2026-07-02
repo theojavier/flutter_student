@@ -21,7 +21,6 @@ class ExamHistoryModel {
     this.submittedAt,
   });
 
-  /// Safer parsing: handles numbers coming as int/double/num/null
   factory ExamHistoryModel.fromDoc(DocumentSnapshot doc, String examId) {
     final data = (doc.data() as Map<String, dynamic>?) ?? {};
 

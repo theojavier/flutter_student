@@ -1,0 +1,16 @@
+{
+  "projects": {
+    "student": "rd-final",
+    "default": "rd-final"
+  },
+  "targets": {
+    "rd-final": {
+      "hosting": {
+        "student": [
+          "student-42ef4"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

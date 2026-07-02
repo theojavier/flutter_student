@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'nav_header.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
 import '../helpers/notifications_helper.dart';
 import '../widgets/notifications_list.dart';
+// import '../pages/exams/exam_html.dart';
 import '../pages/notifications/notification_item.dart';
 import 'dart:async';
-
+import '../../helpers/SecureStorageHelper.dart';
 //  Platform + Web detection
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
@@ -16,18 +18,20 @@ import 'dart:io' show Platform;
 class ResponsiveScaffold extends StatefulWidget {
   final int selectedIndex;
   final Widget child;
+  final String? userId;
 
   const ResponsiveScaffold({
     super.key,
     required this.selectedIndex,
     required this.child,
+    this.userId,
   });
 
   @override
-  State<ResponsiveScaffold> createState() => _ResponsiveScaffoldState();
+  State<ResponsiveScaffold> createState() => ResponsiveScaffoldState();
 }
 
-class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
+class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   String? profileImageUrl;
   String headerName = "Loading...";
   String headerSection = "";
@@ -35,7 +39,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   Map<String, dynamic>? _cachedProfile;
   bool _isDrawerOpen = false;
 
-  late final List<Widget> _pages;
+  // late final List<Widget> _pages;
 
   @override
   void initState() {
@@ -50,8 +54,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   StreamSubscription<DocumentSnapshot>? _profileSubscription;
 
   Future<void> _loadUserProfile() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('userId');
+    final userId = widget.userId ?? await _getUserIdFromPrefs();
 
     if (userId == null) {
       if (_cachedProfile == null && mounted) {
@@ -71,6 +74,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     if (_cachedProfile != null) {
       _updateProfileUI(_cachedProfile!);
     }
+    _userId = userId;
 
     // cancel old subscription before listening
     await _profileSubscription?.cancel();
@@ -94,6 +98,15 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
           final data = doc.data()!;
           _updateProfileUI(data);
         });
+  }
+
+  void refreshUserProfile() {
+    _loadUserProfile();
+  }
+
+  Future<String?> _getUserIdFromPrefs() async {
+    return await SecureStorageHelper.read('userId');
+    ;
   }
 
   void _refreshProfile() async {
@@ -197,7 +210,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               title: GestureDetector(
                 onTap: () => context.go('/home'),
                 child: Image.asset(
-                  'assets/image/fots_student.png',
+                  'assets/image/Fots.png',
                   height: 80,
                   width: 120,
                 ),
@@ -211,7 +224,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               title: GestureDetector(
                 onTap: () => context.go('/home'),
                 child: Image.asset(
-                  'assets/image/fots_student.png',
+                  'assets/image/Fots.png',
                   height: 80,
                   width: 120,
                 ),
@@ -257,8 +270,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                       context.go('/profile');
                     },
                     onHistoryTap: () async {
-                      final prefs = await SharedPreferences.getInstance();
-                      final studentId = prefs.getString('studentId');
+                      final studentId = await SecureStorageHelper.read(
+                        'studentId',
+                      );
                       context.go(
                         '/exam-history',
                         extra: {'studentId': studentId},
@@ -342,6 +356,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
               .collection('users')
               .doc(_userId)
               .collection('notifications')
+              .orderBy('createdAt', descending: true)
               .snapshots(),
           builder: (context, snap) {
             final unread = snap.hasData
@@ -403,10 +418,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                     right: 8,
                     top: 8,
                     child: Container(
-                      color: Color(0xFF0F2B45),
                       padding: const EdgeInsets.all(4),
                       decoration: const BoxDecoration(
-                        color: Colors.red,
+                        color: Color(0xFF0F2B45),
                         shape: BoxShape.circle,
                       ),
                       constraints: const BoxConstraints(
@@ -432,10 +446,24 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
         icon: const Icon(Icons.more_vert, color: Colors.white),
         onSelected: (value) async {
           if (value == 'logout') {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.clear();
-            _cachedProfile = null;
-            if (mounted) context.go('/login');
+            try {
+              await FirebaseAuth.instance.signOut();
+
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.clear();
+              _cachedProfile = null;
+              profileImageUrl = null;
+              headerName = "Logged out";
+              await Future.delayed(const Duration(milliseconds: 50));
+
+              if (!mounted) return;
+              context.go('/login');
+            } catch (e) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('Logout failed: $e')));
+            }
           }
         },
         itemBuilder: (ctx) => const [

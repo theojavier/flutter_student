@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 class ForgotPage extends StatefulWidget {
   const ForgotPage({super.key});
@@ -34,47 +35,28 @@ class _ForgotPageState extends State<ForgotPage> {
     setState(() => isLoading = true);
 
     try {
-      // Verify Student ID exists first
-      final query = await db
-          .collection("users")
-          .where("studentId", isEqualTo: studentId)
-          .limit(1)
-          .get();
+      final callable = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('resetPasswordById');
 
-      if (query.docs.isEmpty) {
-        _showError("No account found with Student ID $studentId");
-        setState(() => isLoading = false);
-        return;
-      }
+      await callable.call({"id": studentId, "email": email});
 
-      final data = query.docs.first.data();
-      final firestoreEmail = data["email"];
-
-      //  Check if entered email matches Firestore email
-      if (firestoreEmail != email) {
-        _showError("Email does not match this Student ID");
-        setState(() => isLoading = false);
-        return;
-      }
-
-      //  If matched, send reset email
       await auth.sendPasswordResetEmail(email: email);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text("Password reset email sent to $email"),
-             backgroundColor: Colors.green,
+            backgroundColor: Colors.green,
           ),
         );
-        Future.delayed(const Duration(seconds: 1), () {
-          // If using go_router
-          context.go('/login');
 
-          // OR if using Navigator
-          // Navigator.pop(context);
+        Future.delayed(const Duration(seconds: 1), () {
+          context.go('/login');
         });
       }
+    } on FirebaseFunctionsException catch (e) {
+      _showError(e.message ?? "Verification failed");
     } on FirebaseAuthException catch (e) {
       _showError(e.message ?? "Error sending reset email");
     } catch (e) {
@@ -91,7 +73,20 @@ class _ForgotPageState extends State<ForgotPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xFF0D1014),
+      appBar: AppBar(
+        title: const Text(
+          "Forgot Password",
+          style: TextStyle(color: Color(0xFFE6F0F8)),
+        ),
+        backgroundColor: Color.fromARGB(255, 14, 45, 73),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Color(0xFFE6F0F8)),
+          onPressed: () {
+            context.go('/login');
+          },
+        ),
+      ),
+      backgroundColor: const Color(0xFF0F2B45),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -115,6 +110,7 @@ class _ForgotPageState extends State<ForgotPage> {
                   style: TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     labelText: "Enter Student ID",
+                    labelStyle: const TextStyle(color: Colors.white),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                       borderSide: const BorderSide(color: Colors.white70),
@@ -134,6 +130,7 @@ class _ForgotPageState extends State<ForgotPage> {
                   style: TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     labelText: "Enter Email",
+                    labelStyle: const TextStyle(color: Colors.white),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                       borderSide: const BorderSide(color: Colors.white70),

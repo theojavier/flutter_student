@@ -2,10 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../helpers/SecureStorageHelper.dart';
 
 class TakeExamPage extends StatefulWidget {
   final String examId;
@@ -33,9 +34,9 @@ class _TakeExamPageState extends State<TakeExamPage>
   int? end;
   bool isWarningShown = false;
 
-  final bool _hasCamera = false;
-  final bool _checkingCamera = true;
-  MediaStream? _cameraStream;
+  // bool _hasCamera = false;
+  // bool _checkingCamera = true;
+  // MediaStream? _cameraStream;
 
   @override
   void initState() {
@@ -44,6 +45,13 @@ class _TakeExamPageState extends State<TakeExamPage>
     _loadStudentId();
   }
 
+  // void _showSnack(String msg, {Color color = Colors.red}) {
+  //   if (!mounted) return;
+  //   ScaffoldMessenger.of(
+  //     context,
+  //   ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
+  // }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -51,9 +59,9 @@ class _TakeExamPageState extends State<TakeExamPage>
   }
 
   Future<void> _loadStudentId() async {
-    final prefs = await SharedPreferences.getInstance();
+    final storedstudentId = await SecureStorageHelper.read('studentId');
     setState(() {
-      studentId = prefs.getString("studentId");
+      studentId = storedstudentId;
     });
   }
 
@@ -81,8 +89,8 @@ class _TakeExamPageState extends State<TakeExamPage>
           builder: (ctx) {
             // Auto-close after 5 seconds
             Future.delayed(const Duration(seconds: 5), () {
-              if (Navigator.of(ctx).canPop()) {
-                Navigator.of(ctx).pop();
+              if (ctx.mounted && Navigator.canPop(ctx)) {
+                Navigator.pop(ctx);
               }
             });
 
@@ -159,8 +167,12 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   @override
   Widget build(BuildContext context) {
-    if (studentId == null) {
-      return const Scaffold(body: Center(child: Text(" Not logged in")));
+    final user = FirebaseAuth.instance.currentUser;
+    final uid = user?.uid;
+    if (uid == null) {
+      return const Scaffold(
+        body: Center(child: Text("User not authenticated")),
+      );
     }
 
     return Scaffold(
@@ -206,12 +218,145 @@ class _TakeExamPageState extends State<TakeExamPage>
                     return const Center(child: CircularProgressIndicator());
                   }
                   if (!snapshot.data!.exists) {
-                    return const Center(child: Text("Exam not found"));
+                    // Fallback: examResults
+                    return StreamBuilder<DocumentSnapshot>(
+                      stream: db
+                          .collection("examResults")
+                          .doc(widget.examId)
+                          .collection("students")
+                          .doc(FirebaseAuth.instance.currentUser!.uid)
+                          .snapshots(),
+                      builder: (context, resultSnap) {
+                        if (!resultSnap.hasData || !resultSnap.data!.exists) {
+                          return const Center(child: Text("Exam not found", style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 25,
+                              fontWeight: FontWeight.bold,
+                            ),));
+                        }
+
+                        final resultData =
+                            resultSnap.data!.data() as Map<String, dynamic>? ??
+                            {};
+
+                        final subject = resultData["subject"];
+                        final startedAt = resultData["startedAt"];
+                        final submittedAt = resultData["submittedAt"];
+                        final status = resultData["status"];
+
+                        return Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (subject != null)
+                                Text(
+                                  subject,
+                                  style: const TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFFE6F0F8),
+                                  ),
+                                ),
+                              if (startedAt != null)
+                                Text(
+                                  "Started: ${DateFormat("MMM d, yyyy h:mm a").format(startedAt.toDate())}",
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    color: Color(0xFFE6F0F8),
+                                  ),
+                                )
+                              else if (submittedAt != null)
+                                Text(
+                                  "Submitted: ${DateFormat("MMM d, yyyy h:mm a").format(submittedAt.toDate())}",
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    color: Color(0xFFE6F0F8),
+                                  ),
+                                ),
+                              if (status != null)
+                                Text(
+                                  "Status: $status",
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    color: Color(0xFFE6F0F8),
+                                  ),
+                                ),
+                              const SizedBox(height: 16),
+
+                              // Instructions Box (added here)
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F3B61),
+                                  border: Border.all(
+                                    color: Colors.red,
+                                    width: 2,
+                                  ),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: RichText(
+                                  textAlign: TextAlign.start,
+                                  text: const TextSpan(
+                                    style: TextStyle(
+                                      color: Color(0xFFE6F0F8),
+                                      fontSize: 14,
+                                      height: 1.4,
+                                    ),
+                                    children: [
+                                      TextSpan(
+                                        text: "IMPORTANT:\n",
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text:
+                                            "Instructions:\n- Don’t switch tabs\n- Don’t leave the app\n- Look at the screen it may trigger as cheating.",
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (submittedAt != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: Text(
+                                    "Submitted: ${DateFormat("MMM d, yyyy h:mm a").format(submittedAt.toDate())}",
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      color: Color(0xFFE6F0F8),
+                                    ),
+                                  ),
+                                ),
+
+                              const Spacer(),
+
+                              // Same View Result button design
+                              if (status == "completed")
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.viewResult,
+                                  ),
+                                  child: const Text("View Result"),
+                                  onPressed: () {
+                                    context.goNamed(
+                                      'examResult',
+                                      pathParameters: {'examId': widget.examId},
+                                    );
+                                  },
+                                ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
                   }
 
                   final data = snapshot.data!.data() as Map<String, dynamic>;
                   final subject = data["subject"] ?? "Unknown";
-                  final teacherId = data["teacherId"] ?? "";
+                  // final teacherId = data["teacherId"] ?? "";
                   start =
                       widget.startMillis ??
                       data["startTime"]?.toDate().millisecondsSinceEpoch;
@@ -277,29 +422,12 @@ class _TakeExamPageState extends State<TakeExamPage>
                         Divider(color: Colors.grey[400]),
 
                         //  Teacher name
-                        FutureBuilder<DocumentSnapshot>(
-                          future: teacherId.isNotEmpty
-                              ? db.collection("users").doc(teacherId).get()
-                              : Future.value(null),
-                          builder: (context, teacherSnap) {
-                            String teacherText = "Teacher: Unknown";
-                            if (teacherSnap.hasData &&
-                                teacherSnap.data != null &&
-                                teacherSnap.data!.exists) {
-                              final teacherData =
-                                  teacherSnap.data!.data()
-                                      as Map<String, dynamic>;
-                              final name = teacherData["name"];
-                              if (name != null) teacherText = "Teacher: $name";
-                            }
-                            return Text(
-                              teacherText,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                color: Color(0xFFE6F0F8),
-                              ),
-                            );
-                          },
+                        Text(
+                          "Teacher: ${data["creator"] ?? data["teacher"] ?? data["createdBy"] ?? "Unknown"}",
+                          style: const TextStyle(
+                            fontSize: 16,
+                            color: Color(0xFFE6F0F8),
+                          ),
                         ),
 
                         //  Duration
@@ -319,8 +447,8 @@ class _TakeExamPageState extends State<TakeExamPage>
                           stream: db
                               .collection("examResults")
                               .doc(widget.examId)
-                              .collection(studentId!)
-                              .doc("result")
+                              .collection("students")
+                              .doc(FirebaseAuth.instance.currentUser!.uid)
                               .snapshots(),
                           builder: (context, resultSnap) {
                             if (!resultSnap.hasData) {
@@ -346,7 +474,7 @@ class _TakeExamPageState extends State<TakeExamPage>
                                     'examResult',
                                     pathParameters: {
                                       'examId': widget.examId,
-                                      'studentId': studentId!,
+                                      //'studentId': studentId!,
                                     },
                                   );
                                 },
@@ -429,45 +557,35 @@ class _TakeExamPageState extends State<TakeExamPage>
                                   return; // Stop here if no camera
                                 }
 
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      "Camera test completed!",
-                                    ),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-
-                                await db
-                                    .collection("examResults")
-                                    .doc(widget.examId)
-                                    .set({
-                                      "teacherId":
-                                          teacherId, // from exam document
-                                    }, SetOptions(merge: true));
-
                                 // Save student exam result
                                 await db
                                     .collection("examResults")
                                     .doc(widget.examId)
-                                    .collection(studentId!)
-                                    .doc("result")
+                                    .collection("students")
+                                    .doc(uid)
                                     .set({
                                       "examId": widget.examId,
+                                      "uid": uid,
                                       "studentId": studentId,
                                       "status": "in-progress",
                                       "cheatingCount": 0,
                                       "currentIndex": 0,
+                                      "subject": subject,
                                     });
 
-                                // Start Exam
                                 context.goNamed(
                                   'examhtml',
-                                  pathParameters: {
-                                    "examId": widget.examId,
-                                    "studentId": studentId!,
-                                  },
+                                  pathParameters: {"examId": widget.examId},
                                 );
+
+                                // Start Exam
+                                // context.goNamed(
+                                //   'examhtml',
+                                //   pathParameters: {
+                                //     "examId": widget.examId,
+                                //     "studentId": studentId!,
+                                //   },
+                                // );
                               },
                             );
                           },

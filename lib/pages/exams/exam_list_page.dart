@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/exam_model.dart';
 import '../../widgets/exam_item_card.dart';
+import '../../helpers/SecureStorageHelper.dart';
 
 class ExamListPage extends StatefulWidget {
   const ExamListPage({super.key});
@@ -21,42 +21,56 @@ class _ExamListPageState extends State<ExamListPage> {
   @override
   void initState() {
     super.initState();
-    _initSessionAndLoadStudent();
+    _loadPrefs();
+    //_initSessionAndLoadStudent();
   }
+  Future<void> _loadPrefs() async {
+  final studentId = await SecureStorageHelper.read('studentId');
+  final program = await SecureStorageHelper.read('program');
+  final yearBlock = await SecureStorageHelper.read('yearBlock');
 
-  Future<void> _initSessionAndLoadStudent() async {
-    final prefs = await SharedPreferences.getInstance();
-    final sid = prefs.getString('studentId');
-    if (sid == null) {
-      setState(() {
-        _studentId = null;
-        _loading = false;
-      });
-      return;
-    }
+  setState(() {
+    _studentId = studentId;
+    _program = program;
+    _yearBlock = yearBlock;
+    _loading = false;
+  });
+}
 
-    setState(() => _studentId = sid);
 
-    final userQuery = await _db
-        .collection('users')
-        .where('studentId', isEqualTo: sid)
-        .limit(1)
-        .get();
+  // Future<void> _initSessionAndLoadStudent() async {
+  //   final prefs = await SharedPreferences.getInstance();
+  //   final sid = prefs.getString('studentId');
+  //   if (sid == null) {
+  //     setState(() {
+  //       _studentId = null;
+  //       _loading = false;
+  //     });
+  //     return;
+  //   }
 
-    if (userQuery.docs.isNotEmpty) {
-      final userDoc = userQuery.docs.first;
-      setState(() {
-        _program = userDoc.data()['program'] as String?;
-        _yearBlock = userDoc.data()['yearBlock'] as String?;
-        _loading = false;
-      });
-    } else {
-      setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No user record found for studentId: $sid')),
-      );
-    }
-  }
+  //   setState(() => _studentId = sid);
+
+  //   final userQuery = await _db
+  //       .collection('users')
+  //       .where('studentId', isEqualTo: sid)
+  //       .limit(1)
+  //       .get();
+
+  //   if (userQuery.docs.isNotEmpty) {
+  //     final userDoc = userQuery.docs.first;
+  //     setState(() {
+  //       _program = userDoc.data()['program'] as String?;
+  //       _yearBlock = userDoc.data()['yearBlock'] as String?;
+  //       _loading = false;
+  //     });
+  //   } else {
+  //     setState(() => _loading = false);
+  //     ScaffoldMessenger.of(context).showSnackBar(
+  //       SnackBar(content: Text('No user record found for studentId: $sid')),
+  //     );
+  //   }
+  // }
 
   Map<String, DateTime> _weekRange() {
     final now = DateTime.now();
@@ -146,7 +160,7 @@ class _ExamListPageState extends State<ExamListPage> {
                     return const Center(
                       child: Text(
                         'No exams scheduled for this week',
-                        style: TextStyle(fontSize: 16),
+                        style: TextStyle(fontSize: 16, color: Color(0xFFE6F0F8),),
                       ),
                     );
                   }

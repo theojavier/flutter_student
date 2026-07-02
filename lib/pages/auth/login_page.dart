@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../helpers/SecureStorageHelper.dart';
+
+final secureStorage = FlutterSecureStorage();
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -47,79 +51,59 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => isLoading = true);
 
     try {
-      // Get Firestore user profile by Student ID
-      final query = await db
-          .collection("users")
-          .where("studentId", isEqualTo: studentId)
-          .limit(1)
-          .get();
-
-      if (query.docs.isEmpty) {
-        _showError("Student ID not found");
-        setState(() => isLoading = false);
-        return;
-      }
-
-      final doc = query.docs.first;
-      final data = doc.data();
-
-      final email = data["email"];
-      final uid = data["UID"];
-      final role = data["role"];
-
-      if (email == null || uid == null) {
-        _showError("Account setup error. Please contact admin.");
-        setState(() => isLoading = false);
-        return;
-      }
-
-      // Authenticate with FirebaseAuth
-      final userCredential = await auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
+      // Call your Cloud Function
+      final functions = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
       );
 
-      // UID consistency check
-      if (userCredential.user == null || userCredential.user!.uid != uid) {
-        _showError("Account mismatch. Please contact admin.");
-        await auth.signOut();
+      final result = await functions
+    .httpsCallable('loginWithStudentId')
+    .call({
+      'studentId': studentId,
+    });
+
+
+      final data = result.data;
+      final email = data['email'];
+      final role = data['role'];
+      final program = data['program'];
+      final yearBlock = data['yearBlock'];
+
+      // Sign in with the custom token
+      final userCredential =
+    await auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+      if (userCredential.user == null) {
+        _showError("Login failed: no user returned");
         setState(() => isLoading = false);
         return;
       }
 
       // Proceed only if student role
       if (role.toString().toLowerCase() == "student") {
-        await db.collection("users").doc(doc.id).update({
-          "lastLogin": FieldValue.serverTimestamp(),
-        });
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString("userId", doc.id);
-        await prefs.setString("studentId", data["studentId"]);
+        await SecureStorageHelper.write("userId", userCredential.user!.uid);
+        await SecureStorageHelper.write("studentId", studentId);
 
-        if (data.containsKey("program")) {
-          await prefs.setString("program", data["program"]);
+        if (program != null) {
+          await SecureStorageHelper.write("program", program);
         }
-        if (data.containsKey("yearBlock")) {
-          await prefs.setString("yearBlock", data["yearBlock"]);
+        if (yearBlock != null) {
+          await SecureStorageHelper.write("yearBlock", yearBlock);
         }
 
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("Welcome Student!")));
-
-        // Start notifications listener
-        final program = data["program"];
-        final yearBlock = data["yearBlock"];
         if (program != null && yearBlock != null) {
-          startExamListener(doc.id, program, yearBlock);
+          startExamListener(userCredential.user!.uid, program, yearBlock);
         }
 
         if (mounted) context.go('/home');
       } else {
         _showError("Access denied (not a student)");
       }
-    } on FirebaseAuthException catch (e) {
-      _showError(e.message ?? "Invalid Student ID or Password");
+    } on FirebaseFunctionsException catch (e) {
+      _showError(e.message ?? "Login failed");
     } catch (e) {
       _showError("Login failed: $e");
     }
@@ -146,7 +130,7 @@ class _LoginPageState extends State<LoginPage> {
               await notifRef.set({
                 'viewed': false,
                 'subject': examDoc['subject'],
-                'createdAt': examDoc['createdAt'],
+                'createdAt': examDoc.data().containsKey('createdAt') ? examDoc['createdAt'] : Timestamp.now(),
               });
               debugPrint("Created notif for $userId -> exam $examId");
             }
@@ -182,7 +166,7 @@ class _LoginPageState extends State<LoginPage> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Image.asset(
-                "assets/image/fots_student.png",
+                "assets/image/Fots.png",
                 width: 200,
                 height: 200,
               ),

@@ -1,4 +1,3 @@
-//C:\Users\acer\OneDrive\Desktop\theo\my_flutter_app\lib\helpers\exam_cheat_detector.dart
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:usb_serial/usb_serial.dart';
