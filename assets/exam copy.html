@@ -33,6 +33,14 @@
     } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 
     import {
+      getDatabase,
+      ref,
+      set,
+      onDisconnect,
+      serverTimestamp as rtdbServerTimestamp
+    } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+
+    import {
       getAuth,
       onAuthStateChanged,
       setPersistence,
@@ -57,11 +65,17 @@
     // Initialize Firebase
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
+    const rtdb = getDatabase(app);
     const auth = getAuth(app);
     let authReady = false;
     const functions = getFunctions(app, 'asia-southeast1');
     window.functions = functions;
     window.httpsCallable = httpsCallable;
+    window.rtdb = rtdb;
+    window.heartbeatInterval = null;
+    window.presenceRef = null;
+    window.examToken = null;
+    window.examTokenRefreshInterval = null;
     async function safeSetDoc(ref, data, options) {
       const user = auth.currentUser;
       if (!user) throw new Error("No user signed in");
@@ -69,10 +83,26 @@
       return setDoc(ref, data, options);
     }
 
+    function startExamTokenRefresh() {
+      if (window.examTokenRefreshInterval) clearInterval(window.examTokenRefreshInterval);
+
+      window.examTokenRefreshInterval = setInterval(async () => {
+        try {
+          if (auth.currentUser) {
+            window.examToken = await getIdToken(auth.currentUser, true);
+          }
+        } catch (err) {
+          console.warn("Token refresh failed:", err);
+        }
+      }, 10 * 60 * 1000);
+    }
+
     onAuthStateChanged(auth, async (user) => {
       if (user) {
         authReady = true;
         window.authUid = user.uid;
+        window.examToken = await getIdToken(user, true);
+        startExamTokenRefresh();
         console.log("Iframe sees same user:", user.uid);
         await setPersistence(auth, browserLocalPersistence);
 
@@ -91,6 +121,14 @@
     window.examFinished = window.examFinished ?? false;
     window.disableGazeDetection = false;
     window.cheatingCount = parseInt(localStorage.getItem("cheatingCount") ?? "0", 10);
+    window.cheatClipIndex = parseInt(localStorage.getItem("cheatClipIndex") ?? "0", 10);
+    window.cheatCaptureStream = null;
+    window.cameraCaptureStream = null;
+    window.cheatClipWindowStart = null;
+    window.cheatClipWindowStartCount = null;
+    const CHEAT_CLIP_DURATION_MS = 3000;
+    const CHEAT_GROUP_WINDOW_MS = 3000;
+    const CHEAT_CLIP_MAX_BYTES = 2 * 1024 * 1024;
     let studentId;
     let answers = {};
     // Flag to track if DOMContentLoaded ran
@@ -160,6 +198,75 @@
       return doc(window.db, "examResults", examId, "students", uid);
     }
 
+    async function getCurrentIdToken() {
+      const user = auth.currentUser;
+      if (!user) return window.examToken || null;
+      window.examToken = await getIdToken(user, true);
+      return window.examToken;
+    }
+
+    async function setExamPresence(examId, uid, online = true) {
+      if (!examId || !uid) return;
+      try {
+        const presenceRef = ref(rtdb, `examPresence/${examId}/${uid}`);
+        window.presenceRef = presenceRef;
+        await set(presenceRef, {
+          uid,
+          online,
+          lastSeen: Date.now(),
+          updatedAt: Date.now(),
+          status: online ? "in-progress" : "offline"
+        });
+        if (online) {
+          onDisconnect(presenceRef).set({
+            uid,
+            online: false,
+            lastSeen: Date.now(),
+            disconnectedAt: Date.now(),
+            status: "offline"
+          });
+        }
+      } catch (err) {
+        console.warn("Presence update failed:", err);
+      }
+    }
+
+    async function sendExamHeartbeat() {
+      if (!window.examData?.examId || !window.authUid || window.examFinished) return;
+
+      try {
+        const heartbeatFn = httpsCallable(functions, "recordExamHeartbeat");
+        await heartbeatFn({
+          examId: window.examData.examId,
+          studentId: window.authUid
+        });
+
+        await setExamPresence(window.examData.examId, window.authUid, true);
+      } catch (err) {
+        console.warn("Heartbeat failed:", err);
+      }
+    }
+
+    function startExamHeartbeat() {
+      if (window.heartbeatInterval) clearInterval(window.heartbeatInterval);
+      sendExamHeartbeat();
+      window.heartbeatInterval = setInterval(() => {
+        if (!window.examFinished) {
+          sendExamHeartbeat();
+        }
+      }, 60000);
+    }
+
+    function stopExamHeartbeat() {
+      if (window.heartbeatInterval) {
+        clearInterval(window.heartbeatInterval);
+        window.heartbeatInterval = null;
+      }
+      if (window.examData?.examId && window.authUid) {
+        setExamPresence(window.examData.examId, window.authUid, false);
+      }
+    }
+
 
     // Shared function
     async function restoreOrStartExam() {
@@ -197,6 +304,11 @@
 
       // Kick off exam flow if fresh
       markInProgress();
+      if (!window.examToken && auth.currentUser) {
+        window.examToken = await getCurrentIdToken();
+      }
+      await setExamPresence(examId, studentId, true);
+      startExamHeartbeat();
       startCountdownFromFirestore(examId);
       await loadExamQuestions(examId);
       window.strikesLoadedPromise = loadExistingStrikes();
@@ -270,6 +382,254 @@
 
 
 
+    async function startCameraCapture() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.warn("Camera capture is not supported in this browser.");
+        return false;
+      }
+
+      if (window.cameraCaptureStream && window.cameraCaptureStream.active) {
+        return true;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        window.cameraCaptureStream = stream;
+        return true;
+      } catch (err) {
+        console.warn("Camera permission failed or was cancelled:", err);
+        return false;
+      }
+    }
+
+    window.receiveScreenStream = function receiveScreenStream(stream) {
+      if (!stream) return false;
+      const tracks = stream.getVideoTracks ? stream.getVideoTracks() : [];
+      if (!tracks || tracks.length === 0) {
+        console.warn("Received screen stream is invalid or has no video tracks.");
+        return false;
+      }
+
+      const track = tracks[0];
+      const settings = track.getSettings?.() || {};
+      const displaySurface = settings.displaySurface || "monitor";
+      const allowed = displaySurface === "monitor" || displaySurface === "window";
+
+      if (!allowed) {
+        stream.getTracks().forEach((t) => t.stop());
+        console.warn("Rejected non-full-screen screen stream.");
+        return false;
+      }
+
+      if (window.cheatCaptureStream && window.cheatCaptureStream !== stream) {
+        window.cheatCaptureStream.getTracks().forEach((t) => t.stop());
+      }
+
+      window.cheatCaptureStream = stream;
+      track.addEventListener("ended", () => {
+        if (window.cheatCaptureStream === stream) {
+          window.cheatCaptureStream = null;
+        }
+      });
+
+      return true;
+    };
+    window.__inheritedParentScreen = false;
+function tryInheritParentScreenStream() {
+  if (window.cheatCaptureStream && window.cheatCaptureStream.active) return true;
+  try {
+    const parentStream = window.parent && window.parent.__examScreenStream;
+    if (parentStream) {
+      const ok = window.receiveScreenStream(parentStream);
+      if (ok) {
+        window.__inheritedParentScreen = true;
+        try { window.parent.__examScreenStream = null; } catch (_) {}
+        console.log("Inherited screen-share stream from parent app.");
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn("Could not inherit parent screen stream:", err);
+  }
+  return false;
+}
+tryInheritParentScreenStream();
+
+    async function startScreenCapture() {
+      if (tryInheritParentScreenStream()) return true;
+      if (window.cheatCaptureStream && window.cheatCaptureStream.active) {
+        return true;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        console.warn("Screen capture is not supported in this browser.");
+        return false;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            displaySurface: "monitor",
+            frameRate: 10,
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+
+        const track = stream.getVideoTracks()[0];
+        if (!track) {
+          stream.getTracks().forEach((t) => t.stop());
+          throw new Error("No screen track available");
+        }
+
+        const settings = track.getSettings?.() || {};
+        const displaySurface = settings.displaySurface || "";
+        const isFullScreenShare = displaySurface === "monitor" || displaySurface === "window";
+
+        if (!isFullScreenShare) {
+          stream.getTracks().forEach((t) => t.stop());
+          console.warn("Full screen share required; ignoring tab/window share.");
+          return false;
+        }
+
+        track.addEventListener("ended", () => {
+          window.cheatCaptureStream = null;
+        });
+
+        window.cheatCaptureStream = stream;
+        return true;
+      } catch (err) {
+        console.warn("Screen capture permission failed or was cancelled:", err);
+        return false;
+      }
+    }
+
+    function getCheatGroupRange() {
+      const currentCount = Number(window.cheatingCount || 0);
+      const now = Date.now();
+
+      if (!window.cheatClipWindowStart || !window.cheatClipWindowStartCount) {
+        window.cheatClipWindowStart = now;
+        window.cheatClipWindowStartCount = currentCount;
+      }
+
+      if (now - window.cheatClipWindowStart > CHEAT_GROUP_WINDOW_MS) {
+        window.cheatClipWindowStart = now;
+        window.cheatClipWindowStartCount = currentCount;
+      }
+
+      return {
+        start: Number(window.cheatClipWindowStartCount || 0),
+        end: currentCount
+      };
+    }
+
+    function pickMimeType() {
+      const types = [
+        "video/webm;codecs=vp9",
+        "video/webm;codecs=vp8",
+        "video/webm",
+        "video/mp4"
+      ];
+
+      return types.find(type => MediaRecorder.isTypeSupported(type)) || "";
+    }
+
+    async function recordCheatClip(examId) {
+      if (!examId) return;
+
+      const clipRange = getCheatGroupRange();
+      const currentCheatCount = Number(window.cheatingCount || 0);
+      const currentClipIndex = (Number(window.cheatClipIndex) || 0) + 1;
+      window.cheatClipIndex = currentClipIndex;
+      localStorage.setItem("cheatClipIndex", String(window.cheatClipIndex));
+
+      const captureScreen = await startScreenCapture();
+      const captureCamera = await startCameraCapture();
+
+      if (!captureScreen && !captureCamera) {
+        console.warn("Skipping cheat clip upload because neither screen nor camera capture is available.");
+        return;
+      }
+
+      const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
+
+      async function uploadStream(stream, kind) {
+        if (!stream || !stream.active) return;
+
+        const recorder = new MediaRecorder(stream, {
+          mimeType: pickMimeType() || undefined,
+          videoBitsPerSecond: 800000,
+        });
+
+        const chunks = [];
+        recorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) chunks.push(event.data);
+        };
+
+        const stopped = new Promise((resolve) => {
+          recorder.onstop = resolve;
+        });
+
+        recorder.start();
+        setTimeout(() => {
+          if (recorder.state !== "inactive") recorder.stop();
+        }, CHEAT_CLIP_DURATION_MS);
+
+        await stopped;
+
+        const contentType = recorder.mimeType && recorder.mimeType.startsWith("video/mp4")
+          ? "video/mp4"
+          : "video/webm";
+
+        const blob = new Blob(chunks, { type: contentType });
+        const { data } = await requestFn({
+          examId,
+          occurredAt: Date.now(),
+          cheatCount: currentCheatCount,
+          startCheatCount: clipRange.start,
+          endCheatCount: clipRange.end,
+          parts: {
+            ...(captureScreen ? { screen: contentType } : {}),
+            ...(captureCamera ? { camera: contentType } : {}),
+          },
+          kind,
+          contentType,
+        });
+
+        const upload = data?.uploads?.[kind];
+        if (!upload?.uploadUrl) {
+          throw new Error(`No signed URL returned for ${kind} clip`);
+        }
+
+        const uploadRes = await fetch(upload.uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": upload.contentType,
+            "x-goog-content-length-range": `0,${upload.maxBytes || 3 * 1024 * 1024}`,
+          },
+          body: blob,
+        });
+
+        if (!uploadRes.ok) {
+          throw new Error(`${kind} clip upload failed with status ${uploadRes.status}`);
+        }
+
+        console.log(`${kind} cheat clip uploaded:`, upload.filePath);
+      }
+
+      try {
+        await uploadStream(window.cheatCaptureStream, "screen");
+        await uploadStream(window.cameraCaptureStream, "camera");
+      } catch (err) {
+        console.error("Cheat clip upload error:", err);
+      }
+    }
+
     window.registerStrikeOnce = (function () {
       let lastAway = 0;
       return async function registerStrikeOnce() {
@@ -296,13 +656,18 @@
           await safeSetDoc(resultRef, {
             cheatingCount: increment(1)
           }, { merge: true });
+
+          try {
+            await recordCheatClip(examId);
+          } catch (clipErr) {
+            console.error("recordCheatClip failed:", clipErr);
+          }
         }
 
         console.log("Strike registered:", window.cheatingCount);
-        sendToArduino("STRIKE");
       };
     })();
-    
+
 
 
     async function pushStrikeToFirestore(examId, studentId) {
@@ -380,6 +745,7 @@
         }
 
         // Use the locally scoped functions and httpsCallable
+        stopExamHeartbeat();
         const submitExamFunction = httpsCallable(functions, 'submitExam');
 
         const result = await submitExamFunction({
@@ -400,11 +766,7 @@
 
 
     function handleSuccessfulSubmission(examId, result) {
-      // Clear sessionStorage
-      sessionStorage.clear();
-
-      // Clear localStorage
-      localStorage.clear();
+      clearExamStorage();
 
       window.examFinished = true;
       window.questions = [];
@@ -412,7 +774,6 @@
       window.examData = null;
       window.cheatingCount = 0;
       window.strikes = 0;
-      sessionStorage.clear();
 
       // Stop camera if running
       try { window.camera?.stop?.(); } catch (_) { }
@@ -425,11 +786,7 @@
         }, "*");
       } else {
         console.error("aaaaaa");
-        // Clear sessionStorage
-        sessionStorage.clear();
-
-        // Clear localStorage
-        localStorage.clear();
+        clearExamStorage();
 
         window.examFinished = true;
         window.questions = [];
@@ -437,7 +794,6 @@
         window.examData = null;
         window.cheatingCount = 0;
         window.strikes = 0;
-        sessionStorage.clear();
         window.parent.postMessage({
           action: 'finishExam',
           examId: examId,
@@ -483,11 +839,7 @@
         if (remainingMs <= 0) {
           clearInterval(timer);
           countdownEl.textContent = "Time's up!";
-          // Clear sessionStorage
-          sessionStorage.clear();
-
-          // Clear localStorage
-          localStorage.clear();
+   clearExamStorage();
 
           window.markIncompleteIfNeeded2cloudfunction();
           window.parent.postMessage({
@@ -560,43 +912,79 @@
           return;
         }
 
-        await fetch("https://asia-southeast1-rd-final.cloudfunctions.net/markIncomplete", {
+        const token = await getCurrentIdToken();
+        if (!token) {
+          console.warn("No ID token available for markIncomplete");
+          return;
+        }
+
+        window.examToken = token;
+
+        const res = await fetch("https://asia-southeast1-rd-final.cloudfunctions.net/markIncomplete", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
           body: JSON.stringify({ examId, uid }),
           keepalive: true
         });
 
-
-        console.log("Incomplete exam marked successfully");
+        const result = await res.json().catch(() => ({}));
+        console.log("Incomplete exam marked successfully", result);
       } catch (err) {
         console.error("Failed to mark incomplete:", err);
       }
     };
+    const EXAM_SESSION_KEYS = ["examId", "examStarted", "is_unloading"];
+    const EXAM_LOCAL_KEYS = ["cheatingCount", "cheatClipIndex"];
 
-    // 2. Create a flag for when the user TRIGGERS a reload/navigation right now
+    function clearExamStorage() {
+      EXAM_SESSION_KEYS.forEach((key) => sessionStorage.removeItem(key));
+      EXAM_LOCAL_KEYS.forEach((key) => localStorage.removeItem(key));
+    }
+    function resetExamRuntimeState() {
+      window.examStarted = false;
+      window.cheatingCount = 0;
+      window.strikes = 0;
+      window.examData = null;
+      window.answers = {};
+      window.questions = [];
+      window.hasSubmitted = false;
+      window.allowStrikes = false;
+    }
+
+
+    // Only bookkeeping in unload. The real shutdown authority is the heartbeat + scheduled cleanup.
     window.addEventListener("beforeunload", () => {
-      skipIncompleteOnNextUnload = true;
+      if (window.examStarted) {
+        sessionStorage.setItem("examStarted", "1");
+      }
     });
 
     window.addEventListener("pagehide", (event) => {
       if (event.persisted) return;
+      if (window.hasSubmitted || window.examFinished) return;
 
       sessionStorage.setItem("is_unloading", "true");
 
-      // CHECK BOTH: 
-      // Was it already a reloaded page OR is the user refreshing right now?
-      if (isPageReload || skipIncompleteOnNextUnload) {
-        sessionStorage.setItem("examStarted", "1");
-        return; // Stops the cloud function from firing
+      if (window.examData?.examId && window.authUid && window.examToken) {
+        fetch("https://asia-southeast1-rd-final.cloudfunctions.net/markIncomplete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${window.examToken}`
+          },
+          body: JSON.stringify({
+            examId: window.examData.examId,
+            uid: window.authUid
+          }),
+          keepalive: true
+        }).catch(() => {});
       }
 
-      // This only runs if the tab is closed or a new URL is typed (not a reload)
-      sessionStorage.clear();
-
-      // Clear localStorage
-      localStorage.clear();
-      window.markIncompleteIfNeeded2cloudfunction();
+      clearExamStorage();
+      resetExamRuntimeState();
     });
 
     let currentQuestionIndex = 0;
@@ -682,10 +1070,10 @@
       if (currentQuestionIndex < window.questions.length - 1) {
         btn.textContent = "Next";
         btn.onclick = async () => {
-           if (!isQuestionAnswered(q)) {
+          if (!isQuestionAnswered(q)) {
             document.getElementById("answermodelneeded").style.display = "block";
             return;
-            }
+          }
 
           btn.disabled = true;
           btn.textContent = "Saving...";
@@ -897,7 +1285,7 @@
 
     }
     // Handle the OK button in the answer required modal
-    document.getElementById("answerOkBtn").onclick = function() {
+    document.getElementById("answerOkBtn").onclick = function () {
       document.getElementById("answermodelneeded").style.display = "none";
     };
 
@@ -972,6 +1360,8 @@
     }
 
     .topbar .timer {
+      position: absolute;
+      left: 40%;
       font-size: 14px;
       color: var(--muted)
     }
@@ -1209,7 +1599,6 @@
   <div class="topbar">
     <div class="brand">EXAM PORTAL</div>
     <div class="timer" id="countdown">Time Left: 00:00</div>
-    <button id="connectBtn" class="btn">🔌 Connect Arduino</button>
   </div>
 
 
@@ -1303,27 +1692,6 @@
 
   <script>
     //ARDUINO SERIAL CONNECTION
-    let port;
-    let writer;
-
-    document.getElementById('connectBtn').addEventListener('click', async () => {
-      try {
-        port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 9600 });
-        const textEncoder = new TextEncoderStream();
-        const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
-        writer = textEncoder.writable.getWriter();
-        alert("Connected to Arduino!");
-      } catch (err) {
-        alert("Connection failed: " + err);
-      }
-    });
-
-    async function sendToArduino(message) {
-      if (!writer) return;
-      await writer.write(message + "\n");
-      console.log("Sent to Arduino:", message);
-    }
     // ===============================================
 
 
@@ -1443,15 +1811,11 @@
         setVerification(false, "Looking away detected");
         if (window.allowStrikes) {
           registerStrikeOnce();
-          sendToArduino("STRIKE");
         }
       } else {
         examCard.classList.remove('alert');
         gazeBubble.classList.remove('alert');
         setVerification(true, "Face & eyes centered");
-        if (window.allowStrikes) {
-          sendToArduino("OK");
-        }
       }
       updateBubble();
     }

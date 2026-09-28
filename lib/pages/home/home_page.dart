@@ -20,6 +20,17 @@ DateTime? _toDate(dynamic value) {
 }
 
 class _HomePageState extends State<HomePage> {
+  // Shared theme palette (same as ProfilePage / LoginPage / SchedulePage)
+  static const Color _bgColor = Color(0xFF0B1220);
+  static const Color _headerColor = Color(0xFF0F2B45);
+  static const Color _headerColorLight = Color(0xFF17456F);
+  static const Color _cardColor = Color(0xFF0F3B61);
+  static const Color _textColor = Color(0xFFE6F0F8);
+  static const Color _mutedTextColor = Color(0xFF9FB0C3);
+  static const Color _accentColor = Color(0xFF3D8BFF);
+  static const Color _successColor = Color(0xFF4ADE80);
+  static const Color _errorColor = Color(0xFFF87171);
+
   final FirebaseFirestore db = FirebaseFirestore.instance;
 
   String? studentId;
@@ -38,17 +49,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _loadPrefs() async {
-  final storedStudentId = await SecureStorageHelper.read('studentId');
-  final storedProgram   = await SecureStorageHelper.read('program');
-  final storedYearBlock = await SecureStorageHelper.read('yearBlock');
+    final storedStudentId = await SecureStorageHelper.read('studentId');
+    final storedProgram = await SecureStorageHelper.read('program');
+    final storedYearBlock = await SecureStorageHelper.read('yearBlock');
 
-  setState(() {
-    studentId = storedStudentId;
-    program   = storedProgram;
-    yearBlock = storedYearBlock;
-  });
-}
-
+    if (!mounted) return;
+    setState(() {
+      studentId = storedStudentId;
+      program = storedProgram;
+      yearBlock = storedYearBlock;
+    });
+  }
 
   Future<Map<String, dynamic>> _processExamsAndResults() async {
     final now = DateTime.now();
@@ -81,7 +92,7 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    //Student results 
+    //Student results
     final examResultsSnap = await db
         .collection("examResults")
         .where("program", isEqualTo: program)
@@ -127,20 +138,25 @@ class _HomePageState extends State<HomePage> {
     return {
       "todayExamCount": todayExamCount,
       "completedCount": completedCount,
-      "schedule": todaysSchedule, // sorted by startTime 
-      "results": results, // sorted by submittedAt 
+      "schedule": todaysSchedule, // sorted by startTime
+      "results": results, // sorted by submittedAt
     };
   }
+
+  // ---------- BUILD ----------
 
   @override
   Widget build(BuildContext context) {
     // still show spin while prefs load
     if (_authUid == null || program == null || yearBlock == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        backgroundColor: _bgColor,
+        body: Center(child: CircularProgressIndicator(color: _accentColor)),
+      );
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1220),
+      backgroundColor: _bgColor,
       body: StreamBuilder<QuerySnapshot>(
         stream: db
             .collection("exams")
@@ -152,7 +168,7 @@ class _HomePageState extends State<HomePage> {
           if (!examsSnapshot.hasData) {
             return _buildSkeletonUI();
           }
-          // Now fetch per-exam student results in 
+          // Now fetch per-exam student results
           return FutureBuilder<Map<String, dynamic>>(
             future: _processExamsAndResults(),
             builder: (context, processedSnapshot) {
@@ -162,9 +178,14 @@ class _HomePageState extends State<HomePage> {
                 return _buildSkeletonUI();
               }
               if (processedSnapshot.hasError) {
-                return Scaffold(
-                  body: Center(
-                    child: Text('Error: ${processedSnapshot.error}'),
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'Error: ${processedSnapshot.error}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: _errorColor),
+                    ),
                   ),
                 );
               }
@@ -175,79 +196,58 @@ class _HomePageState extends State<HomePage> {
               final todayExamCount = data["todayExamCount"] as int;
               final completedCount = data["completedCount"] as int;
 
-              return SingleChildScrollView(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _infoCard(),
-                    const SizedBox(height: 8),
-                    const Text(
-                      "Track,Monitor, and Eye opener",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: Colors.white),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Dashboard",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: 150,
-                            child: _dashboardCard(
+              // Hides scrollbars everywhere on this page (scrolling still works)
+              return ScrollConfiguration(
+                behavior: ScrollConfiguration.of(context).copyWith(
+                  scrollbars: false,
+                  overscroll: false,
+                ),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _infoCard(),
+                      const SizedBox(height: 22),
+
+                      _sectionHeader(Icons.dashboard_outlined, "Dashboard"),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _statCard(
+                              icon: Icons.event_available_outlined,
                               title: "Today's Exams",
                               count: todayExamCount,
-                              color: Colors.blue,
-                              countColor: Color(0xFFE6F0F8),
+                              color: _accentColor,
                             ),
                           ),
-                        ),
-                        Expanded(
-                          child: SizedBox(
-                            height: 150,
-                            child: _dashboardCard(
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _statCard(
+                              icon: Icons.check_circle_outline,
                               title: "Completed Exams",
                               count: completedCount,
-                              color: Colors.green,
-                              countColor: Color(0xFFE6F0F8),
+                              color: _successColor,
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                      const SizedBox(height: 22),
 
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Exam Schedule for today",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFFE6F0F8),
+                      _sectionHeader(
+                        Icons.event_note_outlined,
+                        "Exam Schedule for Today",
                       ),
-                    ),
-                    _buildScheduleTable(schedule),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Results",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFFE6F0F8),
+                      _buildScheduleTable(schedule),
+                      const SizedBox(height: 22),
+
+                      _sectionHeader(
+                        Icons.assignment_turned_in_outlined,
+                        "Results",
                       ),
-                    ),
-                    _buildResultsTable(results),
-                  ],
+                      _buildResultsTable(results),
+                    ],
+                  ),
                 ),
               );
             },
@@ -257,136 +257,307 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // UI helpers
+  // ---------- UI helpers ----------
 
-  Widget _buildSkeletonUI() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
+  // Same card look as the Profile page's standalone cards
+  BoxDecoration _cardDecoration() {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(18),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [_cardColor.withOpacity(0.9), _cardColor.withOpacity(0.55)],
+      ),
+      border: Border.all(color: Colors.white.withOpacity(0.06)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.2),
+          blurRadius: 12,
+          offset: const Offset(0, 6),
+        ),
+      ],
+    );
+  }
+
+  // Icon chip + title + divider line (same as Profile section headers)
+  Widget _sectionHeader(IconData icon, String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
         children: [
           Container(
-            height: 150,
+            padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
-              color: Colors.grey[300],
-              borderRadius: BorderRadius.circular(16),
+              color: _accentColor.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 16, color: _accentColor),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            title,
+            style: const TextStyle(
+              color: _textColor,
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
             ),
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  height: 80,
-                  margin: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Container(
-                  height: 80,
-                  margin: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ],
+          const SizedBox(width: 10),
+          Expanded(
+            child: Container(height: 1, color: Colors.white.withOpacity(0.08)),
           ),
-          const SizedBox(height: 16),
-          Container(height: 120, color: Colors.grey[200]),
-          const SizedBox(height: 16),
-          Container(height: 120, color: Colors.grey[200]),
         ],
       ),
     );
   }
 
-  Widget _infoCard() {
-    return Card(
-      color: Color(0xFF0F2B45),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Image.asset(
-              'assets/image/Fots.png',
-              height: 200,
-              fit: BoxFit.contain,
-            ),
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                "Welcome to tot Student Application",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: MediaQuery.of(context).size.width < 360 ? 22 : 30,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFFE6F0F8),
-                ),
-              ),
-            ),
-          ],
-        ),
+  Widget _buildSkeletonUI() {
+    Widget block(double height, {double radius = 18}) => Container(
+          height: height,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(radius),
+          ),
+        );
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      child: Column(
+        children: [
+          block(230, radius: 24),
+          const SizedBox(height: 22),
+          Row(
+            children: [
+              Expanded(child: block(120)),
+              const SizedBox(width: 12),
+              Expanded(child: block(120)),
+            ],
+          ),
+          const SizedBox(height: 22),
+          block(140),
+          const SizedBox(height: 22),
+          block(140),
+        ],
       ),
     );
   }
 
-  Widget _dashboardCard({
+  // Hero card: framed logo + welcome text (like the Profile avatar zone)
+  Widget _infoCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 28, 20, 26),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_headerColorLight, _headerColor],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 120,
+            height: 120,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(26),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  _accentColor.withOpacity(0.9),
+                  _accentColor.withOpacity(0.25),
+                ],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: _accentColor.withOpacity(0.35),
+                  blurRadius: 14,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(23),
+              child: Container(
+                color: _cardColor,
+                padding: const EdgeInsets.all(12),
+                child: Image.asset(
+                  'assets/image/Fots.png',
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Text(
+            "Welcome to tot Student Application",
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: MediaQuery.of(context).size.width < 360 ? 20 : 24,
+              fontWeight: FontWeight.bold,
+              color: _textColor,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.25),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text(
+              "TRACK, MONITOR, AND EYE OPENER",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statCard({
+    required IconData icon,
     required String title,
     required int count,
     required Color color,
-    required Color countColor,
-    TextStyle? titleStyle, 
   }) {
-    return Card(
-      color: color,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      elevation: 4,
-      margin: const EdgeInsets.all(8),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                double width = constraints.maxWidth;
-
-                double fontSize = width < 150 ? 12 : 16;
-
-                return Text(
-                  title,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style:
-                      titleStyle ??
-                      TextStyle(
-                        fontSize: fontSize,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFFE6F0F8),
-                      ),
-                );
-              },
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(10),
             ),
+            child: Icon(icon, size: 18, color: color),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            count.toString(),
+            style: const TextStyle(
+              fontSize: 30,
+              fontWeight: FontWeight.bold,
+              color: _textColor,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, color: _mutedTextColor),
+          ),
+        ],
+      ),
+    );
+  }
 
-            const SizedBox(height: 8),
-            Text(
-              count.toString(),
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: countColor,
+  Widget _emptyCard(IconData icon, String message) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
+      decoration: _cardDecoration(),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _accentColor.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: _accentColor, size: 28),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: _mutedTextColor,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cell(String text, {Color color = _textColor, FontWeight? weight}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: TextStyle(color: color, fontSize: 13, fontWeight: weight),
+      ),
+    );
+  }
+
+  // Shared table card: dark header strip, subtly shaded alternate rows
+  Widget _tableCard({
+    required List<String> headers,
+    required List<List<Widget>> rows,
+    required Map<int, TableColumnWidth> columnWidths,
+    required double maxHeight,
+  }) {
+    return Container(
+      decoration: _cardDecoration(),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: SingleChildScrollView(
+            child: Table(
+              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+              columnWidths: columnWidths,
+              border: TableBorder(
+                horizontalInside: BorderSide(
+                  color: Colors.white.withOpacity(0.06),
+                ),
               ),
+              children: [
+                TableRow(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.22),
+                  ),
+                  children: [
+                    for (final h in headers)
+                      _cell(h, weight: FontWeight.bold),
+                  ],
+                ),
+                for (int i = 0; i < rows.length; i++)
+                  TableRow(
+                    decoration: BoxDecoration(
+                      color: i.isOdd
+                          ? Colors.white.withOpacity(0.03)
+                          : Colors.transparent,
+                    ),
+                    children: rows[i],
+                  ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -394,31 +565,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildScheduleTable(List<QueryDocumentSnapshot> exams) {
     if (exams.isEmpty) {
-      return Card(
-        color: const Color(0xFF0F2B45),
-        elevation: 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(8),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.info_outline, color: Color(0xFFE6F0F8), size: 35),
-              SizedBox(height: 12),
-              Text(
-                "No exam schedule found",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFFE6F0F8),
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
+      return _emptyCard(Icons.info_outline, "No exam schedule found");
     }
 
     // Sort by startTime (earliest first)
@@ -433,104 +580,61 @@ class _HomePageState extends State<HomePage> {
       return aTime.compareTo(bTime);
     });
 
-    return Card(
-      color: Color(0xFF0F2B45),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(8),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 350),
-        child: SingleChildScrollView(
-          child: ClipRRect(
-            child: Table(
-              border: TableBorder.all(color: Color(0xFF0F2B45), width: 1),
-              columnWidths: const {
-                0: FlexColumnWidth(2), // Subject
-                1: FlexColumnWidth(2), // Date
-                2: FlexColumnWidth(2), // Time
-              },
-              children: [
-                const TableRow(
-                  decoration: BoxDecoration(color: Colors.black12),
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Text(
-                        "Subject",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFFE6F0F8),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Text(
-                        "Date",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFFE6F0F8),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Text(
-                        "Start",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFFE6F0F8),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                ...exams.map((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  final startTime = _toDate(data["startTime"]);
-                  String dateText = "—";
-                  String timeText = "—";
+    final rows = exams.map((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      final startTime = _toDate(data["startTime"]);
+      String dateText = "—";
+      String timeText = "—";
 
-                  if (startTime != null) {
-                    dateText =
-                        "${startTime.year}-${startTime.month.toString().padLeft(2, '0')}-${startTime.day.toString().padLeft(2, '0')}";
-                    timeText =
-                        "${startTime.hour % 12 == 0 ? 12 : startTime.hour % 12}:${startTime.minute.toString().padLeft(2, '0')} ${startTime.hour >= 12 ? 'PM' : 'AM'}";
-                  }
+      if (startTime != null) {
+        dateText =
+            "${startTime.year}-${startTime.month.toString().padLeft(2, '0')}-${startTime.day.toString().padLeft(2, '0')}";
+        timeText =
+            "${startTime.hour % 12 == 0 ? 12 : startTime.hour % 12}:${startTime.minute.toString().padLeft(2, '0')} ${startTime.hour >= 12 ? 'PM' : 'AM'}";
+      }
 
-                  return TableRow(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Text(
-                          data["subject"] ?? "—",
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Color(0xFFE6F0F8)),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Text(
-                          dateText,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Color(0xFFE6F0F8)),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Text(
-                          timeText,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Color(0xFFE6F0F8)),
-                        ),
-                      ),
-                    ],
-                  );
-                }),
-              ],
+      return <Widget>[
+        _cell((data["subject"] ?? "—").toString()),
+        _cell(dateText, color: _mutedTextColor),
+        _cell(timeText, weight: FontWeight.w600),
+      ];
+    }).toList();
+
+    return _tableCard(
+      headers: const ["Subject", "Date", "Start"],
+      rows: rows,
+      columnWidths: const {
+        0: FlexColumnWidth(2.4),
+        1: FlexColumnWidth(2.2),
+        2: FlexColumnWidth(2),
+      },
+      maxHeight: 350,
+    );
+  }
+
+  Widget _statusChip(String status) {
+    final completed = status == "completed";
+    final color = completed ? _successColor : _errorColor;
+    final label = status.isEmpty
+        ? "—"
+        : status[0].toUpperCase() + status.substring(1);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: color.withOpacity(0.35)),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
             ),
           ),
         ),
@@ -540,135 +644,29 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildResultsTable(List<Map<String, dynamic>> results) {
     if (results.isEmpty) {
-      return Card(
-        color: const Color(0xFF0F2B45),
-        elevation: 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(8),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(
-                Icons.assignment_turned_in_outlined,
-                color: Color(0xFFE6F0F8),
-                size: 35,
-              ),
-              SizedBox(height: 12),
-              Text(
-                "No results found",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFFE6F0F8),
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
+      return _emptyCard(
+        Icons.assignment_turned_in_outlined,
+        "No results found",
       );
     }
 
+    final rows = results.map((data) {
+      return <Widget>[
+        _cell((data["subject"] ?? "—").toString()),
+        _cell((data["score"] ?? "—").toString(), weight: FontWeight.w600),
+        _statusChip((data["status"] ?? "—").toString()),
+      ];
+    }).toList();
 
-    return Card(
-      color: const Color(0xFF0F2B45),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(8),
-      child: ConstrainedBox(
-        //  height for about 5 rows
-        constraints: const BoxConstraints(maxHeight: 400),
-        child: SingleChildScrollView(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Table(
-              border: TableBorder.all(color: Color(0xFF0F2B45), width: 1),
-              columnWidths: const {
-                0: FlexColumnWidth(2),
-                1: FlexColumnWidth(2),
-                2: FlexColumnWidth(2),
-              },
-              children: [
-                const TableRow(
-                  decoration: BoxDecoration(color: Colors.black12),
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Text(
-                        "Subject",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFFE6F0F8),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Text(
-                        "Score",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFFE6F0F8),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Text(
-                        "Status",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFFE6F0F8),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                ...results.map((data) {
-                  return TableRow(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Text(
-                          data["subject"] ?? "—",
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Color(0xFFE6F0F8)),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Text(
-                          (data["score"] ?? "—").toString(),
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Color(0xFFE6F0F8)),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Text(
-                          data["status"] ?? "—",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: (data["status"] == "completed")
-                                ? Colors.green
-                                : Colors.red,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                }),
-              ],
-            ),
-          ),
-        ),
-      ),
+    return _tableCard(
+      headers: const ["Subject", "Score", "Status"],
+      rows: rows,
+      columnWidths: const {
+        0: FlexColumnWidth(2.4),
+        1: FlexColumnWidth(1.6),
+        2: FlexColumnWidth(2.2),
+      },
+      maxHeight: 400,
     );
   }
 }

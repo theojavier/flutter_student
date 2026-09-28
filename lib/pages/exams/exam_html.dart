@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:html' show IFrameElement;
 // ignore: undefined_prefixed_name
 import 'dart:ui_web' as ui;
 import '../../helpers/SecureStorageHelper.dart';
+import '../../helpers/ExamLockState.dart';
 
 class ExamHtmlPage extends StatefulWidget {
   final String examId;
@@ -28,9 +30,22 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
   String? _resolvedStudentId;
   String? _authUid;
 
+  bool _isPageReload() {
+    if (!kIsWeb) return false;
+
+    final nav = html.window.performance.getEntriesByType('navigation');
+    return nav.isNotEmpty &&
+        (nav.first as html.PerformanceNavigationTiming).type == 'reload';
+  }
+
   @override
   void initState() {
     super.initState();
+
+    // Lock the ResponsiveScaffold drawer/burger menu for as long as this
+    // page is on screen, regardless of which route got us here.
+    ExamLockState.isInExam.value = true;
+
     _authUid = FirebaseAuth.instance.currentUser?.uid;
     if (_authUid == null) {
       debugPrint("No authenticated user — blocking exam");
@@ -40,7 +55,6 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
     if (kIsWeb) {
       fetchStudentAndCheckEligibility().then((allowed) {
-        
         if (!allowed) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
@@ -69,9 +83,17 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
           html.window.onMessage.listen((event) {
             if (!mounted) return; // prevent navigation after dispose
             final data = event.data;
-            if (data is Map && data['action'] == 'finishExam') {
-              final examId = data['examId'];
-              context.go('/exam-result/$examId');
+            if (data is Map) {
+              final action = data['action'];
+              if (action == 'finishExam') {
+                final examId = data['examId'];
+                context.go('/exam-result/$examId');
+              } else if (action == 'navigate') {
+                final path = data['path'];
+                if (path is String && path.isNotEmpty) {
+                  context.go(path);
+                }
+              }
             }
           });
 
@@ -132,52 +154,73 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     }
 
     // resolve studentId
+    if (!mounted) return false;
     setState(() {
       _resolvedStudentId = studentId;
     });
 
     return true;
   }
+  
+
   Future<void> checkExamStatusAndNavigate() async {
-  final uid = FirebaseAuth.instance.currentUser?.uid;
-  if (uid == null) return;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
 
-  final resultRef = FirebaseFirestore.instance
-      .collection("examResults")
-      .doc(widget.examId)
-      .collection("students")
-      .doc(uid);
+    final resultRef = FirebaseFirestore.instance
+        .collection("examResults")
+        .doc(widget.examId)
+        .collection("students")
+        .doc(uid);
 
-  final resultDoc = await resultRef.get();
+    final resultDoc = await resultRef.get();
 
-  if (resultDoc.exists) {
-    final status = resultDoc.data()?['status'];
-    if (status == 'completed') {
-      // Navigate to result page
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) context.go('/exam-result/${widget.examId}');
-      });
-      return;
-    } else if (status == 'incomplete') {
-      // Navigate home
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) context.go('/home');
-      });
-      return;
+    if (resultDoc.exists) {
+      final status = resultDoc.data()?['status'];
+
+      if (status == 'completed') {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) context.go('/exam-result/${widget.examId}');
+        });
+        return;
+      }
+
+      if (status == 'incomplete') {
+        final nav = html.window.performance.getEntriesByType('navigation');
+        final isReload = nav.isNotEmpty &&
+            (nav.first as html.PerformanceNavigationTiming).type == 'reload';
+
+        if (isReload) {
+          await resultRef.set(
+            {
+              'status': 'in-progress',
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+          return;
+        }
+
+        // Do not force the user home just because a previous session stored
+        // "incomplete". That stale value is often created by a refresh or a
+        // forced page close. The exam should continue unless it was truly completed.
+        return;
+      }
     }
+
+    return;
   }
 
-  // If no record or status, continue with normal exam flow.
-  // The iframe is registered later once studentId is resolved.
-  return;
-}
-
+  bool _iframeRegistered = false;
 
   void _registerIframe(String examId, String studentId) {
+    if (_iframeRegistered) return;
+    _iframeRegistered = true;
     final viewType = 'exam-html-view-$examId-$studentId';
     ui.platformViewRegistry.registerViewFactory(viewType, (int viewId) {
       final iframe = IFrameElement()
-        ..src = '${html.window.location.origin}/assets/exam.html?examId=$examId'
+        ..src =
+            '${html.window.location.origin}/assets/exam.html?examId=$examId'
         ..style.border = 'none'
         ..style.width = '100%'
         ..style.height = '100%'
@@ -212,28 +255,50 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
   }
 
   Future<bool> validateStudentId(String urlStudentId) async {
-  final storedId = await SecureStorageHelper.read("studentId");
+    final storedId = await SecureStorageHelper.read("studentId");
 
-  if (storedId == null) {
-    debugPrint("No studentId stored");
-    return false;
+    if (storedId == null) {
+      debugPrint("No studentId stored");
+      return false;
+    }
+
+    if (storedId != urlStudentId) {
+      debugPrint("Mismatch! URL studentId=$urlStudentId, stored=$storedId");
+      return false;
+    }
+
+    return true;
   }
-
-  if (storedId != urlStudentId) {
-    debugPrint("Mismatch! URL studentId=$urlStudentId, stored=$storedId");
-    return false;
-  }
-
-  return true;
-}
-
 
   @override
   void dispose() {
-    super.dispose();
+    final isReload = _isPageReload();
 
-    html.window.sessionStorage.clear();
-    html.window.localStorage.remove('cheatingCount');
+    if (kIsWeb && !isReload && _authUid != null && _resolvedStudentId != null) {
+      final resultRef = FirebaseFirestore.instance
+          .collection('examResults')
+          .doc(widget.examId)
+          .collection('students')
+          .doc(_authUid!);
+
+      resultRef.get().then((doc) async {
+        if (!mounted) return;
+        if (doc.exists && doc.data()?['status'] == 'completed') return;
+
+        await resultRef.set(
+          {
+            'status': 'incomplete',
+            'submittedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      });
+    }
+
+    // Release the drawer lock as soon as this page leaves the tree, however
+    // that happens (exam finished, kicked back to /home, back button, etc).
+    ExamLockState.isInExam.value = false;
+    super.dispose();
   }
 
   @override
@@ -253,6 +318,9 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
         width: double.infinity,
         height: double.infinity,
         child: HtmlElementView(
+          key: ValueKey(
+            'exam-html-view-${widget.examId}-${_resolvedStudentId!}',
+          ),
           viewType: 'exam-html-view-${widget.examId}-${_resolvedStudentId!}',
         ),
       ),

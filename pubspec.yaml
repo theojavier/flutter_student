@@ -55,6 +55,7 @@ dependencies:
   ffi: ^2.1.0
   tflite_web: ^0.4.0
   image: ^4.0.17
+  pointer_interceptor: ^0.10.1
 
 
 dev_dependencies:
@@ -81,11 +82,12 @@ flutter:
 
   assets:
     - assets/image/
-    - assets/face_detection/
-    - assets/eye_detection.html
     - assets/exam.html
-    - assets/facekeypoint420/best_float16.tflite
-    - assets/eyekeypoint840/best_float16.tflite
+    - assets/exam.html
+    - assets/model_1024/best_int8.tflite
+    - assets/model_1024/best_dynamic.tflite
+    - assets/model_1024/best_dynamic_640.tflite
+    - assets/model_1024/best_plain_640.tflite
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
