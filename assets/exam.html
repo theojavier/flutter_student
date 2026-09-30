@@ -604,101 +604,101 @@
         return types.find((type) => MediaRecorder.isTypeSupported(type)) || "";
       }
 
-      async function recordCheatClip(examId) {
-        if (!examId) return;
+      // async function recordCheatClip(examId) {
+      //   if (!examId) return;
 
-        const clipRange = getCheatGroupRange();
-        const currentCheatCount = Number(window.cheatingCount || 0);
-        const currentClipIndex = (Number(window.cheatClipIndex) || 0) + 1;
-        window.cheatClipIndex = currentClipIndex;
-        localStorage.setItem("cheatClipIndex", String(window.cheatClipIndex));
+      //   const clipRange = getCheatGroupRange();
+      //   const currentCheatCount = Number(window.cheatingCount || 0);
+      //   const currentClipIndex = (Number(window.cheatClipIndex) || 0) + 1;
+      //   window.cheatClipIndex = currentClipIndex;
+      //   localStorage.setItem("cheatClipIndex", String(window.cheatClipIndex));
 
-        const captureScreen = await startScreenCapture();
-        const captureCamera = await startCameraCapture();
+      //   const captureScreen = await startScreenCapture();
+      //   const captureCamera = await startCameraCapture();
 
-        if (!captureScreen && !captureCamera) {
-          console.warn(
-            "Skipping cheat clip upload because neither screen nor camera capture is available.",
-          );
-          return;
-        }
+      //   if (!captureScreen && !captureCamera) {
+      //     console.warn(
+      //       "Skipping cheat clip upload because neither screen nor camera capture is available.",
+      //     );
+      //     return;
+      //   }
 
-        const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
+      //   const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
 
-        async function uploadStream(stream, kind) {
-          if (!stream || !stream.active) return;
+      //   async function uploadStream(stream, kind) {
+      //     if (!stream || !stream.active) return;
 
-          const recorder = new MediaRecorder(stream, {
-            mimeType: pickMimeType() || undefined,
-            videoBitsPerSecond: 800000,
-          });
+      //     const recorder = new MediaRecorder(stream, {
+      //       mimeType: pickMimeType() || undefined,
+      //       videoBitsPerSecond: 800000,
+      //     });
 
-          const chunks = [];
-          recorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) chunks.push(event.data);
-          };
+      //     const chunks = [];
+      //     recorder.ondataavailable = (event) => {
+      //       if (event.data && event.data.size > 0) chunks.push(event.data);
+      //     };
 
-          const stopped = new Promise((resolve) => {
-            recorder.onstop = resolve;
-          });
+      //     const stopped = new Promise((resolve) => {
+      //       recorder.onstop = resolve;
+      //     });
 
-          recorder.start();
-          setTimeout(() => {
-            if (recorder.state !== "inactive") recorder.stop();
-          }, CHEAT_CLIP_DURATION_MS);
+      //     recorder.start();
+      //     setTimeout(() => {
+      //       if (recorder.state !== "inactive") recorder.stop();
+      //     }, CHEAT_CLIP_DURATION_MS);
 
-          await stopped;
+      //     await stopped;
 
-          const contentType =
-            recorder.mimeType && recorder.mimeType.startsWith("video/mp4")
-              ? "video/mp4"
-              : "video/webm";
+      //     const contentType =
+      //       recorder.mimeType && recorder.mimeType.startsWith("video/mp4")
+      //         ? "video/mp4"
+      //         : "video/webm";
 
-          const blob = new Blob(chunks, { type: contentType });
-          const { data } = await requestFn({
-            examId,
-            occurredAt: Date.now(),
-            cheatCount: currentCheatCount,
-            startCheatCount: clipRange.start,
-            endCheatCount: clipRange.end,
-            parts: {
-              ...(captureScreen ? { screen: contentType } : {}),
-              ...(captureCamera ? { camera: contentType } : {}),
-            },
-            kind,
-            contentType,
-          });
+      //     const blob = new Blob(chunks, { type: contentType });
+      //     const { data } = await requestFn({
+      //       examId,
+      //       occurredAt: Date.now(),
+      //       cheatCount: currentCheatCount,
+      //       startCheatCount: clipRange.start,
+      //       endCheatCount: clipRange.end,
+      //       parts: {
+      //         ...(captureScreen ? { screen: contentType } : {}),
+      //         ...(captureCamera ? { camera: contentType } : {}),
+      //       },
+      //       kind,
+      //       contentType,
+      //     });
 
-          const upload = data?.uploads?.[kind];
-          if (!upload?.uploadUrl) {
-            throw new Error(`No signed URL returned for ${kind} clip`);
-          }
+      //     const upload = data?.uploads?.[kind];
+      //     if (!upload?.uploadUrl) {
+      //       throw new Error(`No signed URL returned for ${kind} clip`);
+      //     }
 
-          const uploadRes = await fetch(upload.uploadUrl, {
-            method: "PUT",
-            headers: {
-              "Content-Type": upload.contentType,
-              "x-goog-content-length-range": `0,${upload.maxBytes || 3 * 1024 * 1024}`,
-            },
-            body: blob,
-          });
+      //     const uploadRes = await fetch(upload.uploadUrl, {
+      //       method: "PUT",
+      //       headers: {
+      //         "Content-Type": upload.contentType,
+      //         "x-goog-content-length-range": `0,${upload.maxBytes || 3 * 1024 * 1024}`,
+      //       },
+      //       body: blob,
+      //     });
 
-          if (!uploadRes.ok) {
-            throw new Error(
-              `${kind} clip upload failed with status ${uploadRes.status}`,
-            );
-          }
+      //     if (!uploadRes.ok) {
+      //       throw new Error(
+      //         `${kind} clip upload failed with status ${uploadRes.status}`,
+      //       );
+      //     }
 
-          console.log(`${kind} cheat clip uploaded:`, upload.filePath);
-        }
+      //     console.log(`${kind} cheat clip uploaded:`, upload.filePath);
+      //   }
 
-        try {
-          await uploadStream(window.cheatCaptureStream, "screen");
-          await uploadStream(window.cameraCaptureStream, "camera");
-        } catch (err) {
-          console.error("Cheat clip upload error:", err);
-        }
-      }
+      //   try {
+      //     await uploadStream(window.cheatCaptureStream, "screen");
+      //     await uploadStream(window.cameraCaptureStream, "camera");
+      //   } catch (err) {
+      //     console.error("Cheat clip upload error:", err);
+      //   }
+      // }
 
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
@@ -733,9 +733,9 @@
             );
 
             try {
-              await recordCheatClip(examId);
+              //await recordCheatClip(examId);
             } catch (clipErr) {
-              console.error("recordCheatClip failed:", clipErr);
+              //console.error("recordCheatClip failed:", clipErr);
             }
           }
 
@@ -1841,7 +1841,6 @@
     ></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite/dist/tf-tflite.min.js"></script>
 
     <script>
       //ARDUINO SERIAL CONNECTION
@@ -1874,18 +1873,25 @@
         return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
       }
 
-      const FULL_FACE_MODEL_URL = "./model_1024/best_plain_640.tflite";
+      const FULL_FACE_MODEL_URL = "./model_1024/best_w8a32_640.tflite";
       const MODEL_INPUT_SIZE = 640;
-      const CONF_THRESHOLD = 0.75;
-      const KPT_CONF_THRESHOLD = 0.7;
+      const CONF_THRESHOLD = 0.45;
+      const KPT_CONF_THRESHOLD = 0.4;
       const NUM_KPTS = 33;
       const NUM_CLASSES = 1;
-      const YAW_MULTIPLIER = 180;
-      const PITCH_MULTIPLIER = 160;
+      const YAW_MULTIPLIER = 200;
+      const PITCH_MULTIPLIER = 180;
       const EYE_WEIGHT = 0.8;
       const HEAD_WEIGHT = 0.2;
       let lookingAwaySince = null;
       const AWAY_DELAY_MS = 2000;
+      const GAZE_SMOOTHING = 0.55;   // lower = smoother/slower to react, higher = snappier/twitchier
+const MAX_GAZE_JUMP = 55;     // clamps a single bad detection from causing a big jump
+let smoothedYaw = 0;
+let smoothedPitch = 0;
+const PITCH_NEGATIVE_GAIN = 1.0; // was 1.28 — equalized so up/down feel the same by default
+const PITCH_POSITIVE_GAIN = 1.0; // was 0.72
+
 
       const KPT_NAMES = [
         "iris_center_left",
@@ -1940,11 +1946,16 @@
       let frameSinceFaceRefresh = 8;
       let lastRun = 0;
       let isProcessing = false;
-      let targetInterval = 250;
+      let targetInterval = 50;
       let inferenceEMA = 0;
       let lastFaceDetected = false;
       let lastFaceScore = 0;
       let lastGaze = { yaw: 0, pitch: 0, valid: false };
+      let yawBias = 0;
+let pitchBias = 0;
+let calibrationSamples = [];
+const CALIBRATION_FRAMES = 15;
+let gazeCalibrated = false;
 
       let bubbleX = window.innerWidth / 2,
         bubbleY = window.innerHeight / 2;
@@ -1952,6 +1963,8 @@
         targetY = bubbleY;
       const SENSITIVITY = 10.4;
 
+      const GAZE_X_SENSITIVITY = 130;
+const GAZE_Y_SENSITIVITY = 90;
       const buffer = document.createElement("canvas");
       const bctx = buffer.getContext("2d");
       const cropCanvas = document.createElement("canvas");
@@ -2003,6 +2016,7 @@
         ctx.drawImage(sourceCanvas, padX, padY, newW, newH);
         return { canvas: out, scale, padX, padY };
       }
+
       function preprocessFrame(sourceCanvas, size) {
         return tf.tidy(() => {
           const { canvas, scale, padX, padY } = letterboxCanvas(
@@ -2010,9 +2024,17 @@
             size,
           );
           const img = tf.browser.fromPixels(canvas).toFloat().div(255.0); // [H, W, 3]
-          return { tensor: img.expandDims(0), scale, padX, padY }; // [1, H, W, 3] NHWC — matches this model
+          const nchw = img.transpose([2, 0, 1]).expandDims(0); // [1, 3, H, W] — model expects channels-first
+          return { tensor: nchw, scale, padX, padY };
         });
       }
+      function smoothGaze(rawYaw, rawPitch) {
+  let dyaw = clamp(rawYaw - smoothedYaw, -MAX_GAZE_JUMP, MAX_GAZE_JUMP);
+  let dpitch = clamp(rawPitch - smoothedPitch, -MAX_GAZE_JUMP, MAX_GAZE_JUMP);
+  smoothedYaw += dyaw * GAZE_SMOOTHING;
+  smoothedPitch += dpitch * GAZE_SMOOTHING;
+  return { yaw: smoothedYaw, pitch: smoothedPitch };
+}
       function tensorFromOutput(output) {
         if (!output) return null;
         if (Array.isArray(output)) {
@@ -2093,6 +2115,16 @@
         const tensor = tensorFromOutput(output);
         if (!tensor) return null;
         const reader = await makeReader(tensor);
+        let trueMaxScore = -Infinity;
+        let trueMaxIdx = -1;
+        for (let r = 0; r < reader.rows; r++) {
+          const s = Number(reader.get(r, 4));
+          if (s > trueMaxScore) {
+            trueMaxScore = s;
+            trueMaxIdx = r;
+          }
+        }
+        console.log("[TRUE MAX CONF]", trueMaxScore, "at anchor", trueMaxIdx);
         const needed = 4 + NUM_CLASSES + numKpts * 3;
         if (reader.cols < needed) return null;
         let bestDetection = null;
@@ -2104,15 +2136,16 @@
             !Number.isFinite(score) ||
             score < CONF_THRESHOLD ||
             score <= bestScore
-          )
+          ) {
+            if (i < 10) {
+              console.log("[DET]", i, "conf=", score);
+            }
             continue;
+          }
           const x = Number(reader.get(i, 0));
           const y = Number(reader.get(i, 1));
           const w = Number(reader.get(i, 2));
           const h = Number(reader.get(i, 3));
-          if (w < 40 || h < 40) {
-            continue;
-          }
 
           const coordsNormalized =
             x >= 0 &&
@@ -2132,6 +2165,13 @@
             ly *= inputSize;
             lw *= inputSize;
             lh *= inputSize;
+          }
+
+          // FIX: check the SCALED (pixel-space) size, not the raw value —
+          // the raw value is normalized (0-1) for this model, so it was
+          // always failing this check even for a genuine high-confidence face.
+          if (lw < 40 || lh < 40) {
+            continue;
           }
           const kpts = [];
           for (let j = 0; j < numKpts; j++) {
@@ -2245,7 +2285,23 @@
           !forehead ||
           !chin
         ) {
-          return { yaw: 0, pitch: 0, valid: false };
+          console.log("[GAZE INVALID]", {
+            LI: !!LI,
+            RI: !!RI,
+            nose: !!nose,
+            forehead: !!forehead,
+            chin: !!chin,
+            leftEyeLeft: !!leftEyeLeft,
+            leftEyeRight: !!leftEyeRight,
+            rightEyeLeft: !!rightEyeLeft,
+            rightEyeRight: !!rightEyeRight,
+          });
+
+          return {
+            yaw: 0,
+            pitch: 0,
+            valid: false,
+          };
         }
         const leftEyeWidth = leftEyeRight.x - leftEyeLeft.x;
         const leftEyeHeight = leftEyeBottom.y - leftEyeTop.y;
@@ -2257,20 +2313,36 @@
           rightEyeWidth <= 0 ||
           rightEyeHeight <= 0
         ) {
-          return { yaw: 0, pitch: 0, valid: false };
+          console.log("[GAZE INVALID]", {
+            LI: !!LI,
+            RI: !!RI,
+            nose: !!nose,
+            forehead: !!forehead,
+            chin: !!chin,
+            leftEyeLeft: !!leftEyeLeft,
+            leftEyeRight: !!leftEyeRight,
+            rightEyeLeft: !!rightEyeLeft,
+            rightEyeRight: !!rightEyeRight,
+          });
+
+          return {
+            yaw: 0,
+            pitch: 0,
+            valid: false,
+          };
         }
         const leftEyeCenterX = (leftEyeLeft.x + leftEyeRight.x) / 2;
         const leftIrisOffsetX = LI.x - leftEyeCenterX;
-        const leftEyeYaw = leftIrisOffsetX / (leftEyeWidth * 0.3);
+        const leftEyeYaw = leftIrisOffsetX / (leftEyeWidth * 0.5);
         const rightEyeCenterX = (rightEyeLeft.x + rightEyeRight.x) / 2;
         const rightIrisOffsetX = RI.x - rightEyeCenterX;
-        const rightEyeYaw = rightIrisOffsetX / (rightEyeWidth * 0.3);
+        const rightEyeYaw = rightIrisOffsetX / (rightEyeWidth * 0.5);
         const leftEyeCenterY = (leftEyeTop.y + leftEyeBottom.y) / 2;
         const leftIrisOffsetY = LI.y - leftEyeCenterY;
-        const leftEyePitch = leftIrisOffsetY / (leftEyeHeight * 0.3);
+        const leftEyePitch = leftIrisOffsetY / (leftEyeHeight * 0.5);
         const rightEyeCenterY = (rightEyeTop.y + rightEyeBottom.y) / 2;
         const rightIrisOffsetY = RI.y - rightEyeCenterY;
-        const rightEyePitch = rightIrisOffsetY / (rightEyeHeight * 0.3);
+        const rightEyePitch = rightIrisOffsetY / (rightEyeHeight * 0.5);
         const leftEyeOpenness = (leftEyeBottom.y - leftEyeTop.y) / leftEyeWidth;
         const rightEyeOpenness =
           (rightEyeBottom.y - rightEyeTop.y) / rightEyeWidth;
@@ -2302,12 +2374,16 @@
         pitch = clamp(pitch, -2.5, 2.5);
         yaw *= -1;
         if (pitch < 0) {
-          pitch *= 1.28;
-        } else {
-          pitch *= 0.72;
-        }
+  pitch *= PITCH_NEGATIVE_GAIN;
+} else {
+  pitch *= PITCH_POSITIVE_GAIN;
+}
         yaw *= YAW_MULTIPLIER;
         pitch *= PITCH_MULTIPLIER;
+        console.log("[GAZE]", {
+          yaw: yaw.toFixed(2),
+          pitch: pitch.toFixed(2),
+        });
         return { yaw, pitch, valid: true };
       }
       function resetBubbleCenter() {
@@ -2321,59 +2397,160 @@
         gazeBubble.classList.remove("alert");
         updateBubble();
       }
-      function moveBubbleFromGaze(yaw, pitch) {
-        const normX = yaw / 75;
-        const normY = pitch / 50;
-        const activeTarget = window.examStarted
-          ? document.getElementById("examCard")
-          : document.getElementById("examGate");
-        const rect = activeTarget.getBoundingClientRect();
-        const screenCenterX = window.innerWidth / 2;
-        const screenCenterY = window.innerHeight / 2;
-        const widthRange = window.innerWidth * 0.9;
-        targetX = screenCenterX + normX * widthRange;
-        targetY =
-          screenCenterY +
-          (normY < 0
-            ? normY * window.innerHeight * 0.58
-            : normY * window.innerHeight * 0.28);
-        targetX = clamp(targetX, -200, window.innerWidth + 200);
-        targetY = clamp(targetY, -200, window.innerHeight + 200);
-        updateBubble();
-        const margin = 15;
-        const gazeOk =
-          targetX >= rect.left - margin &&
-          targetX <= rect.right + margin &&
-          targetY >= rect.top - margin &&
-          targetY <= rect.bottom + margin;
+     function moveBubbleFromGaze(yaw, pitch) {
+  // ============================================================
+  // FULL-SCREEN GAZE MAPPING
+  //
+  // The bubble represents the WHOLE browser/laptop screen.
+  // The exam card does NOT control the bubble position.
+  //
+  // Center gaze  -> screen center
+  // Left gaze    -> screen left
+  // Right gaze   -> screen right
+  // Up gaze      -> screen top
+  // Down gaze    -> screen bottom
+  // ============================================================
 
-        if (!gazeOk) {
-          examCard.classList.add("alert");
-          gazeBubble.classList.add("alert");
-          setVerification(false, "Looking away detected");
+  const activeTarget = window.examStarted
+    ? document.getElementById("examCard")
+    : document.getElementById("examGate");
 
-          if (!lookingAwaySince) {
-            lookingAwaySince = Date.now();
-          }
+  const rect = activeTarget.getBoundingClientRect();
 
-          if (
-            window.allowStrikes &&
-            Date.now() - lookingAwaySince > AWAY_DELAY_MS
-          ) {
-            registerStrikeOnce();
-            sendToArduino("STRIKE");
-          }
-        } else {
-          lookingAwaySince = null;
+  // ------------------------------------------------------------
+  // Convert model output into normalized gaze coordinates.
+  //
+  // These are deliberately independent for X and Y because
+  // vertical eye movement is naturally much smaller than
+  // horizontal eye movement.
+  // ------------------------------------------------------------
 
-          examCard.classList.remove("alert");
-          gazeBubble.classList.remove("alert");
-          setVerification(true, "Eyes on exam");
+  let normX = yaw / GAZE_X_SENSITIVITY;
+  let normY = pitch / GAZE_Y_SENSITIVITY;
 
-          if (window.allowStrikes) {
-            sendToArduino("OK");
+  // ------------------------------------------------------------
+  // STRONGER GAZE AMPLIFICATION
+  //
+  // This is the important part.
+  //
+  // Small eye movements become visible on the whole screen,
+  // while large movements are still capped safely.
+  // ------------------------------------------------------------
+
+  const X_GAIN = 2.20;
+  const Y_GAIN = 3.20;
+
+  normX *= X_GAIN;
+  normY *= Y_GAIN;
+
+  // Keep the gaze inside normalized screen space.
+  normX = clamp(normX, -1, 1);
+  normY = clamp(normY, -1, 1);
+
+  // ------------------------------------------------------------
+  // NON-LINEAR AMPLIFICATION
+  //
+  // Gives small/medium eye movements more visible movement
+  // without making the bubble jump violently.
+  // ------------------------------------------------------------
+
+  function amplify(value, power = 0.80) {
+    const sign = value < 0 ? -1 : 1;
+    return sign * Math.pow(Math.abs(value), power);
+  }
+
+  const screenX = amplify(normX);
+  const screenY = amplify(normY);
+
+  // ------------------------------------------------------------
+  // MAP DIRECTLY TO THE WHOLE VIEWPORT
+  //
+  // -1 = left/top
+  //  0 = center
+  // +1 = right/bottom
+  // ------------------------------------------------------------
+
+  const screenCenterX = window.innerWidth / 2;
+  const screenCenterY = window.innerHeight / 2;
+
+  // Use almost the entire screen.
+  const rangeX = window.innerWidth * 0.47;
+  const rangeY = window.innerHeight * 0.47;
+
+  targetX = screenCenterX + screenX * rangeX;
+  targetY = screenCenterY + screenY * rangeY;
+
+  // ------------------------------------------------------------
+  // Keep bubble visible.
+  //
+  // We don't allow it to disappear completely off-screen.
+  // ------------------------------------------------------------
+
+  const bubbleRadius = 18;
+
+  targetX = clamp(
+    targetX,
+    bubbleRadius,
+    window.innerWidth - bubbleRadius
+  );
+
+  targetY = clamp(
+    targetY,
+    bubbleRadius,
+    window.innerHeight - bubbleRadius
+  );
+
+  // ------------------------------------------------------------
+  // CHEATING / OUTSIDE-EXAM CHECK
+  //
+  // IMPORTANT:
+  // This still uses the actual exam-card rectangle.
+  // The card does NOT affect bubble movement.
+  // ------------------------------------------------------------
+
+  const margin = 15;
+
+  const gazeInsideExam =
+    targetX >= rect.left - margin &&
+    targetX <= rect.right + margin &&
+    targetY >= rect.top - margin &&
+    targetY <= rect.bottom + margin;
+
+  if (!gazeInsideExam) {
+    examCard.classList.add("alert");
+    gazeBubble.classList.add("alert");
+
+    setVerification(false, "Looking away detected");
+
+    if (!lookingAwaySince) {
+      lookingAwaySince = Date.now();
+    }
+
+    if (
+      window.allowStrikes &&
+      Date.now() - lookingAwaySince > AWAY_DELAY_MS
+    ) {
+      registerStrikeOnce();
+    }
+  } else {
+    lookingAwaySince = null;
+
+    examCard.classList.remove("alert");
+    gazeBubble.classList.remove("alert");
+
+    setVerification(true, "Eyes on exam");
+  }
+}
+      async function pickAccelerator() {
+        if (navigator.gpu) {
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            if (adapter) return "webgpu";
+          } catch (_) {
+            // fall through to wasm
           }
         }
+        return "wasm";
       }
       function setVerification(ok, reason) {
         const now = Date.now();
@@ -2407,11 +2584,14 @@
         }
       }
       function updateBubble() {
-        bubbleX += (targetX - bubbleX) * 0.18;
-        bubbleY += (targetY - bubbleY) * 0.18;
-        gazeBubble.style.left = `${bubbleX}px`;
-        gazeBubble.style.top = `${bubbleY}px`;
-      }
+  const SMOOTHING = 0.28;
+
+  bubbleX += (targetX - bubbleX) * SMOOTHING;
+  bubbleY += (targetY - bubbleY) * SMOOTHING;
+
+  gazeBubble.style.left = `${bubbleX}px`;
+  gazeBubble.style.top = `${bubbleY}px`;
+}
       function animLoop() {
         updateBubble();
         requestAnimationFrame(animLoop);
@@ -2420,55 +2600,306 @@
       console.log("backend:", tf.getBackend());
       console.log("tflite:", window.tflite);
       async function loadModels() {
-        console.log("[FaceModel] Step 1: setting backend...");
-        await tf.setBackend("webgl");
-        await tf.ready();
-        console.log(
-          "[FaceModel] Step 2: backend ready, requesting model file...",
-        );
-
-        faceModel = await tflite.loadTFLiteModel(FULL_FACE_MODEL_URL);
-        console.log("[FaceModel] Step 3: MODEL FILE LOADED SUCCESSFULLY.");
-        console.log("backend:", tf.getBackend());
-        console.log("tflite:", window.tflite);
-        console.log("[FaceModel] inputs:", faceModel.inputs);
-        console.log("[FaceModel] outputs:", faceModel.outputs);
-
-        console.log("[FaceModel] Step 4: creating dummy input tensor...");
-        const dummyFace = tf.zeros([1, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, 3]);
-        console.log(
-          faceModel.inputs?.map((i) => ({
-            name: i.name,
-            shape: i.shape,
-            dtype: i.dtype,
-          })),
-        );
-        console.log(JSON.stringify(faceModel.inputs, null, 2));
-        console.log(
-          "[FaceModel] Step 5: dummy tensor created. Calling predict() NOW — page may freeze here, this is expected.",
-        );
+        console.log("[FaceModel] Step 1: initializing LiteRT.js...");
 
         try {
+          // ------------------------------------------------------------
+          // Load LiteRT.js directly from jsDelivr.
+          // WASM = CPU/XNNPACK execution.
+          // This is the reliable first test for your model.
+          // ------------------------------------------------------------
+          const {
+            loadLiteRt,
+            loadAndCompile,
+            Tensor: LiteRTTensor,
+          } = await import("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm");
+
+          const WASM_BASE =
+            "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/";
+
+          await loadLiteRt(WASM_BASE);
+
+          console.log("[FaceModel] Step 2: LiteRT.js WASM runtime ready.");
+
+          // ------------------------------------------------------------
+          // Load your W8A32 model.
+          // ------------------------------------------------------------
+          console.log(
+            "[FaceModel] Step 3: loading model:",
+            FULL_FACE_MODEL_URL,
+          );
+
+          const accelerator = await pickAccelerator();
+          console.log("[FaceModel] Using accelerator:", accelerator);
+
+          const litertModel = await loadAndCompile(FULL_FACE_MODEL_URL, {
+            accelerator,
+          });
+
+          console.log("[FaceModel] Step 4: MODEL LOADED SUCCESSFULLY.");
+
+          // ------------------------------------------------------------
+          // Read model metadata if available.
+          // ------------------------------------------------------------
+          let inputDetails = [];
+          let outputDetails = [];
+
+          try {
+            inputDetails =
+              typeof litertModel.getInputDetails === "function"
+                ? litertModel.getInputDetails()
+                : [];
+
+            outputDetails =
+              typeof litertModel.getOutputDetails === "function"
+                ? litertModel.getOutputDetails()
+                : [];
+          } catch (metaErr) {
+            console.warn("[FaceModel] Could not read model details:", metaErr);
+          }
+
+          console.log("[FaceModel] inputs:", inputDetails);
+
+          console.log("[FaceModel] outputs:", outputDetails);
+
+          // ------------------------------------------------------------
+          // We know your exported model is:
+          //
+          // INPUT  = [1, 3, 640, 640]
+          // OUTPUT = [1, 104, 8400]
+          //
+          // Keep these as fallback values in case metadata is unavailable.
+          // ------------------------------------------------------------
+          const inputShape = inputDetails?.[0]?.shape ?? [
+            1,
+            3,
+            MODEL_INPUT_SIZE,
+            MODEL_INPUT_SIZE,
+          ];
+
+          const outputShape = outputDetails?.[0]?.shape ?? [1, 104, 8400];
+
+          console.log("[FaceModel] Input shape:", inputShape);
+
+          console.log("[FaceModel] Output shape:", outputShape);
+
+          // ------------------------------------------------------------
+          // IMPORTANT:
+          //
+          // Keep the rest of your existing application unchanged.
+          //
+          // We create a small adapter that exposes:
+          //
+          //     faceModel.predict(tfTensor)
+          //
+          // just like your old code expects.
+          //
+          // LiteRT itself receives a REAL Float32Array, so there is no
+          // "Input tensor lacks data" problem.
+          // ------------------------------------------------------------
+          faceModel = {
+            inputs: [
+              {
+                name: inputDetails?.[0]?.name ?? "serving_default_args_0",
+                shape: inputShape,
+                dtype: "float32",
+              },
+            ],
+
+            outputs: [
+              {
+                name: outputDetails?.[0]?.name ?? "output",
+                shape: outputShape,
+                dtype: "float32",
+              },
+            ],
+
+            predict: async function (tfInput) {
+              if (!tfInput) {
+                throw new Error("[FaceModel] predict() received no input.");
+              }
+
+              // ----------------------------------------------------------
+              // Verify the TFJS tensor.
+              // ----------------------------------------------------------
+              if (!tfInput.shape) {
+                throw new Error("[FaceModel] Input does not have a shape.");
+              }
+
+              console.log(
+                "[FaceModel] Input:",
+                tfInput.shape,
+                tfInput.dtype,
+                tfInput.size,
+              );
+
+              // ----------------------------------------------------------
+              // Get REAL CPU data from the TFJS tensor.
+              //
+              // This is the important difference from the broken
+              // @tensorflow/tfjs-tflite path.
+              // ----------------------------------------------------------
+              const inputData = await tfInput.data();
+
+              if (!inputData || inputData.length === 0) {
+                throw new Error(
+                  "[FaceModel] TFJS input tensor contains no data.",
+                );
+              }
+
+              // ----------------------------------------------------------
+              // Create an actual LiteRT tensor containing the data.
+              // ----------------------------------------------------------
+              const litertInput = new LiteRTTensor(
+                new Float32Array(inputData),
+                inputShape,
+              );
+
+              let results = null;
+
+              try {
+                // --------------------------------------------------------
+                // REAL INFERENCE
+                // --------------------------------------------------------
+                const t0 = performance.now();
+
+                results = await litertModel.run([litertInput]);
+
+                const elapsed = performance.now() - t0;
+
+                console.log(
+                  `[FaceModel] LiteRT inference: ${elapsed.toFixed(2)} ms`,
+                );
+
+                if (!results || !results.length) {
+                  throw new Error("[FaceModel] LiteRT returned no output.");
+                }
+
+                // --------------------------------------------------------
+                // Read first output tensor.
+                // --------------------------------------------------------
+                const resultTensor = results[0];
+
+                const outputData = await resultTensor.data();
+
+                if (!outputData || outputData.length === 0) {
+                  throw new Error(
+                    "[FaceModel] LiteRT output contains no data.",
+                  );
+                }
+
+                // --------------------------------------------------------
+                // Convert LiteRT output back into a TFJS tensor.
+                //
+                // Your existing parseKeypointModelOutput() expects
+                // a TFJS tensor with dataSync().
+                // --------------------------------------------------------
+                const tfOutput = tf.tensor(
+                  new Float32Array(outputData),
+                  outputShape,
+                  "float32",
+                );
+
+                console.log(
+                  "[FaceModel] Output:",
+                  tfOutput.shape,
+                  tfOutput.dtype,
+                  tfOutput.size,
+                );
+
+                return tfOutput;
+              } finally {
+                // --------------------------------------------------------
+                // LiteRT uses manual memory management.
+                // --------------------------------------------------------
+                try {
+                  litertInput.delete();
+                } catch (_) {}
+
+                try {
+                  if (results) {
+                    results.forEach((tensor) => {
+                      try {
+                        tensor.delete();
+                      } catch (_) {}
+                    });
+
+                    try {
+                      results.delete();
+                    } catch (_) {}
+                  }
+                } catch (_) {}
+              }
+            },
+          };
+
+          // ------------------------------------------------------------
+          // REAL DUMMY INFERENCE TEST
+          // ------------------------------------------------------------
+          console.log("[FaceModel] Step 5: creating REAL dummy input...");
+
+          const dummyData = new Float32Array(
+            inputShape.reduce((a, b) => a * b, 1),
+          );
+
+          // All zeros.
+          dummyData.fill(0);
+
+          const dummyFace = tf.tensor(dummyData, inputShape, "float32");
+
+          console.log(
+            "[FaceModel] Dummy input:",
+            dummyFace.shape,
+            dummyFace.dtype,
+            dummyFace.size,
+          );
+
+          console.log("[FaceModel] First values:", dummyData.slice(0, 10));
+
+          console.log("[FaceModel] Step 6: calling LiteRT inference...");
+
           const t0 = performance.now();
 
-          await tf.nextFrame();
+          let dummyPred = null;
 
-          const dummyPred = await faceModel.predict(dummyFace);
+          try {
+            dummyPred = await faceModel.predict(dummyFace);
 
-          console.log("predict time:", performance.now() - t0);
-          const t1 = performance.now();
-          console.log(
-            `[FaceModel] Step 6: predict() RETURNED after ${(t1 - t0).toFixed(0)}ms.`,
-            Array.isArray(dummyPred)
-              ? dummyPred.map((t) => t.shape)
-              : dummyPred.shape,
-          );
-          tf.dispose(dummyPred);
+            const elapsed = performance.now() - t0;
+
+            console.log(
+              `[FaceModel] INFERENCE SUCCESS: ${elapsed.toFixed(2)} ms`,
+            );
+
+            console.log("[FaceModel] Output shape:", dummyPred.shape);
+
+            console.log("[FaceModel] Output dtype:", dummyPred.dtype);
+
+            console.log("[FaceModel] Output size:", dummyPred.size);
+
+            console.log(
+              "[FaceModel] First output values:",
+              dummyPred.dataSync().slice(0, 20),
+            );
+
+            console.log("[FaceModel] FPS:", (1000 / elapsed).toFixed(2));
+          } catch (err) {
+            console.error("[FaceModel] INFERENCE FAILED:", err);
+
+            throw err;
+          } finally {
+            dummyFace.dispose();
+
+            if (dummyPred) {
+              dummyPred.dispose();
+            }
+          }
+
+          console.log("[FaceModel] LiteRT model is READY.");
         } catch (err) {
-          console.error("[FaceModel] Step 6: predict() THREW an error.", err);
+          console.error("[FaceModel] LiteRT initialization failed:", err);
+
           throw err;
-        } finally {
-          tf.dispose(dummyFace);
         }
       }
       async function predictOnce({ refreshFace = true } = {}) {
@@ -2482,7 +2913,7 @@
         try {
           if (refreshFace) {
             faceFrame = preprocessFrame(buffer, MODEL_INPUT_SIZE);
-            faceOutput = faceModel.predict(faceFrame.tensor);
+            faceOutput = await faceModel.predict(faceFrame.tensor);
             bestFace = await parseKeypointModelOutput(
               faceOutput,
               MODEL_INPUT_SIZE,
@@ -2491,6 +2922,17 @@
               faceFrame.padY,
               NUM_KPTS,
             );
+            if (bestFace) {
+              console.log(
+                "[FACE DETECTED]",
+                "conf=",
+                bestFace.score.toFixed(4),
+                "bbox=",
+                bestFace.bbox,
+              );
+            } else {
+              console.log("[FACE DETECTED] NONE");
+            }
             if (!bestFace) {
               lastFaceDetected = false;
               lastFaceScore = 0;
@@ -2499,6 +2941,11 @@
               resetBubbleCenter();
               return;
             }
+            console.log("[FACE]", {
+              confidence: bestFace.score,
+              bbox: bestFace.bbox,
+              keypoints: bestFace.kpts.length,
+            });
             lastFaceDetection = {
               score: bestFace.score,
               bbox: {
@@ -2512,6 +2959,40 @@
             lastFaceBox = lastFaceDetection.bbox;
             frameSinceFaceRefresh = 0;
             lastMotionGrayscale = null;
+            // DRAW DEBUG FACE BOX + KEYPOINTS
+            canvasCtx.clearRect(
+              0,
+              0,
+              canvasElement.width,
+              canvasElement.height,
+            );
+
+            const x = bestFace.bbox[0];
+            const y = bestFace.bbox[1];
+            const w = bestFace.bbox[2];
+            const h = bestFace.bbox[3];
+
+            canvasCtx.strokeStyle = "lime";
+            canvasCtx.lineWidth = 3;
+
+            canvasCtx.strokeRect(x, y, w, h);
+
+            canvasCtx.fillStyle = "red";
+
+            bestFace.kpts.forEach((k) => {
+              canvasCtx.beginPath();
+              canvasCtx.arc(k[0], k[1], 2, 0, Math.PI * 2);
+              canvasCtx.fill();
+            });
+
+            canvasCtx.fillStyle = "yellow";
+            canvasCtx.font = "16px Arial";
+
+            canvasCtx.fillText(
+              `Conf ${(bestFace.score * 100).toFixed(1)}%`,
+              x,
+              y - 10,
+            );
           } else {
             bestFace = lastFaceDetection;
             frameSinceFaceRefresh++;
@@ -2521,9 +3002,17 @@
             !Array.isArray(bestFace.kpts) ||
             bestFace.kpts.length < NUM_KPTS
           ) {
+            if (bestFace?.kpts) {
+              const validPts = bestFace.kpts.filter((k) => k[2] > 0.5).length;
+
+              console.log("[KEYPOINTS]", validPts, "/", bestFace.kpts.length);
+            }
+
             lastFaceDetected = false;
             lastFaceScore = bestFace?.score ?? 0;
+
             setVerification(false, "Face not found");
+
             resetBubbleCenter();
             return;
           }
@@ -2535,11 +3024,12 @@
             setVerification(false, "Tracking lost");
             return;
           }
-          lastGaze = { yaw: gaze.yaw, pitch: gaze.pitch, valid: true };
-          lastValidYaw = gaze.yaw;
-          lastValidPitch = gaze.pitch;
-          lastValidTime = Date.now();
-          moveBubbleFromGaze(gaze.yaw, gaze.pitch);
+          const smoothed = smoothGaze(gaze.yaw, gaze.pitch);
+lastGaze = { yaw: smoothed.yaw, pitch: smoothed.pitch, valid: true };
+lastValidYaw = smoothed.yaw;
+lastValidPitch = smoothed.pitch;
+lastValidTime = Date.now();
+moveBubbleFromGaze(smoothed.yaw, smoothed.pitch);
         } catch (err) {
           console.error("Inference error:", err);
           lastFaceDetected = false;
@@ -2552,8 +3042,6 @@
       }
       async function startGazePipeline() {
         try {
-          buffer.width = window.innerWidth;
-          buffer.height = window.innerHeight;
           await loadModels();
           const loop = async () => {
             requestAnimationFrame(loop);
@@ -2573,7 +3061,7 @@
               if (!lastFaceDetected) targetInterval = 250;
               else if (inferenceEMA > 120) targetInterval = 250;
               else if (inferenceEMA > 90) targetInterval = 110;
-              else targetInterval = 166;
+              else targetInterval = 80;
               isProcessing = false;
             }
           };
@@ -2597,10 +3085,27 @@
             if (videoElement.readyState >= 2) resolve();
             else videoElement.onloadedmetadata = () => resolve();
           });
-          buffer.width = 640;
-          buffer.height = 800;
+
+          // FIX: buffer must match the camera's real resolution.
+          // Never hardcode this — a mismatched aspect ratio stretches
+          // every frame before it reaches the model.
+          buffer.width = videoElement.videoWidth || 640;
+          buffer.height = videoElement.videoHeight || 480;
+
           canvasElement.width = videoElement.clientWidth || 640;
           canvasElement.height = videoElement.clientHeight || 800;
+
+          console.log(
+            "[CAMERA] native:",
+            videoElement.videoWidth,
+            "x",
+            videoElement.videoHeight,
+            "| buffer set to:",
+            buffer.width,
+            "x",
+            buffer.height,
+          );
+
           faceText.textContent = "Camera ready";
         } catch (err) {
           console.warn("Camera start failed:", err);

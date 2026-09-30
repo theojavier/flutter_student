@@ -87,7 +87,8 @@ flutter:
     - assets/model_1024/best_int8.tflite
     - assets/model_1024/best_dynamic.tflite
     - assets/model_1024/best_dynamic_640.tflite
-    - assets/model_1024/best_plain_640.tflite
+    - assets/model_1024/best_w8a32_640.tflite
+    - assets/model_1024/best_w8a16.tflite
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

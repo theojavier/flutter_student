@@ -1,454 +1,3107 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Exam Portal — Full FaceMesh with Eye Bubble</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --navy:#0f2b45;
-    --card:#0f3b61;
-    --accent:#1e90ff;
-    --bg:#0b1220;
-    --ok:#2ecc71;
-    --warn:#ff6b6b;
-    --muted:#b7c7d6;
-  }
-  *{box-sizing:border-box}
-  body{
-    margin:0;
-    font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;
-    background:linear-gradient(180deg,#061225 0%, #071728 100%);
-    color:#e6f0f8;
-    -webkit-font-smoothing:antialiased;
-    position:relative;
-    min-height:100vh;
-  }
-  .topbar{
-    height:64px;
-    background:var(--navy);
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    padding:0 20px;
-    box-shadow:0 4px 20px rgba(0,0,0,.4);
-  }
-  .topbar .brand{font-weight:700; letter-spacing:0.6px}
-  .topbar .timer{font-size:14px; color:var(--muted)}
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Exam Portal — Full FaceMesh with Eye Bubble</title>
 
-  .wrap{
-    max-width:1100px;
-    margin:28px auto;
-    display:grid;
-    grid-template-columns: 1fr 420px;
-    gap:20px;
-    padding:0 16px;
-  }
+    <!-- Firebase + App Initialization FIRST -->
+    <script type="module">
+      window.isPageReload =
+        window.performance.navigation.type === 1 ||
+        performance.getEntriesByType("navigation")[0]?.type === "reload";
+      window.isReloadSession = false;
+      window.skipIncompleteOnNextUnload = false;
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+      import {
+        getFunctions,
+        httpsCallable,
+      } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-functions.js";
 
-  .card{
-    background:#0b2a44;
-    border-radius:10px;
-    padding:20px;
-    box-shadow: 0 6px 20px rgba(0,0,0,.4);
-    position:relative;
-    overflow:visible;
-  }
-  .card h2{margin:0 0 14px; font-size:18px; color:#f3fbff}
-  .question {
-    background:#071a2b;
-    border-radius:8px;
-    padding:14px;
-    color:#dbeefc;
-    margin-bottom:18px;
-  }
-  .options label{
-    display:block;
-    padding:8px 12px;
-    margin:8px 0;
-    border-radius:6px;
-    cursor:pointer;
-    background:transparent;
-    border:1px solid rgba(255,255,255,0.03);
-  }
-  .options input{margin-right:10px}
-  .btn{
-    background:var(--accent);
-    color:#06203a;
-    border:none;
-    padding:10px 18px;
-    border-radius:8px;
-    font-weight:600;
-    cursor:pointer;
-    box-shadow: 0 6px 18px rgba(30,144,255,.16);
-  }
-  .card::after {
-    content:"";
-    position:absolute;
-    inset:6px;
-    border:3px solid rgba(255,255,255,0.05);
-    border-radius:8px;
-    pointer-events:none;
-    transition:border-color 0.18s, box-shadow 0.18s;
-  }
-  .card.alert::after {
-    border-color:var(--warn);
-    box-shadow:0 0 30px rgba(255,107,107,0.12);
-  }
-  .camera-panel{
-    background:#071a2b;
-    border-radius:10px;
-    padding:12px;
-    display:flex;
-    flex-direction:column;
-    gap:8px;
-    align-items:stretch;
-    box-shadow: 0 6px 20px rgba(0,0,0,.45);
-  }
-  .cam-viewport{
-    position:relative;
-    width:100%;
-    aspect-ratio: 4/5;
-    background:#000;
-    border-radius:8px;
-    overflow:hidden;
-  }
-  video#input_video{
-    width:100%;
-    height:100%;
-    object-fit:cover;
-    transform: scaleX(-1);
-  }
-  canvas#overlay{
-    position:absolute;
-    left:0; top:0;
-    width:100%; height:100%;
-    pointer-events:none;
-    transform: scaleX(-1);
-  }
-  .status-row{
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    margin-top:6px;
-  }
-  .face-status{
-    padding:8px 12px;
-    border-radius:8px;
-    display:flex;
-    gap:8px;
-    align-items:center;
-    background:rgba(0,0,0,0.15);
-    color:var(--muted);
-  }
-  .face-status.ok{ background: rgba(46,204,113,0.12); color:var(--ok); border:1px solid rgba(46,204,113,0.18) }
-  .face-status.bad{ background: rgba(255,107,107,0.08); color:var(--warn); border:1px solid rgba(255,107,107,0.12) }
+      import {
+        getFirestore,
+        collection,
+        getDocs,
+        doc,
+        setDoc,
+        getDoc,
+        serverTimestamp,
+        deleteField,
+        onSnapshot,
+        increment,
+      } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 
-  .recording{ font-size:13px; color:var(--muted) }
-  .verified-line{ font-weight:600; font-size:15px }
+      import {
+        getDatabase,
+        ref,
+        set,
+        onDisconnect,
+        serverTimestamp as rtdbServerTimestamp,
+      } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
-  .gaze-bubble {
-    position:fixed;
-    width:18px;
-    height:18px;
-    border-radius:50%;
-    background:rgba(30,144,255,0.95);
-    box-shadow:0 6px 14px rgba(30,144,255,0.2);
-    pointer-events:none;
-    transform:translate(-50%,-50%);
-    z-index:9999;
-    transition: box-shadow 0.12s;
-  }
-  .gaze-bubble.alert {
-    background: rgba(255,107,107,0.95);
-    box-shadow: 0 8px 20px rgba(255,107,107,0.25);
-  }
-  .strike-indicator {
-    position: absolute;
-    right:14px;
-    top:14px;
-    font-size:13px;
-    color:var(--muted);
-    background:rgba(0,0,0,0.12);
-    padding:6px 8px;
-    border-radius:8px;
-  }
-  .score-box{
-    margin-top:12px;
-    font-weight:600;
-    font-size:15px;
-    color:var(--accent);
-  }
-  @media (max-width:900px){
-    .wrap{ grid-template-columns: 1fr; }
-    .camera-panel{ order:-1 }
-  }
-</style>
-</head>
-<body>
+      import {
+        getAuth,
+        onAuthStateChanged,
+        setPersistence,
+        browserLocalPersistence,
+        getIdToken,
+      } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
 
-<div class="topbar">
-  <div class="brand">EXAM PORTAL</div>
-  <div class="timer" id="countdown">Time Left: 60:00</div>
-  <button id="connectBtn" class="btn">🔌 Connect Arduino</button>
-</div>
+      const firebaseConfig = {
+        apiKey: "AIzaSyD3QA26qrdwXjt1eRn_OBqX0zw8kbiyV3o",
+        appId: "1:348602182315:web:e5b92040815a2ef94665ee",
+        messagingSenderId: "348602182315",
+        projectId: "rd-final",
+        authDomain: "rd-final.firebaseapp.com",
+        databaseURL:
+          "https://rd-final-default-rtdb.asia-southeast1.firebasedatabase.app",
+        storageBucket: "rd-final.firebasestorage.app",
+        measurementId: "G-WBN9RY3QKG",
+      };
+      window.firestoreDoc = doc;
+      window.firestoreCollection = collection;
 
-<div class="wrap">
-  <div class="card" id="examCard">
-    <div class="strike-indicator" id="strikeBox">Strikes: 0</div>
-    <div id="examContent">
-      <h2>Question 1</h2>
-      <div class="question">
-        <p style="margin:0 0 8px">What is the capital of France?</p>
-        <div class="options">
-          <label><input type="radio" name="q1" value="Berlin"> Berlin</label>
-          <label><input type="radio" name="q1" value="Madrid"> Madrid</label>
-          <label><input type="radio" name="q1" value="Paris" checked> <strong>Paris</strong></label>
-          <label><input type="radio" name="q1" value="Rome"> Rome</label>
+      // Initialize Firebase
+      const app = initializeApp(firebaseConfig);
+      const db = getFirestore(app);
+      const rtdb = getDatabase(app);
+      const auth = getAuth(app);
+      let authReady = false;
+      const functions = getFunctions(app, "asia-southeast1");
+      window.functions = functions;
+      window.httpsCallable = httpsCallable;
+      window.rtdb = rtdb;
+      window.heartbeatInterval = null;
+      window.presenceRef = null;
+      window.examToken = null;
+      window.examTokenRefreshInterval = null;
+      async function safeSetDoc(ref, data, options) {
+        const user = auth.currentUser;
+        if (!user) throw new Error("No user signed in");
+        await getIdToken(user, true);
+        return setDoc(ref, data, options);
+      }
+
+      function startExamTokenRefresh() {
+        if (window.examTokenRefreshInterval)
+          clearInterval(window.examTokenRefreshInterval);
+
+        window.examTokenRefreshInterval = setInterval(
+          async () => {
+            try {
+              if (auth.currentUser) {
+                window.examToken = await getIdToken(auth.currentUser, true);
+              }
+            } catch (err) {
+              console.warn("Token refresh failed:", err);
+            }
+          },
+          10 * 60 * 1000,
+        );
+      }
+
+      onAuthStateChanged(auth, async (user) => {
+        if (user) {
+          authReady = true;
+          window.authUid = user.uid;
+          window.examToken = await getIdToken(user, true);
+          startExamTokenRefresh();
+          console.log("Iframe sees same user:", user.uid);
+          await setPersistence(auth, browserLocalPersistence);
+
+          // If DOM and examData are already ready, start exam now
+          if (
+            window.domReady &&
+            window.examData?.examId &&
+            window.examData?.studentId
+          ) {
+            restoreOrStartExam();
+          }
+        } else {
+          console.log("No user signed in inside iframe");
+        }
+      });
+
+      window.answers = {};
+      window.db = db; // make db global so your exam code can access it
+      window.strikes = window.strikes ?? 0;
+      window.examFinished = window.examFinished ?? false;
+      window.disableGazeDetection = false;
+      window.shuffleArray =
+        window.shuffleArray ||
+        function (arr) {
+          return arr
+            .map((value) => ({ value, sort: Math.random() }))
+            .sort((a, b) => a.sort - b.sort)
+            .map(({ value }) => value);
+        };
+      window.cheatingCount = parseInt(
+        localStorage.getItem("cheatingCount") ?? "0",
+        10,
+      );
+      window.cheatClipIndex = parseInt(
+        localStorage.getItem("cheatClipIndex") ?? "0",
+        10,
+      );
+      window.cheatCaptureStream = null;
+      window.cameraCaptureStream = null;
+      window.cheatClipWindowStart = null;
+      window.cheatClipWindowStartCount = null;
+      const CHEAT_CLIP_DURATION_MS = 3000;
+      const CHEAT_GROUP_WINDOW_MS = 3000;
+      const CHEAT_CLIP_MAX_BYTES = 2 * 1024 * 1024;
+      let studentId;
+      let answers = {};
+      // Flag to track if DOMContentLoaded ran
+      window.domReady = false;
+      window.hasSubmitted = window.hasSubmitted || false;
+      // Listen for Flutter injection
+      window.addEventListener("message", (event) => {
+        const { examId, studentId } = event.data || {};
+        if (examId && studentId) {
+          window.examData = { examId, studentId, answers: {} };
+          sessionStorage.setItem("examId", examId);
+          sessionStorage.setItem("studentId", studentId);
+
+          // If DOM is already ready, continue exam flow
+          if (window.domReady) {
+            restoreOrStartExam();
+          }
+        }
+      });
+
+      // Listen for DOM ready
+      window.addEventListener("DOMContentLoaded", () => {
+        window.domReady = true;
+        const examId = sessionStorage.getItem("examId");
+        const studentId = sessionStorage.getItem("studentId");
+
+        // If examData is already injected, continue exam flow
+        if (window.examData?.examId && window.examData?.studentId) {
+          restoreOrStartExam();
+        }
+      });
+      function listenForStatusChanges(examId, studentId) {
+        if (!authReady) {
+          const interval = setInterval(() => {
+            if (authReady) {
+              clearInterval(interval);
+              attachSnapshot(examId, studentId);
+            }
+          }, 50);
+        } else {
+          attachSnapshot(examId, studentId);
+        }
+      }
+      function attachSnapshot(examId, studentId) {
+        const resultRef = getStudentDocRef(examId);
+
+        onSnapshot(resultRef, (snap) => {
+          if (!snap.exists()) return;
+
+          const data = snap.data();
+          const currentIndex = data.currentIndex;
+
+          if (currentIndex === "stopped" && !window.hasSubmitted) {
+            const interval = setInterval(async () => {
+              if (window.examReady && !window.hasSubmitted) {
+                clearInterval(interval);
+                window.hasSubmitted = true;
+                await safeSetDoc(
+                  resultRef,
+                  {
+                    status: "incomplete",
+                  },
+                  { merge: true },
+                );
+                alert("The exam has been stopped.");
+                window.submitExam(true);
+              }
+            }, 50);
+
+            // Safety timeout to clear interval anyway
+            setTimeout(() => clearInterval(interval), 10000);
+          }
+        });
+      }
+      function getStudentDocRef(examId) {
+        const uid = window.authUid;
+        if (!uid) throw new Error("UID not ready yet");
+        return doc(window.db, "examResults", examId, "students", uid);
+      }
+
+      async function getCurrentIdToken() {
+        const user = auth.currentUser;
+        if (!user) return window.examToken || null;
+        window.examToken = await getIdToken(user, true);
+        return window.examToken;
+      }
+
+      async function setExamPresence(examId, uid, online = true) {
+        if (!examId || !uid) return;
+        try {
+          const presenceRef = ref(rtdb, `examPresence/${examId}/${uid}`);
+          window.presenceRef = presenceRef;
+          await set(presenceRef, {
+            uid,
+            online,
+            lastSeen: Date.now(),
+            updatedAt: Date.now(),
+            status: online ? "in-progress" : "offline",
+          });
+          if (online) {
+            onDisconnect(presenceRef).set({
+              uid,
+              online: false,
+              lastSeen: Date.now(),
+              disconnectedAt: Date.now(),
+              status: "offline",
+            });
+          }
+        } catch (err) {
+          console.warn("Presence update failed:", err);
+        }
+      }
+
+      async function sendExamHeartbeat() {
+        if (!window.examData?.examId || !window.authUid || window.examFinished)
+          return;
+
+        try {
+          const heartbeatFn = httpsCallable(functions, "recordExamHeartbeat");
+          await heartbeatFn({
+            examId: window.examData.examId,
+            studentId: window.authUid,
+          });
+
+          await setExamPresence(window.examData.examId, window.authUid, true);
+        } catch (err) {
+          console.warn("Heartbeat failed:", err);
+        }
+      }
+
+      function startExamHeartbeat() {
+        if (window.heartbeatInterval) clearInterval(window.heartbeatInterval);
+        sendExamHeartbeat();
+        window.heartbeatInterval = setInterval(() => {
+          if (!window.examFinished) {
+            sendExamHeartbeat();
+          }
+        }, 60000);
+      }
+
+      function stopExamHeartbeat() {
+        if (window.heartbeatInterval) {
+          clearInterval(window.heartbeatInterval);
+          window.heartbeatInterval = null;
+        }
+        if (window.examData?.examId && window.authUid) {
+          setExamPresence(window.examData.examId, window.authUid, false);
+        }
+      }
+
+      // Shared function
+      async function restoreOrStartExam() {
+        if (!authReady) {
+          console.log("Auth not ready yet, delaying exam start...");
+          return;
+        }
+        const { examId, studentId } = window.examData;
+        const wasUnloading = sessionStorage.getItem("is_unloading");
+        listenForStatusChanges(examId, studentId);
+
+        if (wasUnloading) {
+          window.isReloadSession = true;
+          sessionStorage.removeItem("is_unloading");
+
+          const resultRef = getStudentDocRef(examId);
+          await setDoc(resultRef, { status: "in-progress" }, { merge: true });
+        } else {
+          window.isReloadSession = false;
+        }
+
+        const wasStarted = sessionStorage.getItem("examStarted") === "1";
+        if (wasStarted) {
+          window.examStarted = true;
+          window.allowStrikes = true;
+          document.getElementById("examGate").style.display = "none";
+          document.getElementById("examCard").style.display = "block";
+        } else {
+          window.examStarted = false;
+          window.allowStrikes = false;
+          document.getElementById("examGate").style.display = "block";
+          document.getElementById("examCard").style.display = "none";
+        }
+
+        // Kick off exam flow if fresh
+        markInProgress();
+        if (!window.examToken && auth.currentUser) {
+          window.examToken = await getCurrentIdToken();
+        }
+        await setExamPresence(examId, studentId, true);
+        startExamHeartbeat();
+        startCountdownFromFirestore(examId);
+        await loadExamQuestions(examId);
+        window.strikesLoadedPromise = loadExistingStrikes();
+        await window.strikesLoadedPromise;
+        window.examReady = true;
+        setTimeout(() => {
+          window.isReloadSession = false;
+          //loadExistingStrikes();
+        }, 50);
+      }
+
+      const urlParams = new URLSearchParams(window.location.search);
+      const examId = urlParams.get("examId");
+      history.replaceState(
+        {},
+        "",
+        examId
+          ? `?examId=${encodeURIComponent(examId)}`
+          : window.location.pathname,
+      );
+      // Metadata logger (no cheatingCount increment here)
+      window.logCheatingEvent = async function logCheatingEvent() {
+        if (window.examFinished) return;
+        try {
+          const examId = window.examData?.examId;
+          const studentId = window.examData?.studentId;
+          if (!examId || !studentId) return;
+
+          const resultRef = getStudentDocRef(examId);
+          const snap = await getDoc(resultRef);
+          const currentStatus = snap.exists() ? snap.data().status : null;
+          if (currentStatus === "completed" || currentStatus === "incomplete")
+            return;
+
+          await setDoc(
+            resultRef,
+            {
+              examId,
+              studentId,
+              status: currentStatus ?? "in-progress",
+              lastCheatingUpdate: new Date(),
+            },
+            { merge: true },
+          );
+        } catch (err) {
+          console.error("logCheatingEvent error:", err);
+        }
+      };
+      async function markInProgress() {
+        try {
+          const examId = window.examData?.examId;
+          const studentId = window.examData?.studentId;
+          if (!examId || !studentId) return;
+
+          const resultRef = getStudentDocRef(examId);
+          const snap = await getDoc(resultRef);
+
+          if (snap.exists()) {
+            const status = snap.data().status;
+            if (status === "completed" || status === "incomplete") {
+              // Already finished — redirect to result page
+              window.parent.postMessage(
+                {
+                  action: "finishExam",
+                  examId: examId,
+                  //studentId: studentId
+                },
+                "*",
+              );
+              return;
+            }
+          }
+
+          // Otherwise mark in-progress
+          await setDoc(
+            resultRef,
+            {
+              status: "in-progress",
+              startedAt: new Date(),
+            },
+            { merge: true },
+          );
+        } catch (err) {
+          console.error("markInProgress error:", err);
+        }
+      }
+
+      async function startCameraCapture() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          console.warn("Camera capture is not supported in this browser.");
+          return false;
+        }
+
+        if (window.cameraCaptureStream && window.cameraCaptureStream.active) {
+          return true;
+        }
+
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: "user",
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          });
+          window.cameraCaptureStream = stream;
+          return true;
+        } catch (err) {
+          console.warn("Camera permission failed or was cancelled:", err);
+          return false;
+        }
+      }
+
+      window.receiveScreenStream = function receiveScreenStream(stream) {
+        if (!stream) return false;
+        const tracks = stream.getVideoTracks ? stream.getVideoTracks() : [];
+        if (!tracks || tracks.length === 0) {
+          console.warn(
+            "Received screen stream is invalid or has no video tracks.",
+          );
+          return false;
+        }
+
+        const track = tracks[0];
+        const settings = track.getSettings?.() || {};
+        const displaySurface = settings.displaySurface || "monitor";
+        const allowed =
+          displaySurface === "monitor" || displaySurface === "window";
+
+        if (!allowed) {
+          stream.getTracks().forEach((t) => t.stop());
+          console.warn("Rejected non-full-screen screen stream.");
+          return false;
+        }
+
+        if (window.cheatCaptureStream && window.cheatCaptureStream !== stream) {
+          window.cheatCaptureStream.getTracks().forEach((t) => t.stop());
+        }
+
+        window.cheatCaptureStream = stream;
+        track.addEventListener("ended", () => {
+          if (window.cheatCaptureStream === stream) {
+            window.cheatCaptureStream = null;
+          }
+        });
+
+        return true;
+      };
+      window.__inheritedParentScreen = false;
+      function tryInheritParentScreenStream() {
+        if (window.cheatCaptureStream && window.cheatCaptureStream.active)
+          return true;
+        try {
+          const parentStream =
+            window.parent && window.parent.__examScreenStream;
+          if (parentStream) {
+            const ok = window.receiveScreenStream(parentStream);
+            if (ok) {
+              window.__inheritedParentScreen = true;
+              try {
+                window.parent.__examScreenStream = null;
+              } catch (_) {}
+              console.log("Inherited screen-share stream from parent app.");
+              return true;
+            }
+          }
+        } catch (err) {
+          console.warn("Could not inherit parent screen stream:", err);
+        }
+        return false;
+      }
+      tryInheritParentScreenStream();
+
+      async function startScreenCapture() {
+        if (tryInheritParentScreenStream()) return true;
+        if (window.cheatCaptureStream && window.cheatCaptureStream.active) {
+          return true;
+        }
+
+        if (
+          !navigator.mediaDevices ||
+          !navigator.mediaDevices.getDisplayMedia
+        ) {
+          console.warn("Screen capture is not supported in this browser.");
+          return false;
+        }
+
+        try {
+          const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              displaySurface: "monitor",
+              frameRate: 10,
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          });
+
+          const track = stream.getVideoTracks()[0];
+          if (!track) {
+            stream.getTracks().forEach((t) => t.stop());
+            throw new Error("No screen track available");
+          }
+
+          const settings = track.getSettings?.() || {};
+          const displaySurface = settings.displaySurface || "";
+          const isFullScreenShare =
+            displaySurface === "monitor" || displaySurface === "window";
+
+          if (!isFullScreenShare) {
+            stream.getTracks().forEach((t) => t.stop());
+            console.warn(
+              "Full screen share required; ignoring tab/window share.",
+            );
+            return false;
+          }
+
+          track.addEventListener("ended", () => {
+            window.cheatCaptureStream = null;
+          });
+
+          window.cheatCaptureStream = stream;
+          return true;
+        } catch (err) {
+          console.warn(
+            "Screen capture permission failed or was cancelled:",
+            err,
+          );
+          return false;
+        }
+      }
+
+      function getCheatGroupRange() {
+        const currentCount = Number(window.cheatingCount || 0);
+        const now = Date.now();
+
+        if (!window.cheatClipWindowStart || !window.cheatClipWindowStartCount) {
+          window.cheatClipWindowStart = now;
+          window.cheatClipWindowStartCount = currentCount;
+        }
+
+        if (now - window.cheatClipWindowStart > CHEAT_GROUP_WINDOW_MS) {
+          window.cheatClipWindowStart = now;
+          window.cheatClipWindowStartCount = currentCount;
+        }
+
+        return {
+          start: Number(window.cheatClipWindowStartCount || 0),
+          end: currentCount,
+        };
+      }
+
+      function pickMimeType() {
+        const types = [
+          "video/webm;codecs=vp9",
+          "video/webm;codecs=vp8",
+          "video/webm",
+          "video/mp4",
+        ];
+
+        return types.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+      }
+
+      async function recordCheatClip(examId) {
+        if (!examId) return;
+
+        const clipRange = getCheatGroupRange();
+        const currentCheatCount = Number(window.cheatingCount || 0);
+        const currentClipIndex = (Number(window.cheatClipIndex) || 0) + 1;
+        window.cheatClipIndex = currentClipIndex;
+        localStorage.setItem("cheatClipIndex", String(window.cheatClipIndex));
+
+        const captureScreen = await startScreenCapture();
+        const captureCamera = await startCameraCapture();
+
+        if (!captureScreen && !captureCamera) {
+          console.warn(
+            "Skipping cheat clip upload because neither screen nor camera capture is available.",
+          );
+          return;
+        }
+
+        const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
+
+        async function uploadStream(stream, kind) {
+          if (!stream || !stream.active) return;
+
+          const recorder = new MediaRecorder(stream, {
+            mimeType: pickMimeType() || undefined,
+            videoBitsPerSecond: 800000,
+          });
+
+          const chunks = [];
+          recorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) chunks.push(event.data);
+          };
+
+          const stopped = new Promise((resolve) => {
+            recorder.onstop = resolve;
+          });
+
+          recorder.start();
+          setTimeout(() => {
+            if (recorder.state !== "inactive") recorder.stop();
+          }, CHEAT_CLIP_DURATION_MS);
+
+          await stopped;
+
+          const contentType =
+            recorder.mimeType && recorder.mimeType.startsWith("video/mp4")
+              ? "video/mp4"
+              : "video/webm";
+
+          const blob = new Blob(chunks, { type: contentType });
+          const { data } = await requestFn({
+            examId,
+            occurredAt: Date.now(),
+            cheatCount: currentCheatCount,
+            startCheatCount: clipRange.start,
+            endCheatCount: clipRange.end,
+            parts: {
+              ...(captureScreen ? { screen: contentType } : {}),
+              ...(captureCamera ? { camera: contentType } : {}),
+            },
+            kind,
+            contentType,
+          });
+
+          const upload = data?.uploads?.[kind];
+          if (!upload?.uploadUrl) {
+            throw new Error(`No signed URL returned for ${kind} clip`);
+          }
+
+          const uploadRes = await fetch(upload.uploadUrl, {
+            method: "PUT",
+            headers: {
+              "Content-Type": upload.contentType,
+              "x-goog-content-length-range": `0,${upload.maxBytes || 3 * 1024 * 1024}`,
+            },
+            body: blob,
+          });
+
+          if (!uploadRes.ok) {
+            throw new Error(
+              `${kind} clip upload failed with status ${uploadRes.status}`,
+            );
+          }
+
+          console.log(`${kind} cheat clip uploaded:`, upload.filePath);
+        }
+
+        try {
+          await uploadStream(window.cheatCaptureStream, "screen");
+          await uploadStream(window.cameraCaptureStream, "camera");
+        } catch (err) {
+          console.error("Cheat clip upload error:", err);
+        }
+      }
+
+      window.registerStrikeOnce = (function () {
+        let lastAway = 0;
+        return async function registerStrikeOnce() {
+          const now = Date.now();
+          if (now - lastAway < 1200) return;
+          lastAway = now;
+
+          if (window.strikesLoadedPromise) await window.strikesLoadedPromise;
+
+          // Local counter (use cheatingCount consistently)
+          window.cheatingCount = (window.cheatingCount || 0) + 1;
+          localStorage.setItem("cheatingCount", window.cheatingCount);
+
+          document.getElementById("strikeBox").textContent =
+            `Strikes: ${window.cheatingCount}`;
+
+          // Update status metadata (no increment here)
+          await window.logCheatingEvent();
+
+          // Push increment to Firestore (atomic, never decreases)
+          const examId = window.examData?.examId;
+          const studentId = window.examData?.studentId;
+          if (examId && studentId) {
+            const resultRef = getStudentDocRef(examId);
+            await safeSetDoc(
+              resultRef,
+              {
+                cheatingCount: increment(1),
+              },
+              { merge: true },
+            );
+
+            try {
+              await recordCheatClip(examId);
+            } catch (clipErr) {
+              console.error("recordCheatClip failed:", clipErr);
+            }
+          }
+
+          console.log("Strike registered:", window.cheatingCount);
+        };
+      })();
+
+      async function pushStrikeToFirestore(examId, studentId) {
+        const resultRef = getStudentDocRef(examId);
+
+        await safeSetDoc(
+          resultRef,
+          {
+            cheatingCount: increment(1),
+          },
+          { merge: true },
+        );
+      }
+
+      // Mark incomplete (keep this in module so beforeunload can call it safely)
+      // window.markStoppedIfNeeded = function () {
+      //   try {
+      //     if (window.examFinished) return;
+      //     const examId = window.examData?.examId;
+      //     const studentId = window.examData?.studentId;
+      //     if (!examId || !studentId) return;
+
+      //     const resultRef = getStudentDocRef(examId)
+      //     safeSetDoc(resultRef, {
+      //       currentIndex: "stopped",
+      //       submittedAt: new Date()
+      //     }, { merge: true });
+      //   } catch (err) {
+      //     console.error("markIncomplete error:", err);
+      //   }
+      // };
+
+      window.saveAnswerToFirestore = async function (q, val, displayIndex) {
+        const examId = window.examData?.examId;
+        const studentId = window.examData?.studentId;
+        if (!examId || !studentId) return false;
+
+        const studentDoc = getStudentDocRef(examId);
+        const answerRef = doc(collection(studentDoc, "answers"), q.id);
+
+        let answerValue = val;
+        if (q.type?.toLowerCase() === "checkbox") {
+          // collect all checked boxes for this question
+          const inputs = document.querySelectorAll(
+            `input[name="${q.id}"]:checked`,
+          );
+          answerValue = Array.from(inputs).map((i) => i.value);
+        }
+
+        try {
+          await setDoc(
+            answerRef,
+            {
+              questionId: q.id,
+              question: q.questionText,
+              answer: answerValue,
+              //correctAnswer: q.correctAnswer,
+              displayIndex,
+            },
+            { merge: true },
+          );
+          window.answers[q.id] = answerValue;
+          return true;
+        } catch (err) {
+          console.error("Firestore save failed:", err);
+          return false;
+        }
+      };
+
+      window.submitExam = async function submitExam(forceIncomplete = false) {
+        try {
+          const examId = window.examData?.examId;
+
+          if (!examId) {
+            console.error("Missing examId");
+            alert("Submission error: Missing exam data.");
+            return;
+          }
+
+          // Get the user's ID token first
+          const user = auth.currentUser;
+          if (!user) {
+            throw new Error(
+              "No authenticated user found. Please sign in again.",
+            );
+          }
+
+          // Use the locally scoped functions and httpsCallable
+          stopExamHeartbeat();
+          const submitExamFunction = httpsCallable(functions, "submitExam");
+
+          const result = await submitExamFunction({
+            examId: examId,
+            forceIncomplete: forceIncomplete,
+          });
+
+          console.log("Exam submitted successfully:", result.data);
+          handleSuccessfulSubmission(examId, result.data);
+        } catch (err) {
+          console.error("submitExam error:", err);
+          alert(`Submission failed: ${err.message}`);
+        }
+      };
+
+      function handleSuccessfulSubmission(examId, result) {
+        clearExamStorage();
+
+        window.examFinished = true;
+        window.questions = [];
+        window.answers = {};
+        window.examData = null;
+        window.cheatingCount = 0;
+        window.strikes = 0;
+
+        // Stop camera if running
+        try {
+          window.camera?.stop?.();
+        } catch (_) {}
+
+        // Notify parent window or redirect
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(
+            {
+              action: "finishExam",
+              examId: examId,
+            },
+            "*",
+          );
+        } else {
+          console.error("aaaaaa");
+          clearExamStorage();
+
+          window.examFinished = true;
+          window.questions = [];
+          window.answers = {};
+          window.examData = null;
+          window.cheatingCount = 0;
+          window.strikes = 0;
+          window.parent.postMessage(
+            {
+              action: "finishExam",
+              examId: examId,
+            },
+            "*",
+          );
+        }
+      }
+
+      function resetSubmitButton() {
+        const submitBtn = document.getElementById("submitBtn");
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Submit Exam";
+        }
+      }
+
+      async function startCountdownFromFirestore(examId) {
+        const countdownEl = document.getElementById("countdown");
+        if (!countdownEl) return;
+
+        const examRef = doc(db, "exams", examId);
+        const examSnap = await getDoc(examRef);
+
+        if (!examSnap.exists()) {
+          console.error(" Exam not found for examId:", examId);
+          countdownEl.textContent = "Exam not found!";
+          return;
+        }
+
+        const data = examSnap.data();
+
+        const endTime = data.endTime?.toDate?.().getTime?.();
+        const startTime = data.startTime?.toDate?.().getTime?.();
+
+        if (!endTime || !startTime) {
+          console.error(" Missing start/end time in exam doc:", data);
+          countdownEl.textContent = "No schedule set";
+          return;
+        }
+
+        const timer = setInterval(() => {
+          const durationMs = endTime - startTime;
+          const elapsedMs = Date.now() - startTime;
+          const remainingMs = Math.max(durationMs - elapsedMs, 0);
+          if (remainingMs <= 0) {
+            clearInterval(timer);
+            countdownEl.textContent = "Time's up!";
+            clearExamStorage();
+
+            window.markIncompleteIfNeeded2cloudfunction();
+            window.parent.postMessage(
+              {
+                action: "finishExam",
+                examId: examId,
+              },
+              "*",
+            );
+            return;
+          }
+          countdownEl.textContent =
+            "Time Left: " + formatRemaining(remainingMs);
+        }, 1000);
+      }
+
+      // Visibility change  log strike if not reload/shell
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          setTimeout(() => {
+            if (document.hidden && !window.skipIncompleteOnNextUnload) {
+              window.registerStrikeOnce();
+            }
+          }, 1200);
+        }
+      });
+      // //Detect window shrink on mobile + iframe + Flutter
+      // const MIN_WIDTH = 600;
+      // const MIN_HEIGHT = 450;
+
+      // new ResizeObserver(() => {
+      //   const vw = document.documentElement.clientWidth;
+      //   const vh = document.documentElement.clientHeight;
+
+      //   if ((vw < MIN_WIDTH || vh < MIN_HEIGHT) && !window.skipIncompleteOnNextUnload) {
+      //     window.registerStrikeOnce();
+      //   }
+      // }).observe(document.documentElement);
+
+      // //detect iframe/body being resized by Flutter shell
+      // new ResizeObserver(() => {
+      //   const rect = document.body.getBoundingClientRect();
+
+      //   if ((rect.width < MIN_WIDTH || rect.height < MIN_HEIGHT) && !window.skipIncompleteOnNextUnload) {
+      //     window.registerStrikeOnce();
+      //   }
+      // }).observe(document.body);
+      // window.addEventListener("beforeunload", () => {
+
+      //   sessionStorage.setItem("is_unloading", "true");
+
+      //   if (window.examStarted) {
+      //     sessionStorage.setItem("examStarted", "1");
+      //   }
+
+      //   if (window.isPageReload || window.skipIncompleteOnNextUnload) {
+      //     return;
+      //   }
+      //   localStorage.removeItem("cheatingCount");
+
+      //   window.markIncompleteIfNeeded();
+      // });
+      window.markIncompleteIfNeeded2cloudfunction = async function () {
+        try {
+          const examId =
+            window.examData?.examId || sessionStorage.getItem("examId");
+          const uid = window.authUid || window.examData?.studentId;
+
+          console.log(
+            "Attempting to mark incomplete. examId:",
+            examId,
+            "uid:",
+            uid,
+          );
+
+          if (!examId || !uid) {
+            console.warn("Missing examId or uid, skipping markIncomplete");
+            return;
+          }
+
+          const token = await getCurrentIdToken();
+          if (!token) {
+            console.warn("No ID token available for markIncomplete");
+            return;
+          }
+
+          window.examToken = token;
+
+          const res = await fetch(
+            "https://asia-southeast1-rd-final.cloudfunctions.net/markIncomplete",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ examId, uid }),
+              keepalive: true,
+            },
+          );
+
+          const result = await res.json().catch(() => ({}));
+          console.log("Incomplete exam marked successfully", result);
+        } catch (err) {
+          console.error("Failed to mark incomplete:", err);
+        }
+      };
+      const EXAM_SESSION_KEYS = ["examId", "examStarted", "is_unloading"];
+      const EXAM_LOCAL_KEYS = ["cheatingCount", "cheatClipIndex"];
+
+      function clearExamStorage() {
+        EXAM_SESSION_KEYS.forEach((key) => sessionStorage.removeItem(key));
+        EXAM_LOCAL_KEYS.forEach((key) => localStorage.removeItem(key));
+      }
+      function resetExamRuntimeState() {
+        window.examStarted = false;
+        window.cheatingCount = 0;
+        window.strikes = 0;
+        window.examData = null;
+        window.answers = {};
+        window.questions = [];
+        window.hasSubmitted = false;
+        window.allowStrikes = false;
+      }
+
+      // Only bookkeeping in unload. The real shutdown authority is the heartbeat + scheduled cleanup.
+      window.addEventListener("beforeunload", () => {
+        if (window.examStarted) {
+          sessionStorage.setItem("examStarted", "1");
+        }
+      });
+
+      let currentQuestionIndex = 0;
+      function isQuestionAnswered(q) {
+        const type = q.type?.toLowerCase();
+
+        //Multiple Choice / True-False
+        if (type === "multiple-choice" || type === "true-false") {
+          const el = document.querySelector(`input[name="${q.id}"]:checked`);
+          if (!el) return null;
+          return el.value;
+        }
+
+        //Matching / Dropdown
+        if (type === "matching" || type === "dropdown") {
+          const sel = document.querySelector(`select[name="${q.id}"]`);
+          if (!sel || sel.value.trim() === "") return null;
+          return sel.value;
+        }
+
+        //Multiple answers
+        if (type === "checkbox") {
+          const inputs = document.querySelectorAll(
+            `input[name="${q.id}"]:checked`,
+          );
+          const values = Array.from(inputs).map((i) => i.value);
+          return values.length > 0 ? values : null;
+        }
+
+        return null;
+      }
+
+      function getSelectedAnswer(q) {
+        return isQuestionAnswered(q);
+      }
+
+      window.handleAnswerChange = async function (index) {
+        const q = window.questions[index];
+        if (!q) return;
+
+        const val = getSelectedAnswer(q);
+        const btn = document.getElementById("nextQuestion");
+        if (btn) btn.disabled = !val;
+
+        if (!val) return;
+
+        await window.saveAnswerToFirestore(q, val, index);
+      };
+      function showQuestion(index) {
+        const q = window.questions?.[index];
+        if (!q) return;
+
+        try {
+          document.getElementById("examContent").innerHTML =
+            generateQuestionHtml(
+              q,
+              index,
+              window.answers,
+              window.matchingPool || [],
+            );
+        } catch (err) {
+          console.error("generateQuestionHtml failed:", err);
+          document.getElementById("examContent").innerHTML = `
+      <h2>Question ${index + 1}</h2>
+      <div class="question"><p>${q.questionText ?? "No text"}</p></div>
+    `;
+        }
+
+        const btn = document.getElementById("nextQuestion");
+        if (!btn) return;
+        btn.disabled = !isQuestionAnswered(q);
+
+        // Listen to changes (ensure button state)
+        const inputs = document.querySelectorAll(
+          `input[name="${q.id}"], select[name="${q.id}"]`,
+        );
+        inputs.forEach((inp) => {
+          inp.addEventListener("change", () => {
+            btn.disabled = !isQuestionAnswered(q);
+          });
+        });
+
+        renderNextOrSubmitButton();
+      }
+      function renderNextOrSubmitButton() {
+        const btn = document.getElementById("nextQuestion");
+        if (!btn) return;
+        const q = window.questions[currentQuestionIndex];
+
+        btn.disabled = false;
+
+        if (currentQuestionIndex < window.questions.length - 1) {
+          btn.textContent = "Next";
+          btn.onclick = async () => {
+            if (!isQuestionAnswered(q)) {
+              document.getElementById("answermodelneeded").style.display =
+                "block";
+              return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = "Saving...";
+
+            const val = getSelectedAnswer(q);
+            const saved = await window.saveAnswerToFirestore(
+              q,
+              val,
+              currentQuestionIndex,
+            );
+            if (!saved) {
+              alert("Saving failed. Check your internet and try again.");
+              btn.disabled = false;
+              btn.textContent = "Next";
+              return;
+            }
+
+            try {
+              const examId = window.examData.examId;
+              const studentId = window.examData.studentId;
+              const studentCollection = getStudentDocRef(examId);
+              await setDoc(
+                studentCollection,
+                { currentIndex: currentQuestionIndex + 1 },
+                { merge: true },
+              );
+            } catch (err) {
+              console.error("Failed to save currentIndex:", err);
+            }
+
+            currentQuestionIndex++;
+            showQuestion(currentQuestionIndex);
+          };
+        }
+        // Submit button (last question)
+        else {
+          btn.textContent = "Submit";
+          btn.onclick = async () => {
+            if (!isQuestionAnswered(q)) {
+              document.getElementById("answermodelneeded").style.display =
+                "block";
+              return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = "Saving...";
+
+            const val = getSelectedAnswer(q);
+            const saved = await window.saveAnswerToFirestore(
+              q,
+              val,
+              currentQuestionIndex,
+            );
+            if (!saved) {
+              alert("Saving failed. Check your internet.");
+              btn.disabled = false;
+              btn.textContent = "Submit";
+              return;
+            }
+
+            // Show custom modal instead of confirm()
+            document.getElementById("confirmModal").style.display = "block";
+
+            // Handle Yes/No clicks
+            document.getElementById("confirmYes").onclick = () => {
+              document.getElementById("confirmModal").style.display = "none";
+              window.disableGazeDetection = true;
+              window.submitExam();
+            };
+
+            document.getElementById("confirmNo").onclick = () => {
+              document.getElementById("confirmModal").style.display = "none";
+              btn.disabled = false;
+              btn.textContent = "Submit";
+            };
+          };
+        }
+      }
+
+      async function loadExamQuestions(examId) {
+        if (!examId) {
+          console.error("loadExamQuestions called with null examId");
+          return;
+        }
+
+        // Reset UI placeholders
+        document.getElementById("examContent").innerHTML = `
+    <h2>Loading…</h2>
+    <div class="question"><p>Loading…</p></div>
+  `;
+
+        try {
+          //Fetch all question docs
+          const questionsCol = collection(db, "exams", examId, "questions");
+          const snapshot = await getDocs(questionsCol);
+
+          if (snapshot.empty) {
+            console.error("No questions found in Firestore for exam:", examId);
+            document.getElementById("examContent").innerHTML =
+              "<p>No questions found.</p>";
+            return;
+          }
+
+          const rawQuestions = snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }));
+          const groups = {
+            "true-false": [],
+            "multiple-choice": [],
+            matching: [],
+          };
+
+          // Put each question into its group
+          rawQuestions.forEach((q) => {
+            const t = (q.type || "").toLowerCase();
+            if (groups[t]) groups[t].push(q);
+          });
+
+          // Shuffle each group independently
+          Object.keys(groups).forEach((type) => {
+            groups[type] = (window.shuffleArray || ((arr) => arr)).call(
+              window,
+              groups[type],
+            );
+          });
+
+          // Build final grouped+random order
+          const sortedRandom = [
+            ...groups["true-false"],
+            ...groups["multiple-choice"],
+            ...groups["matching"],
+          ];
+
+          const finalQuestions = sortedRandom;
+
+          const resultRef = getStudentDocRef(examId);
+          const resultSnap = await getDoc(resultRef);
+
+          let orderedIds;
+          if (resultSnap.exists() && resultSnap.data().questionOrder) {
+            orderedIds = resultSnap.data().questionOrder;
+          } else {
+            orderedIds = finalQuestions.map((q) => q.id);
+            await setDoc(
+              resultRef,
+              { questionOrder: orderedIds },
+              { merge: true },
+            );
+          }
+          const orderedQuestions = orderedIds
+            .map((qid, idx) => {
+              const q = rawQuestions.find((rq) => rq.id === qid);
+              if (!q) {
+                console.warn("Question ID not found:", qid);
+                return null;
+              }
+              return {
+                ...q,
+                index: idx,
+                questionText: q.questionText ?? q.text ?? "",
+                type: (q.type ?? q.kind ?? "multiple-choice").toLowerCase(),
+                options: Array.isArray(q.options)
+                  ? q.options
+                  : Array.isArray(q.choices)
+                    ? q.choices
+                    : [],
+              };
+            })
+            .filter(Boolean);
+
+          window.questions = orderedQuestions;
+          window.answers = window.answers || {};
+
+          //Build matching pool now that window.questions exists
+          window.matchingPool = Array.from(
+            new Set(
+              window.questions
+                .filter(
+                  (q) => q.type === "matching" && Array.isArray(q.options),
+                )
+                .flatMap((q) => q.options),
+            ),
+          );
+
+          if (
+            resultSnap.exists() &&
+            resultSnap.data().currentIndex !== undefined
+          ) {
+            currentQuestionIndex = resultSnap.data().currentIndex;
+            console.log("Restored currentIndex:", currentQuestionIndex);
+          } else {
+            console.log("ℹNo currentIndex saved, starting at 0");
+          }
+
+          try {
+            showQuestion(currentQuestionIndex);
+            renderNextOrSubmitButton();
+          } catch (err) {
+            console.error("showQuestion/render failed:", err);
+            document.getElementById("examContent").innerHTML =
+              `<p>Error rendering question: ${err.message}</p>`;
+          }
+        } catch (err) {
+          console.error("loadExamQuestions failed:", err);
+          document.getElementById("examContent").innerHTML =
+            `<p>Error loading questions: ${err.message}</p>`;
+        }
+      }
+      window.strikesLoadedPromise = null;
+
+      async function loadExistingStrikes() {
+        const examId = window.examData?.examId;
+        const studentId = window.examData?.studentId;
+        if (!examId || !studentId) return;
+
+        // Start from localStorage
+        window.cheatingCount = parseInt(
+          localStorage.getItem("cheatingCount") ?? "0",
+          10,
+        );
+
+        const resultRef = getStudentDocRef(examId);
+        const snap = await getDoc(resultRef);
+
+        let remote = 0;
+        if (snap.exists()) {
+          const saved = snap.data().cheatingCount;
+          if (typeof saved === "number") {
+            remote = saved;
+            // never lower local strikes
+            window.cheatingCount = Math.max(window.cheatingCount, saved);
+            localStorage.setItem("cheatingCount", window.cheatingCount);
+          }
+        }
+
+        // If local is higher than remote, push absolute value
+        if (window.cheatingCount > remote) {
+          await safeSetDoc(
+            resultRef,
+            {
+              cheatingCount: window.cheatingCount,
+            },
+            { merge: true },
+          );
+          console.log("Synced strikes to Firestore:", window.cheatingCount);
+        }
+
+        document.getElementById("strikeBox").textContent =
+          `Strikes: ${window.cheatingCount}`;
+      }
+      // Handle the OK button in the answer required modal
+      document.getElementById("answerOkBtn").onclick = function () {
+        document.getElementById("answermodelneeded").style.display = "none";
+      };
+    </script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --navy: #0f2b45;
+        --card: #0f3b61;
+        --accent: #1e90ff;
+        --bg: #0b1220;
+        --ok: #2ecc71;
+        --warn: #ff6b6b;
+        --muted: #b7c7d6;
+      }
+
+      .modal {
+        display: none;
+        position: fixed;
+        z-index: 9999;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.6);
+      }
+
+      .modal-content {
+        background: var(--card);
+        padding: 20px;
+        margin: 15% auto;
+        width: 320px;
+        text-align: center;
+        border-radius: 10px;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family:
+          Inter,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          "Helvetica Neue",
+          Arial;
+        background: linear-gradient(180deg, #061225 0%, #071728 100%);
+        color: #e6f0f8;
+        -webkit-font-smoothing: antialiased;
+        position: relative;
+        min-height: 100vh;
+      }
+
+      .topbar {
+        height: 64px;
+        background: var(--navy);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 20px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      }
+
+      .topbar .brand {
+        font-weight: 700;
+        letter-spacing: 0.6px;
+      }
+
+      .topbar .timer {
+        position: absolute;
+        left: 40%;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .wrap {
+        max-width: 1100px;
+        margin: 28px auto;
+        display: grid;
+        grid-template-columns: 1fr 420px;
+        gap: 20px;
+        padding: 0 16px;
+      }
+
+      .card {
+        background: #0b2a44;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+        position: relative;
+        overflow: visible;
+      }
+
+      #examGate,
+      #examCard {
+        min-height: 500px;
+      }
+
+      .card h2 {
+        margin: 0 0 14px;
+        font-size: 18px;
+        color: #f3fbff;
+      }
+
+      .question {
+        background: #071a2b;
+        border-radius: 8px;
+        padding: 14px;
+        color: #dbeefc;
+        margin-bottom: 18px;
+      }
+
+      .options label {
+        display: block;
+        padding: 8px 12px;
+        margin: 8px 0;
+        border-radius: 6px;
+        cursor: pointer;
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.03);
+      }
+
+      .options input {
+        margin-right: 10px;
+      }
+
+      .btn {
+        background: var(--accent);
+        color: #06203a;
+        border: none;
+        padding: 10px 18px;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 6px 18px rgba(30, 144, 255, 0.16);
+      }
+
+      select {
+        width: 100%;
+        padding: 10px 12px;
+        background: #071a2b;
+        color: #e6f0f8;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 6px;
+        font-size: 15px;
+        margin-top: 8px;
+        margin-bottom: 8px;
+        appearance: none;
+        cursor: pointer;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
+        transition:
+          border-color 0.2s,
+          background-color 0.2s;
+      }
+
+      select:focus {
+        outline: none;
+        border-color: #1e90ff;
+        background: #0b2a44;
+      }
+
+      /* Dropdown options */
+      select option {
+        background: #071a2b;
+        color: #e6f0f8;
+      }
+
+      .card::after {
+        content: "";
+        position: absolute;
+        inset: 6px;
+        border: 3px solid rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        pointer-events: none;
+        transition:
+          border-color 0.18s,
+          box-shadow 0.18s;
+      }
+
+      .card.alert::after {
+        border-color: var(--warn);
+        box-shadow: 0 0 30px rgba(255, 107, 107, 0.12);
+      }
+
+      .camera-panel {
+        background: #071a2b;
+        border-radius: 10px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: stretch;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+      }
+
+      .cam-viewport {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 4/5;
+        background: #000;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      video#input_video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scaleX(-1);
+      }
+
+      canvas#overlay {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        transform: scaleX(-1);
+      }
+
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 6px;
+      }
+
+      .face-status {
+        padding: 8px 12px;
+        border-radius: 8px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        background: rgba(0, 0, 0, 0.15);
+        color: var(--muted);
+      }
+
+      .face-status.ok {
+        background: rgba(46, 204, 113, 0.12);
+        color: var(--ok);
+        border: 1px solid rgba(46, 204, 113, 0.18);
+      }
+
+      .face-status.bad {
+        background: rgba(255, 107, 107, 0.08);
+        color: var(--warn);
+        border: 1px solid rgba(255, 107, 107, 0.12);
+      }
+
+      .recording {
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .verified-line {
+        font-weight: 600;
+        font-size: 15px;
+      }
+
+      .gaze-bubble {
+        position: fixed;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: rgba(30, 144, 255, 0.95);
+        box-shadow: 0 6px 14px rgba(30, 144, 255, 0.2);
+        pointer-events: none;
+        transform: translate(-50%, -50%);
+        z-index: 9999;
+        transition: box-shadow 0.12s;
+      }
+
+      .gaze-bubble.alert {
+        background: rgba(255, 107, 107, 0.95);
+        box-shadow: 0 8px 20px rgba(255, 107, 107, 0.25);
+      }
+
+      .strike-indicator {
+        position: absolute;
+        right: 14px;
+        top: 14px;
+        font-size: 13px;
+        color: var(--muted);
+        background: rgba(0, 0, 0, 0.12);
+        padding: 6px 8px;
+        border-radius: 8px;
+      }
+
+      @media (max-width: 900px) {
+        .wrap {
+          grid-template-columns: 1fr;
+        }
+
+        .camera-panel {
+          order: 2;
+        }
+
+        #examContent {
+          min-height: 380px;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="topbar">
+      <div class="brand">EXAM PORTAL</div>
+      <div class="timer" id="countdown">Time Left: 00:00</div>
+    </div>
+
+    <div class="wrap">
+      <!-- shared strike indicator (single id) -->
+      <div style="position: relative">
+        <div
+          class="strike-indicator"
+          id="strikeBox"
+          style="position: absolute; right: 14px; top: -8px; z-index: 20"
+        >
+          Strikes: 0
+        </div>
+
+        <!-- GATE CARD (visible first) -->
+        <div class="card" id="examGate">
+          <div id="examContentGate">
+            <h2 style="text-align: center">Face verification required</h2>
+            <p style="text-align: center">
+              Please look at the screen to start your exam.
+            </p>
+
+            <div
+              style="display: flex; justify-content: center; margin-top: 12px"
+            >
+              <img
+                src="image/Fots.png"
+                style="width: 180px; border-radius: 8px"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- EXAM CARD (hidden first) -->
+        <div class="card" id="examCard" style="display: none">
+          <div id="examContent">
+            <h2>Question 1</h2>
+            <div class="question">
+              <p>Loading questions...</p>
+            </div>
+          </div>
+
+          <div style="margin-top: 12px; text-align: right">
+            <button class="btn" id="nextQuestion">Next</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT SIDE — CAMERA PANEL (NOW SEPARATE) -->
+      <div class="camera-panel">
+        <div class="cam-viewport">
+          <video id="input_video" autoplay playsinline muted></video>
+          <canvas id="overlay"></canvas>
+        </div>
+
+        <div class="status-row">
+          <div id="faceStatus" class="face-status bad">
+            <span id="faceIcon">⛔</span>
+            <div>
+              <div class="verified-line" id="faceText">Face not verified</div>
+              <div style="font-size: 12px; color: var(--muted)">
+                Please center your face in the box and keep eyes on the screen
+              </div>
+            </div>
+          </div>
+
+          <div style="text-align: right">
+            <div class="recording" id="recLabel">Recording. Active</div>
+          </div>
         </div>
       </div>
     </div>
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap">
-      <div style="display:flex; gap:8px; align-items:center">
-        <button class="btn" id="submitBtn">Submit Exam</button>
-      </div>
-      <div style="color:var(--muted); font-size:13px">Recording: <span id="recState">Active</span></div>
-    </div>
-    <div class="score-box" id="scoreBox">Score: 0/1</div>
-  </div>
-
-  <div class="camera-panel">
-    <div class="cam-viewport">
-      <video id="input_video" autoplay playsinline muted></video>
-      <canvas id="overlay"></canvas>
-    </div>
-    <div class="status-row">
-      <div id="faceStatus" class="face-status bad">
-        <span id="faceIcon">⛔</span>
-        <div>
-          <div class="verified-line" id="faceText">Face not verified</div>
-          <div style="font-size:12px; color:var(--muted)">Please center your face in the box and keep eyes on the screen</div>
-        </div>
-      </div>
-      <div style="text-align:right">
-        <div class="recording" id="recLabel">Recording. Active</div>
+    <!-- Confirmation Modal -->
+    <div id="confirmModal" class="modal">
+      <div class="modal-content">
+        <p>Are you sure you want to submit the exam?</p>
+        <hr style="border: 2px solid blue" />
+        <button
+          id="confirmYes"
+          class="btn"
+          style="background: var(--ok); color: #fff"
+        >
+          Yes
+        </button>
+        <button
+          id="confirmNo"
+          class="btn"
+          style="background: var(--warn); color: #fff"
+        >
+          No
+        </button>
       </div>
     </div>
-  </div>
-</div>
+    <div id="answermodelneeded" class="modal">
+      <div class="modal-content">
+        <hr style="border: 2px solid red" />
+        <p>Please answer this question before proceeding</p>
+        <button
+          id="answerOkBtn"
+          class="btn"
+          style="background: var(--ok); color: #fff; width: 100px"
+        >
+          OK
+        </button>
+      </div>
+    </div>
 
-<div id="gazeBubble" class="gaze-bubble" style="left:50%; top:50%; display:block;"></div>
+    <!-- Gaze bubble must stay OUTSIDE wrap -->
+    <div
+      id="gazeBubble"
+      class="gaze-bubble"
+      style="left: 50%; top: 50%; display: block"
+    ></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 
-<script>
-// ========== ARDUINO SERIAL CONNECTION ==========
-let port;
-let writer;
+    <script>
+      //ARDUINO SERIAL CONNECTION
+      // ===============================================
 
-document.getElementById('connectBtn').addEventListener('click', async () => {
-  try {
-    port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 9600 });
-    const textEncoder = new TextEncoderStream();
-    const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
-    writer = textEncoder.writable.getWriter();
-    alert("Connected to Arduino!");
-  } catch (err) {
-    alert("Connection failed: " + err);
-  }
-});
+      // ========== EXISTING EXAM CODE (UNCHANGED) ==========
+      const videoElement = document.getElementById("input_video");
+      const canvasElement = document.getElementById("overlay");
+      const canvasCtx = canvasElement.getContext("2d");
+      const faceStatus = document.getElementById("faceStatus");
+      const faceText = document.getElementById("faceText");
+      const faceIcon = document.getElementById("faceIcon");
+      const countdownEl = document.getElementById("countdown");
+      const submitBtn = document.getElementById("submitBtn");
+      const examCard = document.getElementById("examCard");
+      const gazeBubble = document.getElementById("gazeBubble");
+      const strikeBox = document.getElementById("strikeBox");
 
-async function sendToArduino(message) {
-  if (!writer) return;
-  await writer.write(message + "\n");
-  console.log("Sent to Arduino:", message);
-}
-// ===============================================
+      let totalSeconds = 60 * 60;
+      window.allowStrikes = false;
 
+      function formatRemaining(ms) {
+        const totalSec = Math.max(0, Math.floor(ms / 1000));
+        const hours = Math.floor(totalSec / 3600);
+        const minutes = Math.floor((totalSec % 3600) / 60);
+        const seconds = totalSec % 60;
+        if (hours > 0) {
+          return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+        }
+        return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+      }
 
-// ========== EXISTING EXAM CODE (UNCHANGED) ==========
-const videoElement=document.getElementById('input_video');
-const canvasElement=document.getElementById('overlay');
-const canvasCtx=canvasElement.getContext('2d');
-const faceStatus=document.getElementById('faceStatus');
-const faceText=document.getElementById('faceText');
-const faceIcon=document.getElementById('faceIcon');
-const countdownEl=document.getElementById('countdown');
-const submitBtn=document.getElementById('submitBtn');
-const examCard=document.getElementById('examCard');
-const gazeBubble=document.getElementById('gazeBubble');
-const strikeBox=document.getElementById('strikeBox');
-const scoreBox=document.getElementById('scoreBox');
+      const FULL_FACE_MODEL_URL = "./model_1024/best_w8a32_640.tflite";
+      const MODEL_INPUT_SIZE = 640;
+      const CONF_THRESHOLD = 0.45;
+      const KPT_CONF_THRESHOLD = 0.4;
+      const NUM_KPTS = 33;
+      const NUM_CLASSES = 1;
+      const YAW_MULTIPLIER = 180;
+      const PITCH_MULTIPLIER = 160;
+      const EYE_WEIGHT = 0.8;
+      const HEAD_WEIGHT = 0.2;
+      let lookingAwaySince = null;
+      const AWAY_DELAY_MS = 2000;
+      
 
-let totalSeconds=60*60;
-function updateTimer(){
-  const m=Math.floor(totalSeconds/60).toString().padStart(2,'0');
-  const s=(totalSeconds%60).toString().padStart(2,'0');
-  countdownEl.textContent=`Time Left: ${m}:${s}`;
-}
-updateTimer();
-setInterval(()=>{ if(totalSeconds>0) totalSeconds--; updateTimer(); },1000);
+      const KPT_NAMES = [
+        "iris_center_left",
+        "iris_center_right",
+        "left_chin",
+        "left_mid_chin",
+        "chin",
+        "right_mid_chin",
+        "right_chin",
+        "forehead",
+        "upper_left_right",
+        "right_corner_right",
+        "left_corner_right",
+        "lower_left_right",
+        "lower_right_right",
+        "top_right",
+        "bottom_right",
+        "lower_right_left",
+        "bottom_left",
+        "lower_left_left",
+        "upper_right_right",
+        "right_corner_left",
+        "upper_right_left",
+        "top_left",
+        "upper_left",
+        "left_corner_left",
+        "nose",
+        "iris_top_left",
+        "iris_right_left",
+        "iris_bottom_left",
+        "iris_left_left",
+        "iris_top_right",
+        "iris_right_right",
+        "iris_left_right",
+        "iris_bottom_right",
+      ];
+      const KPT_INDEX = Object.fromEntries(KPT_NAMES.map((n, i) => [n, i]));
 
-const faceMesh=new FaceMesh({
-  locateFile: (file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-});
-faceMesh.setOptions({
-  maxNumFaces:1,
-  refineLandmarks:true,
-  minDetectionConfidence:0.55,
-  minTrackingConfidence:0.55
-});
+      let verified = false;
+      let lastVerifiedChange = Date.now();
+      const STABLE_MS = 300;
+      let strikes = 0;
+      let blocked = false;
+      let faceModel = null;
+      let lastFaceDetection = null;
+      let lastFaceBox = null;
+      let lastMotionGrayscale = null;
+      let faceWarmupRemaining = 0;
+      let lastValidYaw = 0;
+      let lastValidPitch = 0;
+      let lastValidTime = Date.now();
+      let frameSinceFaceRefresh = 8;
+      let lastRun = 0;
+      let isProcessing = false;
+      let targetInterval = 50;
+      let inferenceEMA = 0;
+      let lastFaceDetected = false;
+      let lastFaceScore = 0;
+      let lastGaze = { yaw: 0, pitch: 0, valid: false };
 
-let verified=false;
-let lastVerifiedChange=Date.now();
-const STABLE_MS=300;
-let strikes=0;
-let blocked=false;
+      let bubbleX = window.innerWidth / 2,
+        bubbleY = window.innerHeight / 2;
+      let targetX = bubbleX,
+        targetY = bubbleY;
+      const SENSITIVITY = 10.4;
 
-let bubbleX=window.innerWidth/2, bubbleY=window.innerHeight/2;
-let targetX=bubbleX, targetY=bubbleY;
-const SENSITIVITY=10.4;
+      const buffer = document.createElement("canvas");
+      const bctx = buffer.getContext("2d");
+      const cropCanvas = document.createElement("canvas");
+      const cropCtx = cropCanvas.getContext("2d");
+      const motionCanvas = document.createElement("canvas");
+      const motionCtx = motionCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+      const sharedCanvas = document.createElement("canvas");
+      const sharedCtx = sharedCanvas.getContext("2d");
 
-function onResults(results){
-  const vw=videoElement.clientWidth;
-  const vh=videoElement.clientHeight;
-  canvasElement.width=vw; canvasElement.height=vh;
-  canvasCtx.clearRect(0,0,canvasElement.width,canvasElement.height);
+      function clamp(v, min, max) {
+        return Math.max(min, Math.min(max, v));
+      }
+      function dist(a, b) {
+        return Math.hypot(a.x - b.x, a.y - b.y);
+      }
+      function mid(a, b) {
+        return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      }
+      function getKpt(kpts, name, minConf = KPT_CONF_THRESHOLD) {
+        const idx = KPT_INDEX[name];
+        if (idx === undefined || !Array.isArray(kpts[idx])) return null;
+        const p = kpts[idx];
+        if (!p || p.length < 3) return null;
+        const x = Number(p[0]);
+        const y = Number(p[1]);
+        const v = Number(p[2]);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(v))
+          return null;
+        if (v < minConf) return null;
+        return { x, y, v };
+      }
+      function letterboxCanvas(sourceCanvas, size, color = "rgb(114,114,114)") {
+        const out = document.createElement("canvas");
+        out.width = size;
+        out.height = size;
+        const ctx = out.getContext("2d");
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, size, size);
+        const scale = Math.min(
+          size / sourceCanvas.width,
+          size / sourceCanvas.height,
+        );
+        const newW = Math.round(sourceCanvas.width * scale);
+        const newH = Math.round(sourceCanvas.height * scale);
+        const padX = Math.floor((size - newW) / 2);
+        const padY = Math.floor((size - newH) / 2);
+        ctx.drawImage(sourceCanvas, padX, padY, newW, newH);
+        return { canvas: out, scale, padX, padY };
+      }
+      function preprocessFrame(sourceCanvas, size) {
+        return tf.tidy(() => {
+          const { canvas, scale, padX, padY } = letterboxCanvas(
+            sourceCanvas,
+            size,
+          );
+          const img = tf.browser.fromPixels(canvas).toFloat().div(255.0); // [H, W, 3]
+          const nchw = img.transpose([2, 0, 1]).expandDims(0); // [1, 3, H, W] — model expects channels-first
+          return { tensor: nchw, scale, padX, padY };
+        });
+      }
+      function tensorFromOutput(output) {
+        if (!output) return null;
+        if (Array.isArray(output)) {
+          for (const item of output) {
+            if (item && typeof item.dataSync === "function") return item;
+          }
+          return null;
+        }
+        if (typeof output.dataSync === "function") return output;
+        if (typeof output === "object") {
+          for (const v of Object.values(output)) {
+            if (v && typeof v.dataSync === "function") return v;
+          }
+        }
+        return null;
+      }
+      function deepDispose(obj) {
+        if (!obj) return;
+        if (Array.isArray(obj)) {
+          obj.forEach(deepDispose);
+          return;
+        }
+        if (typeof obj.dispose === "function") {
+          obj.dispose();
+          return;
+        }
+        if (typeof obj === "object") {
+          Object.values(obj).forEach(deepDispose);
+        }
+      }
+      async function makeReader(tensor) {
+        const shape = tensor.shape.slice();
+        const data = await tensor.data();
+        let rows = 1,
+          cols = data.length,
+          transposed = false;
+        if (shape.length === 3 && shape[0] === 1) {
+          const a = shape[1],
+            b = shape[2];
+          if (a < b) {
+            rows = b;
+            cols = a;
+            transposed = true;
+          } else {
+            rows = a;
+            cols = b;
+          }
+        } else if (shape.length === 2) {
+          const a = shape[0],
+            b = shape[1];
+          if (a < b) {
+            rows = b;
+            cols = a;
+            transposed = true;
+          } else {
+            rows = a;
+            cols = b;
+          }
+        } else if (shape.length === 1) {
+          rows = 1;
+          cols = shape[0];
+        }
+        function get(r, c) {
+          return transposed ? data[c * rows + r] : data[r * cols + c];
+        }
+        return { shape, rows, cols, get };
+      }
+      async function parseKeypointModelOutput(
+        output,
+        inputSize,
+        scale,
+        padX,
+        padY,
+        numKpts,
+        offsetX = 0,
+        offsetY = 0,
+      ) {
+        const tensor = tensorFromOutput(output);
+        if (!tensor) return null;
+        const reader = await makeReader(tensor);
+        let trueMaxScore = -Infinity;
+        let trueMaxIdx = -1;
+        for (let r = 0; r < reader.rows; r++) {
+          const s = Number(reader.get(r, 4));
+          if (s > trueMaxScore) {
+            trueMaxScore = s;
+            trueMaxIdx = r;
+          }
+        }
+        console.log("[TRUE MAX CONF]", trueMaxScore, "at anchor", trueMaxIdx);
+        const needed = 4 + NUM_CLASSES + numKpts * 3;
+        if (reader.cols < needed) return null;
+        let bestDetection = null;
+        let bestScore = -1;
+        const kptStart = 5;
+        for (let i = 0; i < reader.rows; i++) {
+          const score = Number(reader.get(i, 4));
+          if (
+            !Number.isFinite(score) ||
+            score < CONF_THRESHOLD ||
+            score <= bestScore
+          ) {
+            if (i < 10) {
+              console.log("[DET]", i, "conf=", score);
+            }
+            continue;
+          }
+          const x = Number(reader.get(i, 0));
+          const y = Number(reader.get(i, 1));
+          const w = Number(reader.get(i, 2));
+          const h = Number(reader.get(i, 3));
 
-  if(!results.multiFaceLandmarks || results.multiFaceLandmarks.length===0){
-    setVerification(false,"Face not found");
-    targetX=window.innerWidth/2; targetY=window.innerHeight/2;
-    updateBubble(); return;
-  }
+          const coordsNormalized =
+            x >= 0 &&
+            x <= 1 &&
+            y >= 0 &&
+            y <= 1 &&
+            w >= 0 &&
+            w <= 1 &&
+            h >= 0 &&
+            h <= 1;
+          let lx = x,
+            ly = y,
+            lw = w,
+            lh = h;
+          if (coordsNormalized) {
+            lx *= inputSize;
+            ly *= inputSize;
+            lw *= inputSize;
+            lh *= inputSize;
+          }
 
-  const lm=results.multiFaceLandmarks[0];
-  const leftIris=lm[468];
-  const rightIris=lm[473];
-  const leftEyeFallback=lm[159];
-  const rightEyeFallback=lm[386];
+          // FIX: check the SCALED (pixel-space) size, not the raw value —
+          // the raw value is normalized (0-1) for this model, so it was
+          // always failing this check even for a genuine high-confidence face.
+          if (lw < 40 || lh < 40) {
+            continue;
+          }
+          const kpts = [];
+          for (let j = 0; j < numKpts; j++) {
+            let kx = Number(reader.get(i, kptStart + j * 3));
+            let ky = Number(reader.get(i, kptStart + j * 3 + 1));
+            let kv = Number(reader.get(i, kptStart + j * 3 + 2));
+            if (
+              !Number.isFinite(kx) ||
+              !Number.isFinite(ky) ||
+              !Number.isFinite(kv)
+            ) {
+              kpts.push([0, 0, 0]);
+              continue;
+            }
+            if (kx >= 0 && kx <= 1 && ky >= 0 && ky <= 1) {
+              kx *= inputSize;
+              ky *= inputSize;
+            }
+            const origX = (kx - padX) / scale + offsetX;
+            const origY = (ky - padY) / scale + offsetY;
+            kpts.push([origX, origY, kv]);
+          }
+          bestScore = score;
+          bestDetection = {
+            score,
+            bbox: [lx + offsetX, ly + offsetY, lw, lh],
+            kpts,
+          };
+        }
+        return bestDetection;
+      }
+      function pickPoint(kpts, names) {
+        for (const name of names) {
+          const pt = getKpt(kpts, name);
+          if (pt) return pt;
+        }
+        return null;
+      }
+      function estimateGazeFromKpts(kpts) {
+        const LI =
+          pickPoint(kpts, [
+            "iris_center_left",
+            "left_iris_center",
+            "iris_left_left",
+          ]) || getKpt(kpts, "iris_center_left");
+        const RI =
+          pickPoint(kpts, [
+            "iris_center_right",
+            "right_iris_center",
+            "iris_right_right",
+          ]) || getKpt(kpts, "iris_center_right");
+        const nose = pickPoint(kpts, ["nose", "nose_center"]);
+        const forehead = pickPoint(kpts, ["forehead", "forehead_center"]);
+        const chin = pickPoint(kpts, ["chin", "left_chin", "right_chin"]);
+        const leftEyeLeft = pickPoint(kpts, [
+          "left_corner_left",
+          "left_eye_left_corner",
+          "iris_left_left",
+        ]);
+        const leftEyeRight = pickPoint(kpts, [
+          "right_corner_left",
+          "left_eye_right_corner",
+          "iris_right_left",
+        ]);
+        const leftEyeTop = pickPoint(kpts, [
+          "top_left",
+          "upper_left",
+          "left_eye_top",
+          "upper_left_right",
+        ]);
+        const leftEyeBottom = pickPoint(kpts, [
+          "bottom_left",
+          "lower_left_left",
+          "left_eye_bottom",
+          "lower_left_right",
+        ]);
+        const rightEyeLeft = pickPoint(kpts, [
+          "left_corner_right",
+          "right_eye_left_corner",
+          "iris_left_right",
+        ]);
+        const rightEyeRight = pickPoint(kpts, [
+          "right_corner_right",
+          "right_eye_right_corner",
+          "iris_right_right",
+        ]);
+        const rightEyeTop = pickPoint(kpts, [
+          "top_right",
+          "upper_right_left",
+          "right_eye_top",
+          "upper_right_right",
+        ]);
+        const rightEyeBottom = pickPoint(kpts, [
+          "bottom_right",
+          "lower_right_left",
+          "right_eye_bottom",
+          "lower_right_right",
+        ]);
+        if (
+          !LI ||
+          !RI ||
+          !leftEyeLeft ||
+          !leftEyeRight ||
+          !leftEyeTop ||
+          !leftEyeBottom ||
+          !rightEyeLeft ||
+          !rightEyeRight ||
+          !rightEyeTop ||
+          !rightEyeBottom ||
+          !nose ||
+          !forehead ||
+          !chin
+        ) {
+          console.log("[GAZE INVALID]", {
+            LI: !!LI,
+            RI: !!RI,
+            nose: !!nose,
+            forehead: !!forehead,
+            chin: !!chin,
+            leftEyeLeft: !!leftEyeLeft,
+            leftEyeRight: !!leftEyeRight,
+            rightEyeLeft: !!rightEyeLeft,
+            rightEyeRight: !!rightEyeRight,
+          });
 
-  let irisXNorm, irisYNorm;
-  if(leftIris && rightIris){ irisXNorm=(leftIris.x+rightIris.x)/2; irisYNorm=(leftIris.y+rightIris.y)/2; }
-  else if(leftIris){ irisXNorm=leftIris.x; irisYNorm=leftIris.y; }
-  else if(rightIris){ irisXNorm=rightIris.x; irisYNorm=rightIris.y; }
-  else{ irisXNorm=(leftEyeFallback.x+rightEyeFallback.x)/2; irisYNorm=(leftEyeFallback.y+rightEyeFallback.y)/2; }
+          return {
+            yaw: 0,
+            pitch: 0,
+            valid: false,
+          };
+        }
+        const leftEyeWidth = leftEyeRight.x - leftEyeLeft.x;
+        const leftEyeHeight = leftEyeBottom.y - leftEyeTop.y;
+        const rightEyeWidth = rightEyeRight.x - rightEyeLeft.x;
+        const rightEyeHeight = rightEyeBottom.y - rightEyeTop.y;
+        if (
+          leftEyeWidth <= 0 ||
+          leftEyeHeight <= 0 ||
+          rightEyeWidth <= 0 ||
+          rightEyeHeight <= 0
+        ) {
+          console.log("[GAZE INVALID]", {
+            LI: !!LI,
+            RI: !!RI,
+            nose: !!nose,
+            forehead: !!forehead,
+            chin: !!chin,
+            leftEyeLeft: !!leftEyeLeft,
+            leftEyeRight: !!leftEyeRight,
+            rightEyeLeft: !!rightEyeLeft,
+            rightEyeRight: !!rightEyeRight,
+          });
 
-  const irisXVideo=(1-irisXNorm)*vw;
-  const irisYVideo=irisYNorm*vh;
+          return {
+            yaw: 0,
+            pitch: 0,
+            valid: false,
+          };
+        }
+        const leftEyeCenterX = (leftEyeLeft.x + leftEyeRight.x) / 2;
+        const leftIrisOffsetX = LI.x - leftEyeCenterX;
+        const leftEyeYaw = leftIrisOffsetX / (leftEyeWidth * 0.3);
+        const rightEyeCenterX = (rightEyeLeft.x + rightEyeRight.x) / 2;
+        const rightIrisOffsetX = RI.x - rightEyeCenterX;
+        const rightEyeYaw = rightIrisOffsetX / (rightEyeWidth * 0.3);
+        const leftEyeCenterY = (leftEyeTop.y + leftEyeBottom.y) / 2;
+        const leftIrisOffsetY = LI.y - leftEyeCenterY;
+        const leftEyePitch = leftIrisOffsetY / (leftEyeHeight * 0.3);
+        const rightEyeCenterY = (rightEyeTop.y + rightEyeBottom.y) / 2;
+        const rightIrisOffsetY = RI.y - rightEyeCenterY;
+        const rightEyePitch = rightIrisOffsetY / (rightEyeHeight * 0.3);
+        const leftEyeOpenness = (leftEyeBottom.y - leftEyeTop.y) / leftEyeWidth;
+        const rightEyeOpenness =
+          (rightEyeBottom.y - rightEyeTop.y) / rightEyeWidth;
+        const avgEyeOpenness = (leftEyeOpenness + rightEyeOpenness) / 2;
+        const opennessFactor = clamp((avgEyeOpenness - 0.25) / 0.15, -1, 1);
+        const eyeYaw = (leftEyeYaw + rightEyeYaw) / 2;
+        const irisPitch = (leftEyePitch + rightEyePitch) / 2;
+        const eyePitch = irisPitch * 0.7 + opennessFactor * 0.3;
+        const eyeMid = mid(
+          mid(leftEyeLeft, leftEyeRight),
+          mid(rightEyeLeft, rightEyeRight),
+        );
+        const faceMid = mid(forehead, chin);
+        const faceWidth = dist(leftEyeLeft, rightEyeRight);
+        const faceHeight = dist(forehead, chin);
+        const headYaw = clamp(
+          ((nose.x - eyeMid.x) / (faceWidth || 1)) * 2.5,
+          -1,
+          1,
+        );
+        const headPitch = clamp(
+          ((nose.y - faceMid.y) / (faceHeight || 1)) * 2.5,
+          -1,
+          1,
+        );
+        let yaw = eyeYaw * EYE_WEIGHT + headYaw * HEAD_WEIGHT;
+        let pitch = eyePitch * EYE_WEIGHT + headPitch * HEAD_WEIGHT;
+        yaw = clamp(yaw, -2.5, 2.5);
+        pitch = clamp(pitch, -2.5, 2.5);
+        yaw *= -1;
+        if (pitch < 0) {
+          pitch *= 1.28;
+        } else {
+          pitch *= 0.72;
+        }
+        yaw *= YAW_MULTIPLIER;
+        pitch *= PITCH_MULTIPLIER;
+        console.log("[GAZE]", {
+          yaw: yaw.toFixed(2),
+          pitch: pitch.toFixed(2),
+        });
+        return { yaw, pitch, valid: true };
+      }
+      function resetBubbleCenter() {
+        const targetEl = window.examStarted
+          ? document.getElementById("examCard")
+          : document.getElementById("examGate");
+        const rect = targetEl.getBoundingClientRect();
+        targetX = rect.left + rect.width / 2;
+        targetY = rect.top + rect.height / 2;
+        examCard.classList.remove("alert");
+        gazeBubble.classList.remove("alert");
+        updateBubble();
+      }
+      function moveBubbleFromGaze(yaw, pitch) {
+        const normX = yaw / 75;
+        const normY = pitch / 50;
+        const activeTarget = window.examStarted
+          ? document.getElementById("examCard")
+          : document.getElementById("examGate");
+        const rect = activeTarget.getBoundingClientRect();
+        const screenCenterX = window.innerWidth / 2;
+        const screenCenterY = window.innerHeight / 2;
+        const widthRange = window.innerWidth * 0.9;
+        targetX = screenCenterX + normX * widthRange;
+        targetY =
+          screenCenterY +
+          (normY < 0
+            ? normY * window.innerHeight * 0.58
+            : normY * window.innerHeight * 0.28);
+        targetX = clamp(targetX, -200, window.innerWidth + 200);
+        targetY = clamp(targetY, -200, window.innerHeight + 200);
+        updateBubble();
+        const margin = 15;
+        const gazeOk =
+          targetX >= rect.left - margin &&
+          targetX <= rect.right + margin &&
+          targetY >= rect.top - margin &&
+          targetY <= rect.bottom + margin;
 
-  canvasCtx.beginPath();
-  canvasCtx.fillStyle='rgba(30,144,255,0.95)';
-  canvasCtx.arc(irisXVideo,irisYVideo,5,0,Math.PI*2);
-  canvasCtx.fill();
+        if (!gazeOk) {
+          examCard.classList.add("alert");
+          gazeBubble.classList.add("alert");
+          setVerification(false, "Looking away detected");
 
-  const offsetX=(irisXVideo-vw/2)/vw;
-  const offsetY=(irisYVideo-vh/2)/vh;
+          if (!lookingAwaySince) {
+            lookingAwaySince = Date.now();
+          }
 
-  const examRect=examCard.getBoundingClientRect();
-  const examCx=examRect.left+examRect.width/2;
-  const examCy=examRect.top+examRect.height/2;
+          if (
+            window.allowStrikes &&
+            Date.now() - lookingAwaySince > AWAY_DELAY_MS
+          ) {
+            registerStrikeOnce();
+            sendToArduino("STRIKE");
+          }
+        } else {
+          lookingAwaySince = null;
 
-  targetX=examCx+offsetX*examRect.width*SENSITIVITY;
-  targetY=examCy+offsetY*examRect.height*SENSITIVITY;
+          examCard.classList.remove("alert");
+          gazeBubble.classList.remove("alert");
+          setVerification(true, "Eyes on exam");
 
-  const pad=8;
-  targetX=Math.max(pad, Math.min(window.innerWidth-pad,targetX));
-  targetY=Math.max(pad, Math.min(window.innerHeight-pad,targetY));
+          if (window.allowStrikes) {
+            sendToArduino("OK");
+          }
+        }
+      }
+      async function pickAccelerator() {
+        if (navigator.gpu) {
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            if (adapter) return "webgpu";
+          } catch (_) {
+            // fall through to wasm
+          }
+        }
+        return "wasm";
+      }
+      function setVerification(ok, reason) {
+        const now = Date.now();
+        if (ok !== verified && now - lastVerifiedChange < STABLE_MS) return;
+        if (ok !== verified) {
+          verified = ok;
+          lastVerifiedChange = now;
+          if (verified) {
+            faceStatus.classList.remove("bad");
+            faceStatus.classList.add("ok");
+            faceIcon.textContent = "✔";
+          } else {
+            faceStatus.classList.remove("ok");
+            faceStatus.classList.add("bad");
+            faceIcon.textContent = "⚠";
+          }
+        }
+        faceText.textContent =
+          reason || (verified ? "Face verified" : "Face not verified");
+        if (verified && !window.examStarted) {
+          window.examStarted = true;
+          window.allowStrikes = true;
+          sessionStorage.setItem("examStarted", "1");
+          setTimeout(() => {
+            document.getElementById("examGate").style.display = "none";
+            document.getElementById("examCard").style.display = "block";
+          }, 150);
+          setTimeout(() => {
+            strikeBox.textContent = `Strikes: ${window.strikes}`;
+          }, 200);
+        }
+      }
+      function updateBubble() {
+        bubbleX += (targetX - bubbleX) * 0.18;
+        bubbleY += (targetY - bubbleY) * 0.18;
+        gazeBubble.style.left = `${bubbleX}px`;
+        gazeBubble.style.top = `${bubbleY}px`;
+      }
+      function animLoop() {
+        updateBubble();
+        requestAnimationFrame(animLoop);
+      }
+      animLoop();
+      console.log("backend:", tf.getBackend());
+      console.log("tflite:", window.tflite);
+      async function loadModels() {
+        console.log("[FaceModel] Step 1: initializing LiteRT.js...");
 
-  const INSET_PCT=0.06;
-  const safeLeft=examRect.left+examRect.width*INSET_PCT;
-  const safeRight=examRect.right-examRect.width*INSET_PCT;
-  const safeTop=examRect.top+examRect.height*INSET_PCT;
-  const safeBottom=examRect.bottom-examRect.height*INSET_PCT;
+        try {
+          // ------------------------------------------------------------
+          // Load LiteRT.js directly from jsDelivr.
+          // WASM = CPU/XNNPACK execution.
+          // This is the reliable first test for your model.
+          // ------------------------------------------------------------
+          const {
+            loadLiteRt,
+            loadAndCompile,
+            Tensor: LiteRTTensor,
+          } = await import("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm");
 
-  const gazeOk=(targetX>=safeLeft && targetX<=safeRight && targetY>=safeTop && targetY<=safeBottom);
+          const WASM_BASE =
+            "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/";
 
-  if(!gazeOk){
-    examCard.classList.add('alert'); gazeBubble.classList.add('alert');
-    setVerification(false,"Looking away detected");
-    registerStrikeOnce();
-    sendToArduino("STRIKE");
-  } else {
-    examCard.classList.remove('alert'); gazeBubble.classList.remove('alert');
-    setVerification(true,"Face & eyes centered");
-    sendToArduino("OK");
-  }
-  updateBubble();
-}
+          await loadLiteRt(WASM_BASE);
 
-let lastAway=0;
-function registerStrikeOnce(){
-  const now=Date.now();
-  if(now-lastAway<1200) return;
-  lastAway=now;
-  strikes++;
-  strikeBox.textContent=`Strikes: ${strikes}`;
-  if(strikes>=3){
-    blocked=true; submitBtn.disabled=true; submitBtn.textContent="Blocked — Too many strikes";
-  }
-  console.log("Strikes updated:", strikes);
-}
+          console.log("[FaceModel] Step 2: LiteRT.js WASM runtime ready.");
 
-function setVerification(ok, reason){
-  const now=Date.now();
-  if(ok!==verified && (now-lastVerifiedChange)<STABLE_MS) return;
-  if(ok!==verified){
-    verified=ok; lastVerifiedChange=now;
-    if(verified){ faceStatus.classList.remove('bad'); faceStatus.classList.add('ok'); faceIcon.textContent='✔'; }
-    else{ faceStatus.classList.remove('ok'); faceStatus.classList.add('bad'); faceIcon.textContent='⚠'; }
-  }
-  faceText.textContent=reason || (verified?"Face verified":"Face not verified");
-}
+          // ------------------------------------------------------------
+          // Load your W8A32 model.
+          // ------------------------------------------------------------
+          console.log(
+            "[FaceModel] Step 3: loading model:",
+            FULL_FACE_MODEL_URL,
+          );
 
-function updateBubble(){
-  bubbleX+=(targetX-bubbleX)*0.18;
-  bubbleY+=(targetY-bubbleY)*0.18;
-  gazeBubble.style.left=`${bubbleX}px`;
-  gazeBubble.style.top=`${bubbleY}px`;
-}
+          const accelerator = await pickAccelerator();
+          console.log("[FaceModel] Using accelerator:", accelerator);
 
-function animLoop(){ updateBubble(); requestAnimationFrame(animLoop); }
-animLoop();
+          const litertModel = await loadAndCompile(FULL_FACE_MODEL_URL, {
+            accelerator,
+          });
 
-let camera=null;
-try{
-  camera=new Camera(videoElement,{ onFrame:async()=>{await faceMesh.send({image:videoElement});}, width:640, height:800 });
-  faceMesh.onResults(onResults);
-  camera.start();
-}catch(err){
-  console.warn("Camera start failed:", err);
-  faceText.textContent="Camera unavailable — try localhost or allow camera access.";
-  faceIcon.textContent="⚠";
-}
+          console.log("[FaceModel] Step 4: MODEL LOADED SUCCESSFULLY.");
 
-submitBtn.addEventListener('click',()=>{
-  if(blocked){ alert('Cannot submit: exam blocked due to repeated off-screen gaze.'); return; }
-  if(!verified){ alert('Cannot submit: face/eyes not verified. Please center yourself.'); return; }
+          // ------------------------------------------------------------
+          // Read model metadata if available.
+          // ------------------------------------------------------------
+          let inputDetails = [];
+          let outputDetails = [];
 
-  const answer=document.querySelector('input[name="q1"]:checked')?.value || null;
-  const correctAnswer="Paris";
-  const score=(answer===correctAnswer)?1:0;
-  scoreBox.textContent=`Score: ${score}/1`;
+          try {
+            inputDetails =
+              typeof litertModel.getInputDetails === "function"
+                ? litertModel.getInputDetails()
+                : [];
 
-  // Placeholder: send strikes/score to Flutter/Firebase
-  console.log("Exam submitted:", { strikes, score });
-  alert('Exam submitted (mock). Results displayed above.');
-});
+            outputDetails =
+              typeof litertModel.getOutputDetails === "function"
+                ? litertModel.getOutputDetails()
+                : [];
+          } catch (metaErr) {
+            console.warn("[FaceModel] Could not read model details:", metaErr);
+          }
 
-function loadExamFromFlutter(examHtml){
-  document.getElementById('examContent').innerHTML=examHtml;
-  strikes=0; strikeBox.textContent=`Strikes: ${strikes}`;
-  blocked=false; submitBtn.disabled=false; submitBtn.textContent="Submit Exam";
-  scoreBox.textContent="Score: 0/1";
-  setVerification(false,"Face not verified");
-}
+          console.log("[FaceModel] inputs:", inputDetails);
 
-window.addEventListener('resize',()=>{ bubbleX=window.innerWidth/2; bubbleY=window.innerHeight/2; targetX=bubbleX; targetY=bubbleY; });
+          console.log("[FaceModel] outputs:", outputDetails);
 
-console.log("Eye-bubble exam loaded. Run via localhost or allow camera access.");
-// ================================================================
-</script>
-</body>
+          // ------------------------------------------------------------
+          // We know your exported model is:
+          //
+          // INPUT  = [1, 3, 640, 640]
+          // OUTPUT = [1, 104, 8400]
+          //
+          // Keep these as fallback values in case metadata is unavailable.
+          // ------------------------------------------------------------
+          const inputShape = inputDetails?.[0]?.shape ?? [
+            1,
+            3,
+            MODEL_INPUT_SIZE,
+            MODEL_INPUT_SIZE,
+          ];
+
+          const outputShape = outputDetails?.[0]?.shape ?? [1, 104, 8400];
+
+          console.log("[FaceModel] Input shape:", inputShape);
+
+          console.log("[FaceModel] Output shape:", outputShape);
+
+          // ------------------------------------------------------------
+          // IMPORTANT:
+          //
+          // Keep the rest of your existing application unchanged.
+          //
+          // We create a small adapter that exposes:
+          //
+          //     faceModel.predict(tfTensor)
+          //
+          // just like your old code expects.
+          //
+          // LiteRT itself receives a REAL Float32Array, so there is no
+          // "Input tensor lacks data" problem.
+          // ------------------------------------------------------------
+          faceModel = {
+            inputs: [
+              {
+                name: inputDetails?.[0]?.name ?? "serving_default_args_0",
+                shape: inputShape,
+                dtype: "float32",
+              },
+            ],
+
+            outputs: [
+              {
+                name: outputDetails?.[0]?.name ?? "output",
+                shape: outputShape,
+                dtype: "float32",
+              },
+            ],
+
+            predict: async function (tfInput) {
+              if (!tfInput) {
+                throw new Error("[FaceModel] predict() received no input.");
+              }
+
+              // ----------------------------------------------------------
+              // Verify the TFJS tensor.
+              // ----------------------------------------------------------
+              if (!tfInput.shape) {
+                throw new Error("[FaceModel] Input does not have a shape.");
+              }
+
+              console.log(
+                "[FaceModel] Input:",
+                tfInput.shape,
+                tfInput.dtype,
+                tfInput.size,
+              );
+
+              // ----------------------------------------------------------
+              // Get REAL CPU data from the TFJS tensor.
+              //
+              // This is the important difference from the broken
+              // @tensorflow/tfjs-tflite path.
+              // ----------------------------------------------------------
+              const inputData = await tfInput.data();
+
+              if (!inputData || inputData.length === 0) {
+                throw new Error(
+                  "[FaceModel] TFJS input tensor contains no data.",
+                );
+              }
+
+              // ----------------------------------------------------------
+              // Create an actual LiteRT tensor containing the data.
+              // ----------------------------------------------------------
+              const litertInput = new LiteRTTensor(
+                new Float32Array(inputData),
+                inputShape,
+              );
+
+              let results = null;
+
+              try {
+                // --------------------------------------------------------
+                // REAL INFERENCE
+                // --------------------------------------------------------
+                const t0 = performance.now();
+
+                results = await litertModel.run([litertInput]);
+
+                const elapsed = performance.now() - t0;
+
+                console.log(
+                  `[FaceModel] LiteRT inference: ${elapsed.toFixed(2)} ms`,
+                );
+
+                if (!results || !results.length) {
+                  throw new Error("[FaceModel] LiteRT returned no output.");
+                }
+
+                // --------------------------------------------------------
+                // Read first output tensor.
+                // --------------------------------------------------------
+                const resultTensor = results[0];
+
+                const outputData = await resultTensor.data();
+
+                if (!outputData || outputData.length === 0) {
+                  throw new Error(
+                    "[FaceModel] LiteRT output contains no data.",
+                  );
+                }
+
+                // --------------------------------------------------------
+                // Convert LiteRT output back into a TFJS tensor.
+                //
+                // Your existing parseKeypointModelOutput() expects
+                // a TFJS tensor with dataSync().
+                // --------------------------------------------------------
+                const tfOutput = tf.tensor(
+                  new Float32Array(outputData),
+                  outputShape,
+                  "float32",
+                );
+
+                console.log(
+                  "[FaceModel] Output:",
+                  tfOutput.shape,
+                  tfOutput.dtype,
+                  tfOutput.size,
+                );
+
+                return tfOutput;
+              } finally {
+                // --------------------------------------------------------
+                // LiteRT uses manual memory management.
+                // --------------------------------------------------------
+                try {
+                  litertInput.delete();
+                } catch (_) {}
+
+                try {
+                  if (results) {
+                    results.forEach((tensor) => {
+                      try {
+                        tensor.delete();
+                      } catch (_) {}
+                    });
+
+                    try {
+                      results.delete();
+                    } catch (_) {}
+                  }
+                } catch (_) {}
+              }
+            },
+          };
+
+          // ------------------------------------------------------------
+          // REAL DUMMY INFERENCE TEST
+          // ------------------------------------------------------------
+          console.log("[FaceModel] Step 5: creating REAL dummy input...");
+
+          const dummyData = new Float32Array(
+            inputShape.reduce((a, b) => a * b, 1),
+          );
+
+          // All zeros.
+          dummyData.fill(0);
+
+          const dummyFace = tf.tensor(dummyData, inputShape, "float32");
+
+          console.log(
+            "[FaceModel] Dummy input:",
+            dummyFace.shape,
+            dummyFace.dtype,
+            dummyFace.size,
+          );
+
+          console.log("[FaceModel] First values:", dummyData.slice(0, 10));
+
+          console.log("[FaceModel] Step 6: calling LiteRT inference...");
+
+          const t0 = performance.now();
+
+          let dummyPred = null;
+
+          try {
+            dummyPred = await faceModel.predict(dummyFace);
+
+            const elapsed = performance.now() - t0;
+
+            console.log(
+              `[FaceModel] INFERENCE SUCCESS: ${elapsed.toFixed(2)} ms`,
+            );
+
+            console.log("[FaceModel] Output shape:", dummyPred.shape);
+
+            console.log("[FaceModel] Output dtype:", dummyPred.dtype);
+
+            console.log("[FaceModel] Output size:", dummyPred.size);
+
+            console.log(
+              "[FaceModel] First output values:",
+              dummyPred.dataSync().slice(0, 20),
+            );
+
+            console.log("[FaceModel] FPS:", (1000 / elapsed).toFixed(2));
+          } catch (err) {
+            console.error("[FaceModel] INFERENCE FAILED:", err);
+
+            throw err;
+          } finally {
+            dummyFace.dispose();
+
+            if (dummyPred) {
+              dummyPred.dispose();
+            }
+          }
+
+          console.log("[FaceModel] LiteRT model is READY.");
+        } catch (err) {
+          console.error("[FaceModel] LiteRT initialization failed:", err);
+
+          throw err;
+        }
+      }
+      async function predictOnce({ refreshFace = true } = {}) {
+        if (window.disableGazeDetection) return;
+        if (!faceModel) return;
+        if (videoElement.readyState < 2) return;
+        bctx.drawImage(videoElement, 0, 0, buffer.width, buffer.height);
+        let faceFrame = null;
+        let faceOutput = null;
+        let bestFace = null;
+        try {
+          if (refreshFace) {
+            faceFrame = preprocessFrame(buffer, MODEL_INPUT_SIZE);
+            faceOutput = await faceModel.predict(faceFrame.tensor);
+            bestFace = await parseKeypointModelOutput(
+              faceOutput,
+              MODEL_INPUT_SIZE,
+              faceFrame.scale,
+              faceFrame.padX,
+              faceFrame.padY,
+              NUM_KPTS,
+            );
+            if (bestFace) {
+              console.log(
+                "[FACE DETECTED]",
+                "conf=",
+                bestFace.score.toFixed(4),
+                "bbox=",
+                bestFace.bbox,
+              );
+            } else {
+              console.log("[FACE DETECTED] NONE");
+            }
+            if (!bestFace) {
+              lastFaceDetected = false;
+              lastFaceScore = 0;
+              faceWarmupRemaining = 0;
+              setVerification(false, "Face not found");
+              resetBubbleCenter();
+              return;
+            }
+            console.log("[FACE]", {
+              confidence: bestFace.score,
+              bbox: bestFace.bbox,
+              keypoints: bestFace.kpts.length,
+            });
+            lastFaceDetection = {
+              score: bestFace.score,
+              bbox: {
+                x: bestFace.bbox[0],
+                y: bestFace.bbox[1],
+                width: bestFace.bbox[2],
+                height: bestFace.bbox[3],
+              },
+              kpts: bestFace.kpts,
+            };
+            lastFaceBox = lastFaceDetection.bbox;
+            frameSinceFaceRefresh = 0;
+            lastMotionGrayscale = null;
+            // DRAW DEBUG FACE BOX + KEYPOINTS
+            canvasCtx.clearRect(
+              0,
+              0,
+              canvasElement.width,
+              canvasElement.height,
+            );
+
+            const x = bestFace.bbox[0];
+            const y = bestFace.bbox[1];
+            const w = bestFace.bbox[2];
+            const h = bestFace.bbox[3];
+
+            canvasCtx.strokeStyle = "lime";
+            canvasCtx.lineWidth = 3;
+
+            canvasCtx.strokeRect(x, y, w, h);
+
+            canvasCtx.fillStyle = "red";
+
+            bestFace.kpts.forEach((k) => {
+              canvasCtx.beginPath();
+              canvasCtx.arc(k[0], k[1], 2, 0, Math.PI * 2);
+              canvasCtx.fill();
+            });
+
+            canvasCtx.fillStyle = "yellow";
+            canvasCtx.font = "16px Arial";
+
+            canvasCtx.fillText(
+              `Conf ${(bestFace.score * 100).toFixed(1)}%`,
+              x,
+              y - 10,
+            );
+          } else {
+            bestFace = lastFaceDetection;
+            frameSinceFaceRefresh++;
+          }
+          if (
+            !bestFace ||
+            !Array.isArray(bestFace.kpts) ||
+            bestFace.kpts.length < NUM_KPTS
+          ) {
+            if (bestFace?.kpts) {
+              const validPts = bestFace.kpts.filter((k) => k[2] > 0.5).length;
+
+              console.log("[KEYPOINTS]", validPts, "/", bestFace.kpts.length);
+            }
+
+            lastFaceDetected = false;
+            lastFaceScore = bestFace?.score ?? 0;
+
+            setVerification(false, "Face not found");
+
+            resetBubbleCenter();
+            return;
+          }
+          const gaze = estimateGazeFromKpts(bestFace.kpts);
+          lastFaceDetected = !!gaze.valid;
+          lastFaceScore = bestFace?.score ?? 0;
+          if (!gaze.valid) {
+            lastFaceDetected = false;
+            setVerification(false, "Tracking lost");
+            return;
+          }
+          lastGaze = { yaw: gaze.yaw, pitch: gaze.pitch, valid: true };
+          lastValidYaw = gaze.yaw;
+          lastValidPitch = gaze.pitch;
+          lastValidTime = Date.now();
+          moveBubbleFromGaze(gaze.yaw, gaze.pitch);
+        } catch (err) {
+          console.error("Inference error:", err);
+          lastFaceDetected = false;
+          setVerification(false, "Inference error");
+          resetBubbleCenter();
+        } finally {
+          if (faceFrame) tf.dispose(faceFrame.tensor);
+          deepDispose(faceOutput);
+        }
+      }
+      async function startGazePipeline() {
+        try {
+          await loadModels();
+          const loop = async () => {
+            requestAnimationFrame(loop);
+            if (document.hidden || window.disableGazeDetection) return;
+            if (isProcessing) return;
+            const now = performance.now();
+            if (now - lastRun < targetInterval) return;
+            lastRun = now;
+            isProcessing = true;
+            try {
+              await predictOnce({ refreshFace: true });
+            } finally {
+              const dt = performance.now() - now;
+              inferenceEMA = inferenceEMA
+                ? inferenceEMA * 0.85 + dt * 0.15
+                : dt;
+              if (!lastFaceDetected) targetInterval = 250;
+              else if (inferenceEMA > 120) targetInterval = 250;
+              else if (inferenceEMA > 90) targetInterval = 110;
+              else targetInterval = 80;
+              isProcessing = false;
+            }
+          };
+          requestAnimationFrame(loop);
+        } catch (err) {
+          console.error("Gaze pipeline failed to start:", err);
+          faceText.textContent = "Gaze model failed to start";
+          faceIcon.textContent = "⚠";
+        }
+      }
+      async function startExamCamera() {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" },
+            audio: false,
+          });
+          videoElement.srcObject = stream;
+          await videoElement.play();
+          videoElement.muted = true;
+          await new Promise((resolve) => {
+            if (videoElement.readyState >= 2) resolve();
+            else videoElement.onloadedmetadata = () => resolve();
+          });
+
+          // FIX: buffer must match the camera's real resolution.
+          // Never hardcode this — a mismatched aspect ratio stretches
+          // every frame before it reaches the model.
+          buffer.width = videoElement.videoWidth || 640;
+          buffer.height = videoElement.videoHeight || 480;
+
+          canvasElement.width = videoElement.clientWidth || 640;
+          canvasElement.height = videoElement.clientHeight || 800;
+
+          console.log(
+            "[CAMERA] native:",
+            videoElement.videoWidth,
+            "x",
+            videoElement.videoHeight,
+            "| buffer set to:",
+            buffer.width,
+            "x",
+            buffer.height,
+          );
+
+          faceText.textContent = "Camera ready";
+        } catch (err) {
+          console.warn("Camera start failed:", err);
+          faceText.textContent =
+            "Camera unavailable — try localhost or allow camera access.";
+          faceIcon.textContent = "⚠";
+        }
+      }
+      startExamCamera();
+      startGazePipeline();
+      let matchingPool = [];
+      let questions = [];
+
+      function generateQuestionHtml(
+        q,
+        currentQuestionIndex,
+        answers,
+        matchingPool,
+      ) {
+        const selectedAnswer = answers?.[q.id] ?? null;
+        const qType = (q.type || "multiple-choice").toLowerCase();
+
+        // Save helper
+        const save = () =>
+          `onchange="handleAnswerChange(${currentQuestionIndex})"`;
+
+        let html = `
+    <h2>Question ${currentQuestionIndex + 1}</h2>
+    <div class="question">
+      <p>${q.questionText ?? ""}</p>
+      <div class="options" data-qid="${q.id}" data-qtype="${qType}">
+  `;
+
+        //multiple-choice
+        if (qType === "multiple-choice") {
+          (q.options ?? []).forEach((opt) => {
+            const checked = opt === selectedAnswer ? "checked" : "";
+            html += `
+        <label>
+          <input type="radio" name="${q.id}" value="${opt}" ${checked} ${save()}>
+          ${opt}
+        </label>`;
+          });
+        }
+
+        //true-false
+        else if (qType === "true-false") {
+          ["True", "False"].forEach((opt) => {
+            const checked = opt === selectedAnswer ? "checked" : "";
+            html += `
+        <label>
+          <input type="radio" name="${q.id}" value="${opt}" ${checked} ${save()}>
+          ${opt}
+        </label>`;
+          });
+        }
+
+        // checkbox
+        else if (qType === "checkbox") {
+          (q.options ?? []).forEach((opt) => {
+            const checked =
+              Array.isArray(selectedAnswer) && selectedAnswer.includes(opt)
+                ? "checked"
+                : "";
+            html += `
+        <label>
+          <input type="checkbox" name="${q.id}" value="${opt}" ${checked} ${save()}>
+          ${opt}
+        </label>`;
+          });
+        }
+
+        //matching
+        else if (qType === "matching" || qType === "dropdown") {
+          const pool = Array.isArray(matchingPool) ? matchingPool : [];
+          html += `<select name="${q.id}" data-qid="${q.id}" ${save()}>  
+      <option value="">Select answer</option>
+    `;
+          pool.forEach((m) => {
+            const selected = m === selectedAnswer ? "selected" : "";
+            html += `<option value="${m}" ${selected}>${m}</option>`;
+          });
+          html += `</select>`;
+        }
+
+        //unsupported type
+        else {
+          html += `<p>Unsupported question type: ${qType}</p>`;
+        }
+
+        html += `</div></div>`;
+        return html;
+      }
+
+      function shuffleArray(arr) {
+        return arr
+          .map((value) => ({ value, sort: Math.random() }))
+          .sort((a, b) => a.sort - b.sort)
+          .map(({ value }) => value);
+      }
+
+      window.addEventListener("resize", () => {
+        bubbleX = window.innerWidth / 2;
+        bubbleY = window.innerHeight / 2;
+        targetX = bubbleX;
+        targetY = bubbleY;
+      });
+
+      console.log(
+        "Eye-bubble exam loaded. Run via localhost or allow camera access.",
+      );
+    </script>
+  </body>
 </html>

@@ -1464,55 +1464,55 @@
       faceText.textContent = 'Camera ready';
     }
 
-    const FULL_FACE_MODEL_URL = './model_845/best_int8.tflite';
-    const MODEL_INPUT_SIZE = 845;
+    const face_MODEL_URL = './facekeypoint420/best_float16.tflite';
+    const eye_MODEL_URL = './eyekeypoint840/best_float16.tflite';
+    const MODEL_FACE_INPUT_SIZE = 288;
+    const MODEL_EYE_INPUT_SIZE = 544;
     const CONF_THRESHOLD = 0.35;
     const KPT_CONF_THRESHOLD = 0.20;
-    const NUM_KPTS = 33;
+    const NUM_EYE_KPTS = 18;
+    const NUM_FACE_KPTS = 7;
+    const NUM_KPTS = NUM_EYE_KPTS + NUM_FACE_KPTS;
     const NUM_CLASSES = 1;
     const YAW_MULTIPLIER = 180;
     const PITCH_MULTIPLIER = 160;
     const EYE_WEIGHT = 0.80;
     const HEAD_WEIGHT = 0.20;
 
-    const KPT_NAMES = [
-      "iris_center_left",
-      "iris_center_right",
-      "left_chin",
-      "left_mid_chin",
-      "chin",
-      "right_mid_chin",
-      "right_chin",
-      "forehead",
-      "upper_left_right",
-      "right_corner_right",
-      "left_corner_right",
-      "lower_left_right",
-      "lower_right_right",
-      "top_right",
-      "bottom_right",
-      "lower_right_left",
-      "bottom_left",
-      "lower_left_left",
-      "upper_right_right",
-      "right_corner_left",
-      "upper_right_left",
-      "top_left",
-      "upper_left",
-      "left_corner_left",
-      "nose",
-      "iris_top_left",
-      "iris_right_left",
-      "iris_bottom_left",
-      "iris_left_left",
-      "iris_top_right",
-      "iris_right_right",
-      "iris_left_right",
-      "iris_bottom_right",
+    const eye_KPT_NAMES = [
+      "left_iris_center",
+      "right_iris_center",
+      "right_eye_upper_left",
+      "right_eye_right_corner",
+      "right_eye_left_corner",
+      "right_eye_lower_left",
+      "right_eye_lower_right",
+      "right_eye_top",
+      "right_eye_bottom",
+      "left_eye_lower_right",
+      "left_eye_bottom",
+      "left_eye_lower_left",
+      "right_eye_upper_right",
+      "left_eye_right_corner",
+      "left_eye_upper_right",
+      "left_eye_top",
+      "left_eye_upper_left",
+      "left_eye_left_corner",
     ];
+    const _KPT_NAMES = [
+      "right_chin_near_right_eye",
+      "right_mid_chin",
+      "chin",
+      "left_mid_chin",
+      "left_chin_near_left_eye",
+      "forehead_center",
+      "nose_center"
+    ];
+    const KPT_NAMES = [...eye_KPT_NAMES, ..._KPT_NAMES];
     const KPT_INDEX = Object.fromEntries(KPT_NAMES.map((n, i) => [n, i]));
 
     let faceModel = null;
+    let eyeModel = null;
     let lastValidYaw = 0;
     let lastValidPitch = 0;
     let lastValidTime = Date.now();
@@ -2004,74 +2004,55 @@
     //   return { yaw, pitch, valid: true };
     // }
 
-    function pickPoint(kpts, names) {
-      for (const name of names) {
-        const pt = getKpt(kpts, name);
-        if (pt) return pt;
-      }
-      return null;
-    }
-
     function estimateGazeFromKpts(kpts) {
-      const LI = pickPoint(kpts, ["iris_center_left", "left_iris_center", "iris_left_left"]) || getKpt(kpts, "iris_center_left");
-      const RI = pickPoint(kpts, ["iris_center_right", "right_iris_center", "iris_right_right"]) || getKpt(kpts, "iris_center_right");
-      const nose = pickPoint(kpts, ["nose", "nose_center"]);
-      const forehead = pickPoint(kpts, ["forehead", "forehead_center"]);
-      const chin = pickPoint(kpts, ["chin", "left_chin", "right_chin"]);
-
-      const leftEyeLeft = pickPoint(kpts, ["left_corner_left", "left_eye_left_corner", "iris_left_left"]);
-      const leftEyeRight = pickPoint(kpts, ["right_corner_left", "left_eye_right_corner", "iris_right_left"]);
-      const leftEyeTop = pickPoint(kpts, ["top_left", "upper_left", "left_eye_top", "upper_left_right"]);
-      const leftEyeBottom = pickPoint(kpts, ["bottom_left", "lower_left_left", "left_eye_bottom", "lower_left_right"]);
-
-      const rightEyeLeft = pickPoint(kpts, ["left_corner_right", "right_eye_left_corner", "iris_left_right"]);
-      const rightEyeRight = pickPoint(kpts, ["right_corner_right", "right_eye_right_corner", "iris_right_right"]);
-      const rightEyeTop = pickPoint(kpts, ["top_right", "upper_right_left", "right_eye_top", "upper_right_right"]);
-      const rightEyeBottom = pickPoint(kpts, ["bottom_right", "lower_right_left", "right_eye_bottom", "lower_right_right"]);
-
-      if (!LI || !RI || !leftEyeLeft || !leftEyeRight || !leftEyeTop || !leftEyeBottom || !rightEyeLeft || !rightEyeRight || !rightEyeTop || !rightEyeBottom || !nose || !forehead || !chin) {
+      const LI = getKpt(kpts, "left_iris_center");
+      const RI = getKpt(kpts, "right_iris_center");
+      const LL = getKpt(kpts, "left_eye_left_corner");
+      const LR = getKpt(kpts, "left_eye_right_corner");
+      const LT = getKpt(kpts, "left_eye_top");
+      const LB = getKpt(kpts, "left_eye_bottom");
+      const RL = getKpt(kpts, "right_eye_left_corner");
+      const RR = getKpt(kpts, "right_eye_right_corner");
+      const RT = getKpt(kpts, "right_eye_top");
+      const RB = getKpt(kpts, "right_eye_bottom");
+      const NOSE = getKpt(kpts, "nose_center");
+      const FOREHEAD = getKpt(kpts, "forehead_center");
+      const CHIN = getKpt(kpts, "chin");
+      if (!LI || !RI || !LL || !LR || !LT || !LB || !RL || !RR || !RT || !RB || !NOSE || !FOREHEAD || !CHIN) {
         return { yaw: 0, pitch: 0, valid: false };
       }
-
-      const leftEyeWidth = leftEyeRight.x - leftEyeLeft.x;
-      const leftEyeHeight = leftEyeBottom.y - leftEyeTop.y;
-      const rightEyeWidth = rightEyeRight.x - rightEyeLeft.x;
-      const rightEyeHeight = rightEyeBottom.y - rightEyeTop.y;
-
+      const leftEyeWidth = LR.x - LL.x;
+      const leftEyeHeight = LB.y - LT.y;
+      const rightEyeWidth = RR.x - RL.x;
+      const rightEyeHeight = RB.y - RT.y;
       if (leftEyeWidth <= 0 || leftEyeHeight <= 0 || rightEyeWidth <= 0 || rightEyeHeight <= 0) {
         return { yaw: 0, pitch: 0, valid: false };
       }
-
-      const leftEyeCenterX = (leftEyeLeft.x + leftEyeRight.x) / 2;
+      const leftEyeCenterX = (LL.x + LR.x) / 2;
       const leftIrisOffsetX = LI.x - leftEyeCenterX;
       const leftEyeYaw = leftIrisOffsetX / (leftEyeWidth * 0.30);
-      const rightEyeCenterX = (rightEyeLeft.x + rightEyeRight.x) / 2;
+      const rightEyeCenterX = (RL.x + RR.x) / 2;
       const rightIrisOffsetX = RI.x - rightEyeCenterX;
       const rightEyeYaw = rightIrisOffsetX / (rightEyeWidth * 0.30);
-
-      const leftEyeCenterY = (leftEyeTop.y + leftEyeBottom.y) / 2;
+      const leftEyeCenterY = (LT.y + LB.y) / 2;
       const leftIrisOffsetY = LI.y - leftEyeCenterY;
       const leftEyePitch = leftIrisOffsetY / (leftEyeHeight * 0.30);
-      const rightEyeCenterY = (rightEyeTop.y + rightEyeBottom.y) / 2;
+      const rightEyeCenterY = (RT.y + RB.y) / 2;
       const rightIrisOffsetY = RI.y - rightEyeCenterY;
       const rightEyePitch = rightIrisOffsetY / (rightEyeHeight * 0.30);
-
-      const leftEyeOpenness = (leftEyeBottom.y - leftEyeTop.y) / leftEyeWidth;
-      const rightEyeOpenness = (rightEyeBottom.y - rightEyeTop.y) / rightEyeWidth;
+      const leftEyeOpenness = (LB.y - LT.y) / leftEyeWidth;
+      const rightEyeOpenness = (RB.y - RT.y) / rightEyeWidth;
       const avgEyeOpenness = (leftEyeOpenness + rightEyeOpenness) / 2;
       const opennessFactor = clamp((avgEyeOpenness - 0.25) / 0.15, -1, 1);
-
       const eyeYaw = (leftEyeYaw + rightEyeYaw) / 2;
       const irisPitch = (leftEyePitch + rightEyePitch) / 2;
       const eyePitch = irisPitch * 0.7 + opennessFactor * 0.3;
-
-      const eyeMid = mid(mid(leftEyeLeft, leftEyeRight), mid(rightEyeLeft, rightEyeRight));
-      const faceMid = mid(forehead, chin);
-      const faceWidth = dist(leftEyeLeft, rightEyeRight);
-      const faceHeight = dist(forehead, chin);
-      const headYaw = clamp(((nose.x - eyeMid.x) / (faceWidth || 1)) * 2.5, -1, 1);
-      const headPitch = clamp(((nose.y - faceMid.y) / (faceHeight || 1)) * 2.5, -1, 1);
-
+      const eyeMid = mid(mid(LL, LR), mid(RL, RR));
+      const faceMid = mid(FOREHEAD, CHIN);
+      const faceWidth = dist(LL, RR);
+      const faceHeight = dist(FOREHEAD, CHIN);
+      const headYaw = clamp(((NOSE.x - eyeMid.x) / (faceWidth || 1)) * 2.5, -1, 1);
+      const headPitch = clamp(((NOSE.y - faceMid.y) / (faceHeight || 1)) * 2.5, -1, 1);
       let yaw = (eyeYaw * EYE_WEIGHT) + (headYaw * HEAD_WEIGHT);
       let pitch = (eyePitch * EYE_WEIGHT) + (headPitch * HEAD_WEIGHT);
 
@@ -2079,9 +2060,9 @@
       pitch = clamp(pitch, -2.5, 2.5);
       yaw *= -1;
       if (pitch < 0) {
-        pitch *= 1.28;
+        pitch *= 1.28; // strengthen upward gaze
       } else {
-        pitch *= 0.72;
+        pitch *= 0.72; // reduce downward bias
       }
       yaw *= YAW_MULTIPLIER;
       pitch *= PITCH_MULTIPLIER;
@@ -2137,32 +2118,43 @@
     async function loadModels() {
       await tf.setBackend('webgl');
       await tf.ready();
-      faceModel = await tflite.loadTFLiteModel(FULL_FACE_MODEL_URL);
-      const dummyFace = tf.zeros([1, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, 3]);
-      const dummyPred = faceModel.predict(dummyFace);
-      tf.dispose([dummyFace, dummyPred]);
+      faceModel = await tflite.loadTFLiteModel(face_MODEL_URL);
+      eyeModel = await tflite.loadTFLiteModel(eye_MODEL_URL);
+      const dummyFace = tf.zeros([1, MODEL_FACE_INPUT_SIZE, MODEL_FACE_INPUT_SIZE, 3]);
+      const dummyEye = tf.zeros([1, MODEL_EYE_INPUT_SIZE, MODEL_EYE_INPUT_SIZE, 3]);
+      tf.dispose([dummyFace, dummyEye, faceModel.predict(dummyFace), eyeModel.predict(dummyEye)]);
     }
 
-    async function predictOnce({ refreshFace = true } = {}) {
+    async function predictOnce({ refreshFace = true, refreshEye = true } = {}) {
       if (window.disableGazeDetection) return;
-      if (!faceModel) return;
-      if (videoElement.readyState < 2) return;
-
+      if (!faceModel || !eyeModel) {
+        return;
+      }
+      if (videoElement.readyState < 2) {
+        return;
+      }
       bctx.drawImage(videoElement, 0, 0, buffer.width, buffer.height);
 
       const fullBox = { x: 0, y: 0, width: buffer.width, height: buffer.height };
       const warmupFace = refreshFace && faceWarmupRemaining > 0;
+      const faceBox = fullBox;
+      const eyeBox = fullBox;
+
       let faceFrame = null;
+      let eyeFrame = null;
       let faceOutput = null;
+      let eyeOutput = null;
       let bestFace = null;
+      let bestEye = null;
 
       try {
         if (refreshFace) {
-          faceFrame = preprocessFrame(buffer, MODEL_INPUT_SIZE);
-          if (warmupFace) faceWarmupRemaining--;
+          faceFrame = preprocessFrame(buffer, MODEL_FACE_INPUT_SIZE);
+          if (warmupFace) {
+            faceWarmupRemaining--;
+          }
           faceOutput = faceModel.predict(faceFrame.tensor);
-          bestFace = await parseKeypointModelOutput(faceOutput, MODEL_INPUT_SIZE, faceFrame.scale, faceFrame.padX, faceFrame.padY, NUM_KPTS);
-
+          bestFace = await parseKeypointModelOutput(faceOutput, MODEL_FACE_INPUT_SIZE, faceFrame.scale, faceFrame.padX, faceFrame.padY, NUM_FACE_KPTS);
           if (!bestFace) {
             lastFaceDetected = false;
             lastFaceScore = 0;
@@ -2171,12 +2163,7 @@
             resetBubbleCenter();
             return;
           }
-
-          lastFaceDetection = {
-            score: bestFace.score,
-            bbox: { x: bestFace.bbox[0], y: bestFace.bbox[1], width: bestFace.bbox[2], height: bestFace.bbox[3] },
-            kpts: bestFace.kpts
-          };
+          lastFaceDetection = { score: bestFace.score, bbox: { x: bestFace.bbox[0], y: bestFace.bbox[1], width: bestFace.bbox[2], height: bestFace.bbox[3] }, kpts: bestFace.kpts };
           lastFaceBox = lastFaceDetection.bbox;
           frameSinceFaceRefresh = 0;
           lastMotionGrayscale = null;
@@ -2185,24 +2172,28 @@
           frameSinceFaceRefresh++;
         }
 
-        if (!bestFace || !Array.isArray(bestFace.kpts) || bestFace.kpts.length < NUM_KPTS) {
+        if (refreshEye || !refreshFace) {
+          eyeFrame = preprocessFrame(buffer, MODEL_EYE_INPUT_SIZE);
+          eyeOutput = eyeModel.predict(eyeFrame.tensor);
+          bestEye = await parseKeypointModelOutput(eyeOutput, MODEL_EYE_INPUT_SIZE, eyeFrame.scale, eyeFrame.padX, eyeFrame.padY, NUM_EYE_KPTS);
+        }
+
+        const best = mergeFaceEyeKeypoints(bestFace, bestEye);
+        if (!best || !Array.isArray(best.kpts) || best.kpts.length < NUM_KPTS) {
           lastFaceDetected = false;
           lastFaceScore = bestFace?.score ?? 0;
           setVerification(false, 'Face not found');
           resetBubbleCenter();
           return;
         }
-
-        const gaze = estimateGazeFromKpts(bestFace.kpts);
-        lastFaceDetected = !!gaze.valid;
+        const gaze = estimateGazeFromKpts(best.kpts);
+        lastFaceDetected = !!(bestFace && bestEye && gaze.valid);
         lastFaceScore = bestFace?.score ?? 0;
-
         if (!gaze.valid) {
           lastFaceDetected = false;
           setVerification(false, 'Tracking lost');
           return;
         }
-
         lastGaze = { yaw: gaze.yaw, pitch: gaze.pitch, valid: true };
         lastValidYaw = gaze.yaw;
         lastValidPitch = gaze.pitch;
@@ -2215,7 +2206,9 @@
         resetBubbleCenter();
       } finally {
         if (faceFrame) tf.dispose(faceFrame.tensor);
+        if (eyeFrame) tf.dispose(eyeFrame.tensor);
         deepDispose(faceOutput);
+        deepDispose(eyeOutput);
       }
     }
 
