@@ -19,6 +19,7 @@ import 'pages/exams/exam_result_page.dart';
 import 'pages/auth/forgot_page.dart';
 import 'pages/exams/exam_html.dart';
 import 'pages/notifications/notifications_page.dart';
+import 'widgets/gaze_calibration_overlay.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -178,18 +179,22 @@ final GoRouter router = GoRouter(
     GoRoute(
       name: 'calibration',
       path: '/calibrating/:examId',
-      pageBuilder: (context, state) {
-        final examId = state.pathParameters['examId']!;
-
-        return NoTransitionPage(
+      pageBuilder: (context, state) => CustomTransitionPage(
+        key: state.pageKey,
+        opaque: false,
+        barrierColor: Colors.transparent,
+        transitionsBuilder: (_, __, ___, child) => child,
+        child: Material(
+          type: MaterialType.transparency,
           child: GazeCalibrationOverlay(
-            examId: examId,
-            onCalibrationComplete: () {
-              context.goNamed('examhtml', pathParameters: {"examId": examId});
-            },
+            examId: state.pathParameters['examId']!,
+            onCalibrationComplete: () => context.goNamed(
+              'examhtml',
+              pathParameters: {'examId': state.pathParameters['examId']!},
+            ),
           ),
-        );
-      },
+        ),
+      ),
     ),
   ],
 );

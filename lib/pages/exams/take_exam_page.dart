@@ -854,15 +854,30 @@ class _TakeExamPageState extends State<TakeExamPage>
                     "updatedAt": startedAt,
                   }, SetOptions(merge: true));
 
-              if (!mounted) return;
-              _screenStreamHandedOff = true;
+             if (!mounted) return;
+_screenStreamHandedOff = true;
 
-              // Navigate to calibration page with examId in URL
-              context.goNamed(
-                'calibration',
-                pathParameters: {"examId": widget.examId},
-                extra: true, // Flag to indicate valid calibration session
-              );
+final router = GoRouter.of(context);
+await showGeneralDialog<void>(
+  context: context,
+  useRootNavigator: true,
+  barrierDismissible: false,
+  barrierColor: Colors.transparent,
+  transitionDuration: Duration.zero,
+  pageBuilder: (ctx, _, __) => Material(
+    type: MaterialType.transparency,
+    child: GazeCalibrationOverlay(
+      examId: widget.examId,
+      onCalibrationComplete: () {
+        Navigator.of(ctx, rootNavigator: true).pop();
+        router.goNamed(
+          'examhtml',
+          pathParameters: {'examId': widget.examId},
+        );
+      },
+    ),
+  ),
+);
             } catch (e) {
               _screenStreamHandedOff = false;
               _stopJsStream(_screenStream);

@@ -20,11 +20,13 @@
   #calMessage { position: absolute; top: 18px; left: 0; right: 0; text-align: center; font-size: 16px; font-weight: 600; }
   
   #dot { position: absolute; width: 30px; height: 30px; border-radius: 50%; transform: translate(-50%,-50%);
-         background: radial-gradient(circle, #0b1220 0 3px, #fff 3.5px); border: 5px solid #1e90ff;
-         transition: left .3s ease, top .3s ease; box-shadow: 0 0 20px rgba(30,144,255,0.6); }
+       background: radial-gradient(circle, #0b1220 0 3px, #fff 3.5px); border: 5px solid #1e90ff;
+       transition: left .3s ease, top .3s ease; box-shadow: 0 0 20px rgba(30,144,255,0.6);
+       z-index: 30; pointer-events: none; }
 
-  .cam-preview { position: absolute; bottom: 20px; right: 20px; width: 200px; aspect-ratio: 4/3; 
-                 background: #000; border-radius: 8px; border: 2px solid #1e90ff; overflow: hidden; }
+.cam-preview { position: absolute; bottom: 20px; right: 20px; width: 200px; aspect-ratio: 4/3;
+               background: #000; border-radius: 8px; border: 2px solid #1e90ff; overflow: hidden;
+               z-index: 10; }
   .cam-preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
   .cam-preview canvas { position: absolute; inset: 0; transform: scaleX(-1); }
 
@@ -32,6 +34,13 @@
            font-weight: 600; cursor: pointer; font-size: 16px; box-shadow: 0 4px 12px rgba(30,144,255,0.3); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   button:hover:not(:disabled) { background: #3d9fff; }
+
+  #startBtn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-width: 280px; }
+  #startBtn .spinner { display: none; width: 16px; height: 16px; border-radius: 50%;
+                       border: 2px solid rgba(6,32,58,.3); border-top-color: #06203a;
+                       animation: spin .8s linear infinite; }
+  #startBtn.loading .spinner { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .info-box { max-width: 500px; margin: 0 auto; }
   .info-box h2 { font-size: 24px; margin-bottom: 12px; }
@@ -56,7 +65,10 @@
       <li>✓ Make sure your face is clearly visible</li>
     </ul>
     
-    <button id="startBtn">Start 9-Point Calibration</button>
+    <button id="startBtn" class="loading" disabled>
+      <span class="spinner"></span>
+      <span id="startLabel">Loading model…</span>
+    </button>
   </div>
 </div>
 
@@ -262,7 +274,24 @@ setInterval(() => {
   }
 }, 50);
 
-$('startBtn').onclick = startCalibration;
+const startBtn = $('startBtn'), startLabel = $('startLabel');
+let modelReady = false;
+
+function setReady() {
+  if (modelReady) return;
+  modelReady = true;
+  startBtn.disabled = false;
+  startBtn.classList.remove('loading');
+  startLabel.textContent = 'Start 9-Point Calibration';
+}
+
+function setLoadError(e) {
+  console.error('Calibration setup failed:', e);
+  startBtn.classList.remove('loading');
+  startLabel.textContent = 'Camera or model failed to load. Reload the page.';
+}
+
+startBtn.onclick = () => { if (modelReady) startCalibration(); };
 
 // MediaPipe setup
 const fm = new FaceMesh({ 
@@ -276,6 +305,7 @@ fm.setOptions({
 });
 
 fm.onResults(res => {
+  setReady();
   canvas.width = video.clientWidth; 
   canvas.height = video.clientHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -310,11 +340,19 @@ fm.onResults(res => {
   }
 });
 
-new Camera(video, { 
-  onFrame: async () => { await fm.send({ image: video }); }, 
-  width: 1280, 
-  height: 720 
-}).start();
+(async () => {
+  try {
+    await fm.initialize();
+    startLabel.textContent = 'Starting camera…';
+    await new Camera(video, {
+      onFrame: async () => { await fm.send({ image: video }); },
+      width: 1280,
+      height: 720
+    }).start();
+  } catch (e) {
+    setLoadError(e);
+  }
+})();
 </script>
 </body>
 </html>
