@@ -95,6 +95,19 @@ class _TakeExamPageState extends State<TakeExamPage>
     });
   }
 
+  void _clearStaleExamStorage() {
+    for (final key in const [
+      'examId',
+      'examStarted',
+      'is_unloading',
+    ]) {
+      html.window.sessionStorage.remove(key);
+    }
+    for (final key in const ['cheatingCount', 'cheatClipIndex']) {
+      html.window.localStorage.remove(key);
+    }
+  }
+
   // ---------- Error popup ----------
 
   Future<void> _showErrorDialog({
@@ -768,6 +781,7 @@ class _TakeExamPageState extends State<TakeExamPage>
             _starting = true;
 
             try {
+              _clearStaleExamStorage();
               final agreed = await _showReadyDialog();
               if (!agreed) return;
 

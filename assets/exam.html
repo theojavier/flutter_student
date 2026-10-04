@@ -596,9 +596,70 @@
         return types.find((type) => MediaRecorder.isTypeSupported(type)) || "";
       }
 
+      function recordBlob(stream, durationMs) {
+        return new Promise((resolve) => {
+          if (!stream?.active || typeof MediaRecorder === "undefined") {
+            console.warn(
+              "MediaRecorder or an active capture stream is unavailable.",
+            );
+            resolve(null);
+            return;
+          }
+
+          let recorder;
+          try {
+            const mimeType = pickMimeType();
+            recorder = new MediaRecorder(stream, {
+              ...(mimeType ? { mimeType } : {}),
+              videoBitsPerSecond: 800_000,
+            });
+          } catch (err) {
+            console.warn("MediaRecorder failed:", err);
+            resolve(null);
+            return;
+          }
+
+          const chunks = [];
+          let timeoutId;
+          let settled = false;
+          const settle = (blob) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            resolve(blob);
+          };
+
+          recorder.ondataavailable = (event) => {
+            if (event.data?.size > 0) chunks.push(event.data);
+          };
+          recorder.onstop = () => {
+            settle(
+              chunks.length
+                ? new Blob(chunks, {
+                    type: recorder.mimeType || "video/webm",
+                  })
+                : null,
+            );
+          };
+          recorder.onerror = (event) => {
+            console.warn("MediaRecorder error:", event.error);
+            settle(null);
+          };
+
+          try {
+            recorder.start(250);
+            timeoutId = setTimeout(() => {
+              if (recorder.state !== "inactive") recorder.stop();
+            }, durationMs);
+          } catch (err) {
+            console.warn("MediaRecorder could not start:", err);
+            settle(null);
+          }
+        });
+      }
+
       async function recordCheatClip(examId) {
         if (!examId) return;
-
         // A clip is already recording. This strike falls inside its 3s window,
         // so it is covered by that clip's "#start to #end" range.
         if (window.cheatClipBusy) return;
@@ -1015,7 +1076,11 @@
           console.error("Failed to mark incomplete:", err);
         }
       };
-      const EXAM_SESSION_KEYS = ["examId", "examStarted", "is_unloading"];
+      const EXAM_SESSION_KEYS = [
+        "examId",
+        "examStarted",
+        "is_unloading",
+      ];
       const EXAM_LOCAL_KEYS = ["cheatingCount", "cheatClipIndex"];
 
       function clearExamStorage() {
@@ -1456,6 +1521,29 @@
 
       * {
         box-sizing: border-box;
+      }
+
+      html {
+        scrollbar-color: #182744 rgba(0, 0, 0, 0.12);
+        scrollbar-width: thin;
+      }
+
+      *::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      *::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.12);
+      }
+
+      *::-webkit-scrollbar-thumb {
+        background: #182744;
+        border-radius: 8px;
+      }
+
+      *::-webkit-scrollbar-thumb:hover {
+        background: #1e90ff;
       }
 
       body {
