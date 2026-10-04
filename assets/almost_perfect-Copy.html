@@ -604,101 +604,119 @@
         return types.find((type) => MediaRecorder.isTypeSupported(type)) || "";
       }
 
-      async function recordCheatClip(examId) {
-        if (!examId) return;
+       function recordBlob(stream, ms) {
+  return new Promise((resolve) => {
+    if (!stream || !stream.active) return resolve(null);
 
-        const clipRange = getCheatGroupRange();
-        const currentCheatCount = Number(window.cheatingCount || 0);
-        const currentClipIndex = (Number(window.cheatClipIndex) || 0) + 1;
-        window.cheatClipIndex = currentClipIndex;
-        localStorage.setItem("cheatClipIndex", String(window.cheatClipIndex));
+    let recorder;
+    try {
+      recorder = new MediaRecorder(stream, {
+        mimeType: pickMimeType() || undefined,
+        videoBitsPerSecond: 800000,
+      });
+    } catch (err) {
+      console.warn("MediaRecorder failed:", err);
+      return resolve(null);
+    }
 
-        const captureScreen = await startScreenCapture();
-        const captureCamera = await startCameraCapture();
+    const chunks = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      resolve(
+        chunks.length
+          ? new Blob(chunks, { type: recorder.mimeType || "video/webm" })
+          : null,
+      );
+    };
+    recorder.onerror = () => resolve(null);
 
-        if (!captureScreen && !captureCamera) {
-          console.warn(
-            "Skipping cheat clip upload because neither screen nor camera capture is available.",
-          );
-          return;
+    recorder.start(250); // timeslice so data is flushed every 250ms
+    setTimeout(() => {
+      if (recorder.state !== "inactive") recorder.stop();
+    }, ms);
+  });
+}
+
+async function recordCheatClip(examId) {
+  if (!examId) return;
+
+  // A clip is already recording. This strike falls inside its 3s window,
+  // so it is covered by that clip's "#start to #end" range.
+  if (window.cheatClipBusy) return;
+  window.cheatClipBusy = true;
+
+  try {
+    const startedAt = Date.now();
+    const startCount = Number(window.cheatingCount || 0);
+
+    const hasScreen = await startScreenCapture();
+    const hasCamera = await startCameraCapture();
+    const screenStream = hasScreen ? window.cheatCaptureStream : null;
+    const cameraStream = hasCamera ? window.cameraCaptureStream : null;
+
+    if (!screenStream && !cameraStream) {
+      console.warn("No screen or camera capture available, skipping clip.");
+      return;
+    }
+
+    // Record screen and camera at the SAME time
+    const [screenBlob, cameraBlob] = await Promise.all([
+      recordBlob(screenStream, CHEAT_CLIP_DURATION_MS),
+      recordBlob(cameraStream, CHEAT_CLIP_DURATION_MS),
+    ]);
+
+    const blobs = {};
+    if (screenBlob) blobs.screen = screenBlob;
+    if (cameraBlob) blobs.camera = cameraBlob;
+    if (Object.keys(blobs).length === 0) return;
+
+    // Strikes that happened during the 3s are included in the range
+    const endCount = Number(window.cheatingCount || startCount);
+
+    const parts = {};
+    for (const [kind, blob] of Object.entries(blobs)) {
+      parts[kind] = blob.type.startsWith("video/mp4") ? "video/mp4" : "video/webm";
+    }
+
+    // ONE request = ONE clip number with both files
+    const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
+    const { data } = await requestFn({
+      examId,
+      occurredAt: startedAt,
+      cheatCount: endCount,
+      startCheatCount: startCount,
+      endCheatCount: endCount,
+      parts,
+    });
+
+    await Promise.all(
+      Object.entries(blobs).map(async ([kind, blob]) => {
+        const upload = data?.uploads?.[kind];
+        if (!upload?.uploadUrl) {
+          throw new Error(`No signed URL returned for ${kind} clip`);
         }
-
-        const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
-
-        async function uploadStream(stream, kind) {
-          if (!stream || !stream.active) return;
-
-          const recorder = new MediaRecorder(stream, {
-            mimeType: pickMimeType() || undefined,
-            videoBitsPerSecond: 800000,
-          });
-
-          const chunks = [];
-          recorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) chunks.push(event.data);
-          };
-
-          const stopped = new Promise((resolve) => {
-            recorder.onstop = resolve;
-          });
-
-          recorder.start();
-          setTimeout(() => {
-            if (recorder.state !== "inactive") recorder.stop();
-          }, CHEAT_CLIP_DURATION_MS);
-
-          await stopped;
-
-          const contentType =
-            recorder.mimeType && recorder.mimeType.startsWith("video/mp4")
-              ? "video/mp4"
-              : "video/webm";
-
-          const blob = new Blob(chunks, { type: contentType });
-          const { data } = await requestFn({
-            examId,
-            occurredAt: Date.now(),
-            cheatCount: currentCheatCount,
-            startCheatCount: clipRange.start,
-            endCheatCount: clipRange.end,
-            parts: {
-              ...(captureScreen ? { screen: contentType } : {}),
-              ...(captureCamera ? { camera: contentType } : {}),
-            },
-            kind,
-            contentType,
-          });
-
-          const upload = data?.uploads?.[kind];
-          if (!upload?.uploadUrl) {
-            throw new Error(`No signed URL returned for ${kind} clip`);
-          }
-
-          const uploadRes = await fetch(upload.uploadUrl, {
-            method: "PUT",
-            headers: {
-              "Content-Type": upload.contentType,
-              "x-goog-content-length-range": `0,${upload.maxBytes || 3 * 1024 * 1024}`,
-            },
-            body: blob,
-          });
-
-          if (!uploadRes.ok) {
-            throw new Error(
-              `${kind} clip upload failed with status ${uploadRes.status}`,
-            );
-          }
-
-          console.log(`${kind} cheat clip uploaded:`, upload.filePath);
+        const res = await fetch(upload.uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": upload.contentType,
+            "x-goog-content-length-range": `0,${upload.maxBytes || 3 * 1024 * 1024}`,
+          },
+          body: blob,
+        });
+        if (!res.ok) {
+          throw new Error(`${kind} clip upload failed with status ${res.status}`);
         }
-
-        try {
-          await uploadStream(window.cheatCaptureStream, "screen");
-          await uploadStream(window.cameraCaptureStream, "camera");
-        } catch (err) {
-          console.error("Cheat clip upload error:", err);
-        }
-      }
+        console.log(`${kind} cheat clip uploaded:`, upload.filePath);
+      }),
+    );
+  } catch (err) {
+    console.error("Cheat clip error:", err);
+  } finally {
+    window.cheatClipBusy = false;
+  }
+}
 
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
@@ -1879,13 +1897,19 @@
       const KPT_CONF_THRESHOLD = 0.4;
       const NUM_KPTS = 33;
       const NUM_CLASSES = 1;
-      const YAW_MULTIPLIER = 180;
-      const PITCH_MULTIPLIER = 160;
+      const YAW_MULTIPLIER = 200;
+      const PITCH_MULTIPLIER = 180;
       const EYE_WEIGHT = 0.8;
       const HEAD_WEIGHT = 0.2;
       let lookingAwaySince = null;
       const AWAY_DELAY_MS = 2000;
-      
+      const GAZE_SMOOTHING = 0.55;   // lower = smoother/slower to react, higher = snappier/twitchier
+const MAX_GAZE_JUMP = 55;     // clamps a single bad detection from causing a big jump
+let smoothedYaw = 0;
+let smoothedPitch = 0;
+const PITCH_NEGATIVE_GAIN = 1.0; // was 1.28 — equalized so up/down feel the same by default
+const PITCH_POSITIVE_GAIN = 1.0; // was 0.72
+
 
       const KPT_NAMES = [
         "iris_center_left",
@@ -1945,6 +1969,11 @@
       let lastFaceDetected = false;
       let lastFaceScore = 0;
       let lastGaze = { yaw: 0, pitch: 0, valid: false };
+      let yawBias = 0;
+let pitchBias = 0;
+let calibrationSamples = [];
+const CALIBRATION_FRAMES = 15;
+let gazeCalibrated = false;
 
       let bubbleX = window.innerWidth / 2,
         bubbleY = window.innerHeight / 2;
@@ -1952,6 +1981,8 @@
         targetY = bubbleY;
       const SENSITIVITY = 10.4;
 
+      const GAZE_X_SENSITIVITY = 130;
+const GAZE_Y_SENSITIVITY = 90;
       const buffer = document.createElement("canvas");
       const bctx = buffer.getContext("2d");
       const cropCanvas = document.createElement("canvas");
@@ -2003,6 +2034,7 @@
         ctx.drawImage(sourceCanvas, padX, padY, newW, newH);
         return { canvas: out, scale, padX, padY };
       }
+
       function preprocessFrame(sourceCanvas, size) {
         return tf.tidy(() => {
           const { canvas, scale, padX, padY } = letterboxCanvas(
@@ -2014,6 +2046,13 @@
           return { tensor: nchw, scale, padX, padY };
         });
       }
+      function smoothGaze(rawYaw, rawPitch) {
+  let dyaw = clamp(rawYaw - smoothedYaw, -MAX_GAZE_JUMP, MAX_GAZE_JUMP);
+  let dpitch = clamp(rawPitch - smoothedPitch, -MAX_GAZE_JUMP, MAX_GAZE_JUMP);
+  smoothedYaw += dyaw * GAZE_SMOOTHING;
+  smoothedPitch += dpitch * GAZE_SMOOTHING;
+  return { yaw: smoothedYaw, pitch: smoothedPitch };
+}
       function tensorFromOutput(output) {
         if (!output) return null;
         if (Array.isArray(output)) {
@@ -2312,16 +2351,16 @@
         }
         const leftEyeCenterX = (leftEyeLeft.x + leftEyeRight.x) / 2;
         const leftIrisOffsetX = LI.x - leftEyeCenterX;
-        const leftEyeYaw = leftIrisOffsetX / (leftEyeWidth * 0.3);
+        const leftEyeYaw = leftIrisOffsetX / (leftEyeWidth * 0.5);
         const rightEyeCenterX = (rightEyeLeft.x + rightEyeRight.x) / 2;
         const rightIrisOffsetX = RI.x - rightEyeCenterX;
-        const rightEyeYaw = rightIrisOffsetX / (rightEyeWidth * 0.3);
+        const rightEyeYaw = rightIrisOffsetX / (rightEyeWidth * 0.5);
         const leftEyeCenterY = (leftEyeTop.y + leftEyeBottom.y) / 2;
         const leftIrisOffsetY = LI.y - leftEyeCenterY;
-        const leftEyePitch = leftIrisOffsetY / (leftEyeHeight * 0.3);
+        const leftEyePitch = leftIrisOffsetY / (leftEyeHeight * 0.5);
         const rightEyeCenterY = (rightEyeTop.y + rightEyeBottom.y) / 2;
         const rightIrisOffsetY = RI.y - rightEyeCenterY;
-        const rightEyePitch = rightIrisOffsetY / (rightEyeHeight * 0.3);
+        const rightEyePitch = rightIrisOffsetY / (rightEyeHeight * 0.5);
         const leftEyeOpenness = (leftEyeBottom.y - leftEyeTop.y) / leftEyeWidth;
         const rightEyeOpenness =
           (rightEyeBottom.y - rightEyeTop.y) / rightEyeWidth;
@@ -2353,10 +2392,10 @@
         pitch = clamp(pitch, -2.5, 2.5);
         yaw *= -1;
         if (pitch < 0) {
-          pitch *= 1.28;
-        } else {
-          pitch *= 0.72;
-        }
+  pitch *= PITCH_NEGATIVE_GAIN;
+} else {
+  pitch *= PITCH_POSITIVE_GAIN;
+}
         yaw *= YAW_MULTIPLIER;
         pitch *= PITCH_MULTIPLIER;
         console.log("[GAZE]", {
@@ -2376,60 +2415,151 @@
         gazeBubble.classList.remove("alert");
         updateBubble();
       }
-      function moveBubbleFromGaze(yaw, pitch) {
-        const normX = yaw / 75;
-        const normY = pitch / 50;
-        const activeTarget = window.examStarted
-          ? document.getElementById("examCard")
-          : document.getElementById("examGate");
-        const rect = activeTarget.getBoundingClientRect();
-        const screenCenterX = window.innerWidth / 2;
-        const screenCenterY = window.innerHeight / 2;
-        const widthRange = window.innerWidth * 0.9;
-        targetX = screenCenterX + normX * widthRange;
-        targetY =
-          screenCenterY +
-          (normY < 0
-            ? normY * window.innerHeight * 0.58
-            : normY * window.innerHeight * 0.28);
-        targetX = clamp(targetX, -200, window.innerWidth + 200);
-        targetY = clamp(targetY, -200, window.innerHeight + 200);
-        updateBubble();
-        const margin = 15;
-        const gazeOk =
-          targetX >= rect.left - margin &&
-          targetX <= rect.right + margin &&
-          targetY >= rect.top - margin &&
-          targetY <= rect.bottom + margin;
+     function moveBubbleFromGaze(yaw, pitch) {
+  // ============================================================
+  // FULL-SCREEN GAZE MAPPING
+  //
+  // The bubble represents the WHOLE browser/laptop screen.
+  // The exam card does NOT control the bubble position.
+  //
+  // Center gaze  -> screen center
+  // Left gaze    -> screen left
+  // Right gaze   -> screen right
+  // Up gaze      -> screen top
+  // Down gaze    -> screen bottom
+  // ============================================================
 
-        if (!gazeOk) {
-          examCard.classList.add("alert");
-          gazeBubble.classList.add("alert");
-          setVerification(false, "Looking away detected");
+  const activeTarget = window.examStarted
+    ? document.getElementById("examCard")
+    : document.getElementById("examGate");
 
-          if (!lookingAwaySince) {
-            lookingAwaySince = Date.now();
-          }
+  const rect = activeTarget.getBoundingClientRect();
 
-          if (
-            window.allowStrikes &&
-            Date.now() - lookingAwaySince > AWAY_DELAY_MS
-          ) {
-            registerStrikeOnce();
-            sendToArduino("STRIKE");
-          }
-        } else {
-          lookingAwaySince = null;
+  // ------------------------------------------------------------
+  // Convert model output into normalized gaze coordinates.
+  //
+  // These are deliberately independent for X and Y because
+  // vertical eye movement is naturally much smaller than
+  // horizontal eye movement.
+  // ------------------------------------------------------------
 
-          examCard.classList.remove("alert");
-          gazeBubble.classList.remove("alert");
-          setVerification(true, "Eyes on exam");
+  let normX = yaw / GAZE_X_SENSITIVITY;
+  let normY = pitch / GAZE_Y_SENSITIVITY;
 
-          if (window.allowStrikes) {
-            sendToArduino("OK");
-          }
-        }
-      }
+  // ------------------------------------------------------------
+  // STRONGER GAZE AMPLIFICATION
+  //
+  // This is the important part.
+  //
+  // Small eye movements become visible on the whole screen,
+  // while large movements are still capped safely.
+  // ------------------------------------------------------------
+
+  const X_GAIN = 2.20;
+  const Y_GAIN = 3.20;
+
+  normX *= X_GAIN;
+  normY *= Y_GAIN;
+
+  // Keep the gaze inside normalized screen space.
+  normX = clamp(normX, -1, 1);
+  normY = clamp(normY, -1, 1);
+
+  // ------------------------------------------------------------
+  // NON-LINEAR AMPLIFICATION
+  //
+  // Gives small/medium eye movements more visible movement
+  // without making the bubble jump violently.
+  // ------------------------------------------------------------
+
+  function amplify(value, power = 0.80) {
+    const sign = value < 0 ? -1 : 1;
+    return sign * Math.pow(Math.abs(value), power);
+  }
+
+  const screenX = amplify(normX);
+  const screenY = amplify(normY);
+
+  // ------------------------------------------------------------
+  // MAP DIRECTLY TO THE WHOLE VIEWPORT
+  //
+  // -1 = left/top
+  //  0 = center
+  // +1 = right/bottom
+  // ------------------------------------------------------------
+
+  const screenCenterX = window.innerWidth / 2;
+  const screenCenterY = window.innerHeight / 2;
+
+  // Use almost the entire screen.
+  const rangeX = window.innerWidth * 0.47;
+  const rangeY = window.innerHeight * 0.47;
+
+  targetX = screenCenterX + screenX * rangeX;
+  targetY = screenCenterY + screenY * rangeY;
+
+  // ------------------------------------------------------------
+  // Keep bubble visible.
+  //
+  // We don't allow it to disappear completely off-screen.
+  // ------------------------------------------------------------
+
+  const bubbleRadius = 18;
+
+  targetX = clamp(
+    targetX,
+    bubbleRadius,
+    window.innerWidth - bubbleRadius
+  );
+
+  targetY = clamp(
+    targetY,
+    bubbleRadius,
+    window.innerHeight - bubbleRadius
+  );
+
+  // ------------------------------------------------------------
+  // CHEATING / OUTSIDE-EXAM CHECK
+  //
+  // IMPORTANT:
+  // This still uses the actual exam-card rectangle.
+  // The card does NOT affect bubble movement.
+  // ------------------------------------------------------------
+
+  const margin = 15;
+
+  const gazeInsideExam =
+    targetX >= rect.left - margin &&
+    targetX <= rect.right + margin &&
+    targetY >= rect.top - margin &&
+    targetY <= rect.bottom + margin;
+
+  if (!gazeInsideExam) {
+    examCard.classList.add("alert");
+    gazeBubble.classList.add("alert");
+
+    setVerification(false, "Looking away detected");
+
+    if (!lookingAwaySince) {
+      lookingAwaySince = Date.now();
+    }
+
+    if (
+      window.allowStrikes &&
+      Date.now() - lookingAwaySince > AWAY_DELAY_MS
+    ) {
+      lookingAwaySince = Date.now()
+      registerStrikeOnce();
+    }
+  } else {
+    lookingAwaySince = null;
+
+    examCard.classList.remove("alert");
+    gazeBubble.classList.remove("alert");
+
+    setVerification(true, "Eyes on exam");
+  }
+}
       async function pickAccelerator() {
         if (navigator.gpu) {
           try {
@@ -2473,11 +2603,14 @@
         }
       }
       function updateBubble() {
-        bubbleX += (targetX - bubbleX) * 0.18;
-        bubbleY += (targetY - bubbleY) * 0.18;
-        gazeBubble.style.left = `${bubbleX}px`;
-        gazeBubble.style.top = `${bubbleY}px`;
-      }
+  const SMOOTHING = 0.28;
+
+  bubbleX += (targetX - bubbleX) * SMOOTHING;
+  bubbleY += (targetY - bubbleY) * SMOOTHING;
+
+  gazeBubble.style.left = `${bubbleX}px`;
+  gazeBubble.style.top = `${bubbleY}px`;
+}
       function animLoop() {
         updateBubble();
         requestAnimationFrame(animLoop);
@@ -2910,11 +3043,12 @@
             setVerification(false, "Tracking lost");
             return;
           }
-          lastGaze = { yaw: gaze.yaw, pitch: gaze.pitch, valid: true };
-          lastValidYaw = gaze.yaw;
-          lastValidPitch = gaze.pitch;
-          lastValidTime = Date.now();
-          moveBubbleFromGaze(gaze.yaw, gaze.pitch);
+          const smoothed = smoothGaze(gaze.yaw, gaze.pitch);
+lastGaze = { yaw: smoothed.yaw, pitch: smoothed.pitch, valid: true };
+lastValidYaw = smoothed.yaw;
+lastValidPitch = smoothed.pitch;
+lastValidTime = Date.now();
+moveBubbleFromGaze(smoothed.yaw, smoothed.pitch);
         } catch (err) {
           console.error("Inference error:", err);
           lastFaceDetected = false;

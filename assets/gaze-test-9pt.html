@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Gaze test — 9-point calibration</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px system-ui, sans-serif; background: #0b1220; color: #e6f0f8; }
+  .wrap { display: grid; grid-template-columns: 1fr 340px; gap: 16px; padding: 16px; min-height: 100vh; }
+  #card { position: relative; border-radius: 10px; background: #0b2a44; min-height: 520px;
+          display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+  #card.alert { outline: 3px solid #ff6b6b; }
+  #safe { position: absolute; inset: 6%; border: 1px dashed rgba(255,255,255,.2); pointer-events: none; }
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .cam { position: relative; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; }
+  video, canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .panel { background: #071a2b; border-radius: 8px; padding: 12px; }
+  .panel label { display: grid; grid-template-columns: 90px 1fr 48px; gap: 8px; align-items: center; margin: 6px 0; }
+  .panel .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  pre { margin: 0; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+  button { background: #1e90ff; color: #06203a; border: 0; border-radius: 6px; padding: 8px 14px; font-weight: 600; cursor: pointer; }
+  #bubble { position: fixed; width: 18px; height: 18px; border-radius: 50%; background: rgba(30,144,255,.95);
+            pointer-events: none; transform: translate(-50%,-50%); z-index: 9; }
+  #bubble.alert { background: rgba(255,107,107,.95); }
+  #overlay { display: none; position: fixed; inset: 0; z-index: 20; background: rgba(7,18,32,.94); }
+  #calmsg { position: absolute; top: 18px; left: 0; right: 0; text-align: center; font-size: 15px; }
+  #dot { position: absolute; width: 30px; height: 30px; border-radius: 50%; transform: translate(-50%,-50%);
+         background: radial-gradient(circle, #0b1220 0 3px, #fff 3.5px); border: 5px solid #1e90ff;
+         transition: left .3s ease, top .3s ease; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="card"><div id="safe"></div>
+    <div><h2>Look around this card</h2>
+    <p>Run the 9-point calibration, then check that the bubble lands where you look,
+       especially at the middle of each edge.</p></div>
+  </div>
+
+  <div class="side">
+    <div class="cam"><video id="v" autoplay playsinline muted></video><canvas id="c"></canvas></div>
+    <div class="panel"><pre id="hud">starting…</pre></div>
+    <div class="panel">
+      <div class="row"><button id="cal">Start 9-point calibration</button></div>
+      <div class="row"><input id="quad" type="checkbox" checked><label for="quad" style="display:inline;margin:0">Use quadratic model (off = linear)</label></div>
+      <label>W_HEAD <input id="wh" type="range" min="0" max="1" step="0.05" value="0.3"><span id="whv"></span></label>
+      <label>SMOOTH <input id="sm" type="range" min="0.1" max="0.8" step="0.05" value="0.15"><span id="smv"></span></label>
+    </div>
+  </div>
+</div>
+<div id="bubble"></div>
+
+<div id="overlay"><div id="calmsg"></div><div id="dot"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const video = $('v'), canvas = $('c'), ctx = canvas.getContext('2d');
+const card = $('card'), bubble = $('bubble'), hud = $('hud');
+const overlay = $('overlay'), dot = $('dot'), calmsg = $('calmsg');
+
+// ---------- eye / head features ----------
+const R_EYE = { a: 33,  b: 133, iris: 468, up: 159, low: 145 };
+const L_EYE = { a: 362, b: 263, iris: 473, up: 386, low: 374 };
+
+function eyeGaze(lm, e, W, H) {
+  const A = lm[e.a], B = lm[e.b], I = lm[e.iris];
+  const ax = A.x*W, ay = A.y*H, bx = B.x*W, by = B.y*H, ix = I.x*W, iy = I.y*H;
+  const w = Math.hypot(bx-ax, by-ay);
+  const ex = (bx-ax)/w, ey = (by-ay)/w, nx = -ey, ny = ex;
+  const dx = ix - (ax+bx)/2, dy = iy - (ay+by)/2;
+  return { gx: (dx*ex + dy*ey)/w, gy: (dx*nx + dy*ny)/w,
+           ear: Math.hypot((lm[e.up].x-lm[e.low].x)*W, (lm[e.up].y-lm[e.low].y)*H)/w };
+}
+function headPose(lm) {
+  const n = lm[1], L = lm[234], R = lm[454], T = lm[10], C = lm[152];
+  return { yaw: (n.x-(L.x+R.x)/2)/Math.abs(R.x-L.x), pitch: (n.y-(T.y+C.y)/2)/Math.abs(C.y-T.y) };
+}
+const med = a => { const s=[...a].sort((x,y)=>x-y); return s[s.length>>1]; };
+
+// ---------- ridge regression: (gx, gy) -> screen position (as fraction of viewport) ----------
+const RIDGE = 0.02;
+const feats = (gx, gy, quad) => quad ? [1, gx, gy, gx*gx, gy*gy, gx*gy] : [1, gx, gy];
+
+function solve(A, b) {                       // Gaussian elimination, small n
+  const n = b.length;
+  for (let i = 0; i < n; i++) {
+    let p = i;
+    for (let r = i+1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r;
+    [A[i], A[p]] = [A[p], A[i]]; [b[i], b[p]] = [b[p], b[i]];
+    for (let r = i+1; r < n; r++) {
+      const f = A[r][i] / A[i][i];
+      for (let c = i; c < n; c++) A[r][c] -= f * A[i][c];
+      b[r] -= f * b[i];
+    }
+  }
+  const x = Array(n).fill(0);
+  for (let i = n-1; i >= 0; i--) {
+    let s = b[i];
+    for (let c = i+1; c < n; c++) s -= A[i][c] * x[c];
+    x[i] = s / A[i][i];
+  }
+  return x;
+}
+
+function fitModel(rows, quad) {
+  const F = rows.map(r => feats(r.gx, r.gy, quad));
+  const k = F[0].length, n = F.length;
+  const mu = Array(k).fill(0), sd = Array(k).fill(1);
+  for (let j = 1; j < k; j++) {
+    mu[j] = F.reduce((s, f) => s + f[j], 0) / n;
+    sd[j] = Math.sqrt(F.reduce((s, f) => s + (f[j]-mu[j])**2, 0) / n) || 1;
+  }
+  const Z = F.map(f => f.map((v, j) => j ? (v-mu[j])/sd[j] : 1));
+  const fitOne = key => {
+    const A = Array.from({length:k}, () => Array(k).fill(0)), b = Array(k).fill(0);
+    Z.forEach((z, i) => { for (let p = 0; p < k; p++) { b[p] += z[p]*rows[i][key]; for (let q = 0; q < k; q++) A[p][q] += z[p]*z[q]; } });
+    for (let p = 1; p < k; p++) A[p][p] += RIDGE * n;   // don't penalize the bias
+    return solve(A, b);
+  };
+  return { quad, mu, sd, wx: fitOne('sx'), wy: fitOne('sy') };
+}
+function predict(m, gx, gy) {
+  const z = feats(gx, gy, m.quad).map((v, j) => j ? (v-m.mu[j])/m.sd[j] : 1);
+  return [z.reduce((s, v, j) => s + v*m.wx[j], 0), z.reduce((s, v, j) => s + v*m.wy[j], 0)];
+}
+const pxErr = (px, py, r) => Math.hypot((px-r.sx)*innerWidth, (py-r.sy)*innerHeight);
+
+function trainErr(rows, m) {
+  return rows.reduce((s, r) => { const [px, py] = predict(m, r.gx, r.gy); return s + pxErr(px, py, r); }, 0) / rows.length;
+}
+// leave-one-spot-out: fit on 8 dots, predict the 9th (honest estimate, pessimistic for corners)
+function looErr(rows, quad) {
+  let tot = 0, cnt = 0;
+  for (let s = 0; s < 9; s++) {
+    const tr = rows.filter(r => r.spot !== s), te = rows.filter(r => r.spot === s);
+    if (!te.length) continue;
+    const m = fitModel(tr, quad), P = te.map(r => predict(m, r.gx, r.gy));
+    tot += pxErr(med(P.map(p => p[0])), med(P.map(p => p[1])), te[0]); cnt++;
+  }
+  return tot / cnt;
+}
+
+// ---------- 9-point calibration ----------
+const G = [0.08, 0.5, 0.92];
+const ORDER = [[G[1],G[1]], [G[0],G[0]], [G[2],G[0]], [G[2],G[2]], [G[0],G[2]],   // center, 4 corners
+               [G[1],G[0]], [G[2],G[1]], [G[1],G[2]], [G[0],G[1]]];               // top, right, bottom, left (the "in-between" points)
+const SETTLE = 700, COLLECT = 1000, MIN_SAMPLES = 12;
+
+const cal = { active: false, i: 0, t0: 0, phase: '', samples: [], rows: [], fx: 0, fy: 0 };
+const models = { lin: null, quad: null }, errs = {};
+let headBase = { yaw: 0, pitch: 0 };
+
+function beginDot() {
+  [cal.fx, cal.fy] = ORDER[cal.i];
+  dot.style.left = cal.fx*100 + '%'; dot.style.top = cal.fy*100 + '%';
+  cal.t0 = performance.now(); cal.phase = 'settle'; cal.samples = [];
+  calmsg.textContent = `Look at the dot and keep your head still  (${cal.i+1}/${ORDER.length})`;
+}
+function startCal() {
+  Object.assign(cal, { active: true, i: 0, rows: [] });
+  models.lin = models.quad = null;
+  overlay.style.display = 'block';
+  beginDot();
+}
+function finishCal() {
+  cal.active = false; overlay.style.display = 'none';
+  headBase = { yaw: med(cal.rows.map(r => r.yaw)), pitch: med(cal.rows.map(r => r.pitch)) };
+  models.lin = fitModel(cal.rows, false); models.quad = fitModel(cal.rows, true);
+  errs.lin  = { train: trainErr(cal.rows, models.lin),  loo: looErr(cal.rows, false) };
+  errs.quad = { train: trainErr(cal.rows, models.quad), loo: looErr(cal.rows, true) };
+}
+setInterval(() => {
+  if (!cal.active) return;
+  const t = performance.now() - cal.t0;
+  if (cal.phase === 'settle' && t > SETTLE) { cal.phase = 'collect'; cal.t0 = performance.now(); cal.samples = []; }
+  else if (cal.phase === 'collect' && t > COLLECT) {
+    if (cal.samples.length < MIN_SAMPLES) { beginDot(); return; }          // face lost / blinking: redo this dot
+    cal.samples.forEach(s => cal.rows.push({ ...s, spot: cal.i, sx: cal.fx, sy: cal.fy }));
+    cal.i++;
+    cal.i >= ORDER.length ? finishCal() : beginDot();
+  }
+}, 50);
+$('cal').onclick = startCal;
+
+// ---------- tunables ----------
+const P = { W_HEAD: .3, SMOOTH: .35, HEAD_EDGE_X: .12, HEAD_EDGE_Y: .10 };
+const BLINK_EAR = 0.14, AWAY_MS = 700;
+[['wh','W_HEAD'],['sm','SMOOTH']].forEach(([id, key]) => {
+  const el = $(id), out = $(id+'v');
+  const upd = () => { P[key] = +el.value; out.textContent = el.value; };
+  el.oninput = upd; upd();
+});
+
+const sm = { gx:0, gy:0, yaw:0, pitch:0, init:false };
+let awaySince = 0, strikes = 0, lastStrike = 0;
+let bx = innerWidth/2, by = innerHeight/2, tx = bx, ty = by;
+(function loop() { bx += (tx-bx)*.18; by += (ty-by)*.18;
+  bubble.style.left = bx+'px'; bubble.style.top = by+'px'; requestAnimationFrame(loop); })();
+
+// ---------- MediaPipe ----------
+const fm = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+fm.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: .55, minTrackingConfidence: .55 });
+
+fm.onResults(res => {
+  canvas.width = video.clientWidth; canvas.height = video.clientHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!res.multiFaceLandmarks?.length) { if (!cal.active) hud.textContent = 'Face not found'; return; }
+
+  const lm = res.multiFaceLandmarks[0];
+  const W = video.videoWidth, H = video.videoHeight; if (!W) return;
+
+  ctx.fillStyle = '#1e90ff';
+  [468, 473].forEach(i => { ctx.beginPath(); ctx.arc(lm[i].x*canvas.width, lm[i].y*canvas.height, 4, 0, 7); ctx.fill(); });
+
+  const r = eyeGaze(lm, R_EYE, W, H), l = eyeGaze(lm, L_EYE, W, H);
+  if (r.ear < BLINK_EAR || l.ear < BLINK_EAR) return;
+
+  const hp = headPose(lm);
+  const raw = { gx:(r.gx+l.gx)/2, gy:(r.gy+l.gy)/2, yaw:hp.yaw, pitch:hp.pitch };
+  if (!sm.init) Object.assign(sm, raw, { init:true });
+  for (const k of ['gx','gy','yaw','pitch']) sm[k] += (raw[k]-sm[k]) * P.SMOOTH;
+
+  if (cal.active) {
+    if (cal.phase === 'collect') cal.samples.push({ gx: sm.gx, gy: sm.gy, yaw: sm.yaw, pitch: sm.pitch });
+    return;
+  }
+  const model = $('quad').checked ? models.quad : models.lin;
+  if (!model) { hud.textContent = 'Press "Start 9-point calibration".'; return; }
+
+  // eye -> screen via the learned model, then a small fixed head term
+  let [fx, fy] = predict(model, sm.gx, sm.gy);
+  fx -= P.W_HEAD * (sm.yaw   - headBase.yaw)   / P.HEAD_EDGE_X * 0.5;   // minus: user's left = screen left
+  fy += P.W_HEAD * (sm.pitch - headBase.pitch) / P.HEAD_EDGE_Y * 0.5;
+  tx = Math.max(8, Math.min(innerWidth-8,  fx*innerWidth));
+  ty = Math.max(8, Math.min(innerHeight-8, fy*innerHeight));
+
+  const rect = card.getBoundingClientRect(), ins = .06;
+  const ok = tx >= rect.left+rect.width*ins && tx <= rect.right-rect.width*ins &&
+             ty >= rect.top+rect.height*ins && ty <= rect.bottom-rect.height*ins;
+  card.classList.toggle('alert', !ok); bubble.classList.toggle('alert', !ok);
+  if (!ok) {
+    if (!awaySince) awaySince = performance.now();
+    if (performance.now()-awaySince > AWAY_MS && performance.now()-lastStrike > 1200) { strikes++; lastStrike = performance.now(); }
+  } else awaySince = 0;
+
+  hud.textContent =
+`strikes: ${strikes}
+active model: ${model.quad ? 'quadratic' : 'linear'}
+
+avg error in px (lower = better)
+              fit    leave-one-dot-out
+linear     ${errs.lin.train.toFixed(0).padStart(5)}    ${errs.lin.loo.toFixed(0).padStart(5)}
+quadratic  ${errs.quad.train.toFixed(0).padStart(5)}    ${errs.quad.loo.toFixed(0).padStart(5)}
+
+eye gx ${sm.gx.toFixed(3)}  gy ${sm.gy.toFixed(3)}`;
+});
+
+new Camera(video, { onFrame: async () => { await fm.send({ image: video }); }, width: 1280, height: 720 }).start();
+</script>
+</body>
+</html>

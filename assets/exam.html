@@ -127,14 +127,6 @@
       window.strikes = window.strikes ?? 0;
       window.examFinished = window.examFinished ?? false;
       window.disableGazeDetection = false;
-      window.shuffleArray =
-        window.shuffleArray ||
-        function (arr) {
-          return arr
-            .map((value) => ({ value, sort: Math.random() }))
-            .sort((a, b) => a.sort - b.sort)
-            .map(({ value }) => value);
-        };
       window.cheatingCount = parseInt(
         localStorage.getItem("cheatingCount") ?? "0",
         10,
@@ -604,101 +596,90 @@
         return types.find((type) => MediaRecorder.isTypeSupported(type)) || "";
       }
 
-      // async function recordCheatClip(examId) {
-      //   if (!examId) return;
+      async function recordCheatClip(examId) {
+        if (!examId) return;
 
-      //   const clipRange = getCheatGroupRange();
-      //   const currentCheatCount = Number(window.cheatingCount || 0);
-      //   const currentClipIndex = (Number(window.cheatClipIndex) || 0) + 1;
-      //   window.cheatClipIndex = currentClipIndex;
-      //   localStorage.setItem("cheatClipIndex", String(window.cheatClipIndex));
+        // A clip is already recording. This strike falls inside its 3s window,
+        // so it is covered by that clip's "#start to #end" range.
+        if (window.cheatClipBusy) return;
+        window.cheatClipBusy = true;
 
-      //   const captureScreen = await startScreenCapture();
-      //   const captureCamera = await startCameraCapture();
+        try {
+          const startedAt = Date.now();
+          const startCount = Number(window.cheatingCount || 0);
 
-      //   if (!captureScreen && !captureCamera) {
-      //     console.warn(
-      //       "Skipping cheat clip upload because neither screen nor camera capture is available.",
-      //     );
-      //     return;
-      //   }
+          const hasScreen = await startScreenCapture();
+          const hasCamera = await startCameraCapture();
+          const screenStream = hasScreen ? window.cheatCaptureStream : null;
+          const cameraStream = hasCamera ? window.cameraCaptureStream : null;
 
-      //   const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
+          if (!screenStream && !cameraStream) {
+            console.warn(
+              "No screen or camera capture available, skipping clip.",
+            );
+            return;
+          }
 
-      //   async function uploadStream(stream, kind) {
-      //     if (!stream || !stream.active) return;
+          // Record screen and camera at the SAME time
+          const [screenBlob, cameraBlob] = await Promise.all([
+            recordBlob(screenStream, CHEAT_CLIP_DURATION_MS),
+            recordBlob(cameraStream, CHEAT_CLIP_DURATION_MS),
+          ]);
 
-      //     const recorder = new MediaRecorder(stream, {
-      //       mimeType: pickMimeType() || undefined,
-      //       videoBitsPerSecond: 800000,
-      //     });
+          const blobs = {};
+          if (screenBlob) blobs.screen = screenBlob;
+          if (cameraBlob) blobs.camera = cameraBlob;
+          if (Object.keys(blobs).length === 0) return;
 
-      //     const chunks = [];
-      //     recorder.ondataavailable = (event) => {
-      //       if (event.data && event.data.size > 0) chunks.push(event.data);
-      //     };
+          // Strikes that happened during the 3s are included in the range
+          const endCount = Number(window.cheatingCount || startCount);
 
-      //     const stopped = new Promise((resolve) => {
-      //       recorder.onstop = resolve;
-      //     });
+          const parts = {};
+          for (const [kind, blob] of Object.entries(blobs)) {
+            parts[kind] = blob.type.startsWith("video/mp4")
+              ? "video/mp4"
+              : "video/webm";
+          }
 
-      //     recorder.start();
-      //     setTimeout(() => {
-      //       if (recorder.state !== "inactive") recorder.stop();
-      //     }, CHEAT_CLIP_DURATION_MS);
+          // ONE request = ONE clip number with both files
+          const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
+          const { data } = await requestFn({
+            examId,
+            occurredAt: startedAt,
+            cheatCount: endCount,
+            startCheatCount: startCount,
+            endCheatCount: endCount,
+            parts,
+          });
 
-      //     await stopped;
-
-      //     const contentType =
-      //       recorder.mimeType && recorder.mimeType.startsWith("video/mp4")
-      //         ? "video/mp4"
-      //         : "video/webm";
-
-      //     const blob = new Blob(chunks, { type: contentType });
-      //     const { data } = await requestFn({
-      //       examId,
-      //       occurredAt: Date.now(),
-      //       cheatCount: currentCheatCount,
-      //       startCheatCount: clipRange.start,
-      //       endCheatCount: clipRange.end,
-      //       parts: {
-      //         ...(captureScreen ? { screen: contentType } : {}),
-      //         ...(captureCamera ? { camera: contentType } : {}),
-      //       },
-      //       kind,
-      //       contentType,
-      //     });
-
-      //     const upload = data?.uploads?.[kind];
-      //     if (!upload?.uploadUrl) {
-      //       throw new Error(`No signed URL returned for ${kind} clip`);
-      //     }
-
-      //     const uploadRes = await fetch(upload.uploadUrl, {
-      //       method: "PUT",
-      //       headers: {
-      //         "Content-Type": upload.contentType,
-      //         "x-goog-content-length-range": `0,${upload.maxBytes || 3 * 1024 * 1024}`,
-      //       },
-      //       body: blob,
-      //     });
-
-      //     if (!uploadRes.ok) {
-      //       throw new Error(
-      //         `${kind} clip upload failed with status ${uploadRes.status}`,
-      //       );
-      //     }
-
-      //     console.log(`${kind} cheat clip uploaded:`, upload.filePath);
-      //   }
-
-      //   try {
-      //     await uploadStream(window.cheatCaptureStream, "screen");
-      //     await uploadStream(window.cameraCaptureStream, "camera");
-      //   } catch (err) {
-      //     console.error("Cheat clip upload error:", err);
-      //   }
-      // }
+          await Promise.all(
+            Object.entries(blobs).map(async ([kind, blob]) => {
+              const upload = data?.uploads?.[kind];
+              if (!upload?.uploadUrl) {
+                throw new Error(`No signed URL returned for ${kind} clip`);
+              }
+              const res = await fetch(upload.uploadUrl, {
+                method: "PUT",
+                headers: {
+                  "Content-Type": upload.contentType,
+                  "x-goog-content-length-range": `0,${upload.maxBytes || 3 * 1024 * 1024}`,
+                },
+                body: blob,
+              });
+              if (!res.ok) {
+                throw new Error(
+                  `${kind} clip upload failed with status ${res.status}`,
+                );
+              }
+              console.log(`${kind} cheat clip uploaded:`, upload.filePath);
+            }),
+          );
+        } catch (err) {
+          console.error("Cheat clip error:", err);
+        } finally {
+          window.cheatClipBusy = false;
+        }
+      }
 
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
@@ -733,9 +714,9 @@
             );
 
             try {
-              //await recordCheatClip(examId);
+              await recordCheatClip(examId);
             } catch (clipErr) {
-              //console.error("recordCheatClip failed:", clipErr);
+              console.error("recordCheatClip failed:", clipErr);
             }
           }
 
@@ -898,9 +879,6 @@
       }
 
       async function startCountdownFromFirestore(examId) {
-        const countdownEl = document.getElementById("countdown");
-        if (!countdownEl) return;
-
         const examRef = doc(db, "exams", examId);
         const examSnap = await getDoc(examRef);
 
@@ -935,6 +913,7 @@
               {
                 action: "finishExam",
                 examId: examId,
+                //studentId: studentId
               },
               "*",
             );
@@ -1059,6 +1038,34 @@
         if (window.examStarted) {
           sessionStorage.setItem("examStarted", "1");
         }
+      });
+
+      window.addEventListener("pagehide", (event) => {
+        if (event.persisted) return;
+        if (window.hasSubmitted || window.examFinished) return;
+
+        sessionStorage.setItem("is_unloading", "true");
+
+        if (window.examData?.examId && window.authUid && window.examToken) {
+          fetch(
+            "https://asia-southeast1-rd-final.cloudfunctions.net/markIncomplete",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${window.examToken}`,
+              },
+              body: JSON.stringify({
+                examId: window.examData.examId,
+                uid: window.authUid,
+              }),
+              keepalive: true,
+            },
+          ).catch(() => {});
+        }
+
+        clearExamStorage();
+        resetExamRuntimeState();
       });
 
       let currentQuestionIndex = 0;
@@ -1279,10 +1286,7 @@
 
           // Shuffle each group independently
           Object.keys(groups).forEach((type) => {
-            groups[type] = (window.shuffleArray || ((arr) => arr)).call(
-              window,
-              groups[type],
-            );
+            groups[type] = shuffleArray(groups[type]);
           });
 
           // Build final grouped+random order
@@ -1840,7 +1844,8 @@
       style="left: 50%; top: 50%; display: block"
     ></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
     <script>
       //ARDUINO SERIAL CONNECTION
@@ -1873,89 +1878,22 @@
         return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
       }
 
-      const FULL_FACE_MODEL_URL = "./model_1024/best_w8a32_640.tflite";
-      const MODEL_INPUT_SIZE = 640;
-      const CONF_THRESHOLD = 0.45;
-      const KPT_CONF_THRESHOLD = 0.4;
-      const NUM_KPTS = 33;
-      const NUM_CLASSES = 1;
-      const YAW_MULTIPLIER = 200;
-      const PITCH_MULTIPLIER = 180;
-      const EYE_WEIGHT = 0.8;
-      const HEAD_WEIGHT = 0.2;
-      let lookingAwaySince = null;
-      const AWAY_DELAY_MS = 2000;
-      const GAZE_SMOOTHING = 0.55;   // lower = smoother/slower to react, higher = snappier/twitchier
-const MAX_GAZE_JUMP = 55;     // clamps a single bad detection from causing a big jump
-let smoothedYaw = 0;
-let smoothedPitch = 0;
-const PITCH_NEGATIVE_GAIN = 1.0; // was 1.28 — equalized so up/down feel the same by default
-const PITCH_POSITIVE_GAIN = 1.0; // was 0.72
-
-
-      const KPT_NAMES = [
-        "iris_center_left",
-        "iris_center_right",
-        "left_chin",
-        "left_mid_chin",
-        "chin",
-        "right_mid_chin",
-        "right_chin",
-        "forehead",
-        "upper_left_right",
-        "right_corner_right",
-        "left_corner_right",
-        "lower_left_right",
-        "lower_right_right",
-        "top_right",
-        "bottom_right",
-        "lower_right_left",
-        "bottom_left",
-        "lower_left_left",
-        "upper_right_right",
-        "right_corner_left",
-        "upper_right_left",
-        "top_left",
-        "upper_left",
-        "left_corner_left",
-        "nose",
-        "iris_top_left",
-        "iris_right_left",
-        "iris_bottom_left",
-        "iris_left_left",
-        "iris_top_right",
-        "iris_right_right",
-        "iris_left_right",
-        "iris_bottom_right",
-      ];
-      const KPT_INDEX = Object.fromEntries(KPT_NAMES.map((n, i) => [n, i]));
+      const faceMesh = new FaceMesh({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.55,
+        minTrackingConfidence: 0.55,
+      });
 
       let verified = false;
       let lastVerifiedChange = Date.now();
       const STABLE_MS = 300;
       let strikes = 0;
       let blocked = false;
-      let faceModel = null;
-      let lastFaceDetection = null;
-      let lastFaceBox = null;
-      let lastMotionGrayscale = null;
-      let faceWarmupRemaining = 0;
-      let lastValidYaw = 0;
-      let lastValidPitch = 0;
-      let lastValidTime = Date.now();
-      let frameSinceFaceRefresh = 8;
-      let lastRun = 0;
-      let isProcessing = false;
-      let targetInterval = 50;
-      let inferenceEMA = 0;
-      let lastFaceDetected = false;
-      let lastFaceScore = 0;
-      let lastGaze = { yaw: 0, pitch: 0, valid: false };
-      let yawBias = 0;
-let pitchBias = 0;
-let calibrationSamples = [];
-const CALIBRATION_FRAMES = 15;
-let gazeCalibrated = false;
 
       let bubbleX = window.innerWidth / 2,
         bubbleY = window.innerHeight / 2;
@@ -1963,595 +1901,319 @@ let gazeCalibrated = false;
         targetY = bubbleY;
       const SENSITIVITY = 10.4;
 
-      const GAZE_X_SENSITIVITY = 130;
-const GAZE_Y_SENSITIVITY = 90;
-      const buffer = document.createElement("canvas");
-      const bctx = buffer.getContext("2d");
-      const cropCanvas = document.createElement("canvas");
-      const cropCtx = cropCanvas.getContext("2d");
-      const motionCanvas = document.createElement("canvas");
-      const motionCtx = motionCanvas.getContext("2d", {
-        willReadFrequently: true,
-      });
-      const sharedCanvas = document.createElement("canvas");
-      const sharedCtx = sharedCanvas.getContext("2d");
+      // Landmark indices (refineLandmarks:true). a = image-left corner, b = image-right corner
+      const R_EYE = { a: 33, b: 133, iris: 468, up: 159, low: 145 }; // subject's right eye
+      const L_EYE = { a: 362, b: 263, iris: 473, up: 386, low: 374 }; // subject's left eye
 
-      function clamp(v, min, max) {
-        return Math.max(min, Math.min(max, v));
-      }
-      function dist(a, b) {
-        return Math.hypot(a.x - b.x, a.y - b.y);
-      }
-      function mid(a, b) {
-        return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      }
-      function getKpt(kpts, name, minConf = KPT_CONF_THRESHOLD) {
-        const idx = KPT_INDEX[name];
-        if (idx === undefined || !Array.isArray(kpts[idx])) return null;
-        const p = kpts[idx];
-        if (!p || p.length < 3) return null;
-        const x = Number(p[0]);
-        const y = Number(p[1]);
-        const v = Number(p[2]);
-        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(v))
-          return null;
-        if (v < minConf) return null;
-        return { x, y, v };
-      }
-      function letterboxCanvas(sourceCanvas, size, color = "rgb(114,114,114)") {
-        const out = document.createElement("canvas");
-        out.width = size;
-        out.height = size;
-        const ctx = out.getContext("2d");
-        ctx.fillStyle = color;
-        ctx.fillRect(0, 0, size, size);
-        const scale = Math.min(
-          size / sourceCanvas.width,
-          size / sourceCanvas.height,
-        );
-        const newW = Math.round(sourceCanvas.width * scale);
-        const newH = Math.round(sourceCanvas.height * scale);
-        const padX = Math.floor((size - newW) / 2);
-        const padY = Math.floor((size - newH) / 2);
-        ctx.drawImage(sourceCanvas, padX, padY, newW, newH);
-        return { canvas: out, scale, padX, padY };
+      // gx/gy = iris offset from eye center, as a fraction of eye width
+      // (work in pixels so x/y have equal scale; project on the eye-corner axis so head roll doesn't matter)
+      function eyeGaze(lm, e, W, H) {
+        const A = lm[e.a],
+          B = lm[e.b],
+          I = lm[e.iris];
+        const ax = A.x * W,
+          ay = A.y * H,
+          bx = B.x * W,
+          by = B.y * H,
+          ix = I.x * W,
+          iy = I.y * H;
+        const w = Math.hypot(bx - ax, by - ay);
+        const ex = (bx - ax) / w,
+          ey = (by - ay) / w; // along eye axis
+        const nx = -ey,
+          ny = ex; // perpendicular (down)
+        const dx = ix - (ax + bx) / 2,
+          dy = iy - (ay + by) / 2;
+        return {
+          gx: (dx * ex + dy * ey) / w,
+          gy: (dx * nx + dy * ny) / w,
+          ear:
+            Math.hypot(
+              (lm[e.up].x - lm[e.low].x) * W,
+              (lm[e.up].y - lm[e.low].y) * H,
+            ) / w,
+        };
       }
 
-      function preprocessFrame(sourceCanvas, size) {
-        return tf.tidy(() => {
-          const { canvas, scale, padX, padY } = letterboxCanvas(
-            sourceCanvas,
-            size,
+      // rough head pose from face landmarks (secondary signal)
+      function headPose(lm) {
+        const n = lm[1],
+          L = lm[234],
+          R = lm[454],
+          T = lm[10],
+          C = lm[152];
+        return {
+          yaw: (n.x - (L.x + R.x) / 2) / Math.abs(R.x - L.x),
+          pitch: (n.y - (T.y + C.y) / 2) / Math.abs(C.y - T.y),
+        };
+      }
+
+      const med = (a) => {
+        const s = [...a].sort((x, y) => x - y);
+        return s[s.length >> 1];
+      };
+      const spread = (a) => Math.max(...a) - Math.min(...a);
+
+      // ---- TUNING ----
+      const EYE_EDGE_X = 0.05; // gx change when you look at the card's left/right edge
+      const EYE_EDGE_Y = 0.03; // gy change when you look at the card's top/bottom edge
+      const HEAD_EDGE_X = 0.12; // yaw change for the same edge
+      const HEAD_EDGE_Y = 0.1;
+      const W_EYE = 1.0,
+        W_HEAD = 0.3; // eye is primary, head is secondary
+      const BLINK_EAR = 0.14;
+      const AWAY_MS = 700; // must be outside the safe zone this long before a strike
+
+      // Load calibration data from localStorage (set by gaze-calibration.html)
+      let SMOOTH = 0.15; // Default smooth value (as requested)
+      let calibrationModel = null;
+      let headBase = { yaw: 0, pitch: 0 };
+      let useQuadraticModel = true;
+
+      try {
+        const savedCalibration = localStorage.getItem("gazeCalibrationData");
+        if (savedCalibration) {
+          const calData = JSON.parse(savedCalibration);
+          console.log("✓ Loaded gaze calibration data from localStorage");
+
+          // Use the smooth value from calibration (should be 0.15)
+          SMOOTH = calData.smooth || 0.15;
+
+          // Load head base
+          if (calData.headBase) {
+            headBase = calData.headBase;
+          }
+
+          // Load the quadratic model (more accurate)
+          if (calData.modelQuad) {
+            calibrationModel = calData.modelQuad;
+            useQuadraticModel = true;
+            console.log("✓ Using quadratic calibration model");
+          } else if (calData.modelLin) {
+            calibrationModel = calData.modelLin;
+            useQuadraticModel = false;
+            console.log("✓ Using linear calibration model");
+          }
+        } else {
+          console.warn(
+            "⚠ No calibration data found, using fallback auto-calibration",
           );
-          const img = tf.browser.fromPixels(canvas).toFloat().div(255.0); // [H, W, 3]
-          const nchw = img.transpose([2, 0, 1]).expandDims(0); // [1, 3, H, W] — model expects channels-first
-          return { tensor: nchw, scale, padX, padY };
+        }
+      } catch (err) {
+        console.error("Failed to load calibration data:", err);
+      }
+
+      const sm = { gx: 0, gy: 0, yaw: 0, pitch: 0, init: false };
+      const calib = { buf: [], done: !calibrationModel, base: headBase }; // Skip auto-cal if we have saved data
+      let awaySince = 0;
+
+      // Helper functions for using the calibration model
+      const feats = (gx, gy, quad) =>
+        quad ? [1, gx, gy, gx * gx, gy * gy, gx * gy] : [1, gx, gy];
+
+      function predictGaze(model, gx, gy) {
+        if (!model) return null;
+        const z = feats(gx, gy, model.quad).map((v, j) =>
+          j ? (v - model.mu[j]) / model.sd[j] : 1,
+        );
+        return [
+          z.reduce((s, v, j) => s + v * model.wx[j], 0),
+          z.reduce((s, v, j) => s + v * model.wy[j], 0),
+        ];
+      }
+      function onResults(results) {
+        if (window.disableGazeDetection) return;
+
+        const vw = videoElement.clientWidth,
+          vh = videoElement.clientHeight;
+        canvasElement.width = vw;
+        canvasElement.height = vh;
+        canvasCtx.clearRect(0, 0, vw, vh);
+
+        if (
+          !results.multiFaceLandmarks ||
+          results.multiFaceLandmarks.length === 0
+        ) {
+          setVerification(false, "Face not found");
+          targetX = window.innerWidth / 2;
+          targetY = window.innerHeight / 2;
+          updateBubble();
+          return;
+        }
+
+        const lm = results.multiFaceLandmarks[0];
+        const W = videoElement.videoWidth,
+          H = videoElement.videoHeight;
+        if (!W || !H) return;
+
+        // debug iris dots
+        canvasCtx.fillStyle = "rgba(30,144,255,0.95)";
+        [468, 473].forEach((i) => {
+          canvasCtx.beginPath();
+          canvasCtx.arc((1 - lm[i].x) * vw, lm[i].y * vh, 4, 0, Math.PI * 2);
+          canvasCtx.fill();
         });
-      }
-      function smoothGaze(rawYaw, rawPitch) {
-  let dyaw = clamp(rawYaw - smoothedYaw, -MAX_GAZE_JUMP, MAX_GAZE_JUMP);
-  let dpitch = clamp(rawPitch - smoothedPitch, -MAX_GAZE_JUMP, MAX_GAZE_JUMP);
-  smoothedYaw += dyaw * GAZE_SMOOTHING;
-  smoothedPitch += dpitch * GAZE_SMOOTHING;
-  return { yaw: smoothedYaw, pitch: smoothedPitch };
-}
-      function tensorFromOutput(output) {
-        if (!output) return null;
-        if (Array.isArray(output)) {
-          for (const item of output) {
-            if (item && typeof item.dataSync === "function") return item;
-          }
-          return null;
-        }
-        if (typeof output.dataSync === "function") return output;
-        if (typeof output === "object") {
-          for (const v of Object.values(output)) {
-            if (v && typeof v.dataSync === "function") return v;
-          }
-        }
-        return null;
-      }
-      function deepDispose(obj) {
-        if (!obj) return;
-        if (Array.isArray(obj)) {
-          obj.forEach(deepDispose);
-          return;
-        }
-        if (typeof obj.dispose === "function") {
-          obj.dispose();
-          return;
-        }
-        if (typeof obj === "object") {
-          Object.values(obj).forEach(deepDispose);
-        }
-      }
-      async function makeReader(tensor) {
-        const shape = tensor.shape.slice();
-        const data = await tensor.data();
-        let rows = 1,
-          cols = data.length,
-          transposed = false;
-        if (shape.length === 3 && shape[0] === 1) {
-          const a = shape[1],
-            b = shape[2];
-          if (a < b) {
-            rows = b;
-            cols = a;
-            transposed = true;
-          } else {
-            rows = a;
-            cols = b;
-          }
-        } else if (shape.length === 2) {
-          const a = shape[0],
-            b = shape[1];
-          if (a < b) {
-            rows = b;
-            cols = a;
-            transposed = true;
-          } else {
-            rows = a;
-            cols = b;
-          }
-        } else if (shape.length === 1) {
-          rows = 1;
-          cols = shape[0];
-        }
-        function get(r, c) {
-          return transposed ? data[c * rows + r] : data[r * cols + c];
-        }
-        return { shape, rows, cols, get };
-      }
-      async function parseKeypointModelOutput(
-        output,
-        inputSize,
-        scale,
-        padX,
-        padY,
-        numKpts,
-        offsetX = 0,
-        offsetY = 0,
-      ) {
-        const tensor = tensorFromOutput(output);
-        if (!tensor) return null;
-        const reader = await makeReader(tensor);
-        let trueMaxScore = -Infinity;
-        let trueMaxIdx = -1;
-        for (let r = 0; r < reader.rows; r++) {
-          const s = Number(reader.get(r, 4));
-          if (s > trueMaxScore) {
-            trueMaxScore = s;
-            trueMaxIdx = r;
-          }
-        }
-        console.log("[TRUE MAX CONF]", trueMaxScore, "at anchor", trueMaxIdx);
-        const needed = 4 + NUM_CLASSES + numKpts * 3;
-        if (reader.cols < needed) return null;
-        let bestDetection = null;
-        let bestScore = -1;
-        const kptStart = 5;
-        for (let i = 0; i < reader.rows; i++) {
-          const score = Number(reader.get(i, 4));
-          if (
-            !Number.isFinite(score) ||
-            score < CONF_THRESHOLD ||
-            score <= bestScore
-          ) {
-            if (i < 10) {
-              console.log("[DET]", i, "conf=", score);
-            }
-            continue;
-          }
-          const x = Number(reader.get(i, 0));
-          const y = Number(reader.get(i, 1));
-          const w = Number(reader.get(i, 2));
-          const h = Number(reader.get(i, 3));
 
-          const coordsNormalized =
-            x >= 0 &&
-            x <= 1 &&
-            y >= 0 &&
-            y <= 1 &&
-            w >= 0 &&
-            w <= 1 &&
-            h >= 0 &&
-            h <= 1;
-          let lx = x,
-            ly = y,
-            lw = w,
-            lh = h;
-          if (coordsNormalized) {
-            lx *= inputSize;
-            ly *= inputSize;
-            lw *= inputSize;
-            lh *= inputSize;
+        const r = eyeGaze(lm, R_EYE, W, H);
+        const l = eyeGaze(lm, L_EYE, W, H);
+        if (r.ear < BLINK_EAR || l.ear < BLINK_EAR) {
+          updateBubble();
+          return;
+        } // blink: hold last value
+
+        const hp = headPose(lm);
+        const raw = {
+          gx: (r.gx + l.gx) / 2,
+          gy: (r.gy + l.gy) / 2,
+          yaw: hp.yaw,
+          pitch: hp.pitch,
+        };
+
+        // smoothing with calibrated SMOOTH value (0.15)
+        if (!sm.init) {
+          Object.assign(sm, raw, { init: true });
+        }
+        for (const k of ["gx", "gy", "yaw", "pitch"])
+          sm[k] += (raw[k] - sm[k]) * SMOOTH;
+
+        // If we have a calibration model, use it; otherwise do auto-calibration
+        if (calibrationModel) {
+          // Use the trained model from 9-point calibration
+          const pred = predictGaze(calibrationModel, sm.gx, sm.gy);
+          if (!pred) {
+            console.warn("Model prediction failed");
+            return;
           }
 
-          // FIX: check the SCALED (pixel-space) size, not the raw value —
-          // the raw value is normalized (0-1) for this model, so it was
-          // always failing this check even for a genuine high-confidence face.
-          if (lw < 40 || lh < 40) {
-            continue;
+          const targetEl = window.examStarted
+            ? document.getElementById("examCard")
+            : document.getElementById("examGate");
+          const examRect = targetEl.getBoundingClientRect();
+          if (examRect.width < 20 || examRect.height < 20) return;
+
+          // pred[0] and pred[1] are normalized screen coordinates (0-1)
+          targetX = pred[0] * window.innerWidth;
+          targetY = pred[1] * window.innerHeight;
+
+          // Add small head pose correction
+          targetX -=
+            ((W_HEAD * (sm.yaw - headBase.yaw)) / HEAD_EDGE_X) *
+            (window.innerWidth / 2);
+          targetY +=
+            ((W_HEAD * (sm.pitch - headBase.pitch)) / HEAD_EDGE_Y) *
+            (window.innerHeight / 2);
+
+          // Clamp to screen bounds
+          const pad = 8;
+          targetX = Math.max(pad, Math.min(window.innerWidth - pad, targetX));
+          targetY = Math.max(pad, Math.min(window.innerHeight - pad, targetY));
+
+          // Check if gaze is within safe zone
+          const INSET_PCT = 0.06;
+          const safeLeft = examRect.left + examRect.width * INSET_PCT;
+          const safeRight = examRect.right - examRect.width * INSET_PCT;
+          const safeTop = examRect.top + examRect.height * INSET_PCT;
+          const safeBottom = examRect.bottom - examRect.height * INSET_PCT;
+          const gazeOk =
+            targetX >= safeLeft &&
+            targetX <= safeRight &&
+            targetY >= safeTop &&
+            targetY <= safeBottom;
+
+          if (!gazeOk) {
+            examCard.classList.add("alert");
+            gazeBubble.classList.add("alert");
+            setVerification(false, "Looking away detected");
+            if (!awaySince) awaySince = performance.now();
+            if (window.allowStrikes && performance.now() - awaySince > AWAY_MS)
+              registerStrikeOnce();
+          } else {
+            awaySince = 0;
+            examCard.classList.remove("alert");
+            gazeBubble.classList.remove("alert");
+            setVerification(true, "Face & eyes centered");
           }
-          const kpts = [];
-          for (let j = 0; j < numKpts; j++) {
-            let kx = Number(reader.get(i, kptStart + j * 3));
-            let ky = Number(reader.get(i, kptStart + j * 3 + 1));
-            let kv = Number(reader.get(i, kptStart + j * 3 + 2));
+          updateBubble();
+          return;
+        }
+
+        // FALLBACK: auto-calibration (only if no saved calibration model)
+        if (!calib.done) {
+          calib.buf.push({ ...sm });
+          faceText.textContent =
+            "Calibrating — look at the center of the screen";
+          if (calib.buf.length >= 30) {
+            const spread = (arr, key) =>
+              Math.max(...arr.map((s) => s[key])) -
+              Math.min(...arr.map((s) => s[key]));
             if (
-              !Number.isFinite(kx) ||
-              !Number.isFinite(ky) ||
-              !Number.isFinite(kv)
+              spread(calib.buf, "gx") > 0.04 ||
+              spread(calib.buf, "gy") > 0.04
             ) {
-              kpts.push([0, 0, 0]);
-              continue;
+              calib.buf = []; // eyes were moving, restart
+            } else {
+              const med = (arr, key) => {
+                const s = [...arr].map((x) => x[key]).sort((a, b) => a - b);
+                return s[s.length >> 1];
+              };
+              for (const k of ["gx", "gy", "yaw", "pitch"])
+                calib.base[k] = med(calib.buf, k);
+              calib.done = true;
             }
-            if (kx >= 0 && kx <= 1 && ky >= 0 && ky <= 1) {
-              kx *= inputSize;
-              ky *= inputSize;
-            }
-            const origX = (kx - padX) / scale + offsetX;
-            const origY = (ky - padY) / scale + offsetY;
-            kpts.push([origX, origY, kv]);
           }
-          bestScore = score;
-          bestDetection = {
-            score,
-            bbox: [lx + offsetX, ly + offsetY, lw, lh],
-            kpts,
-          };
+          return;
         }
-        return bestDetection;
-      }
-      function pickPoint(kpts, names) {
-        for (const name of names) {
-          const pt = getKpt(kpts, name);
-          if (pt) return pt;
-        }
-        return null;
-      }
-      function estimateGazeFromKpts(kpts) {
-        const LI =
-          pickPoint(kpts, [
-            "iris_center_left",
-            "left_iris_center",
-            "iris_left_left",
-          ]) || getKpt(kpts, "iris_center_left");
-        const RI =
-          pickPoint(kpts, [
-            "iris_center_right",
-            "right_iris_center",
-            "iris_right_right",
-          ]) || getKpt(kpts, "iris_center_right");
-        const nose = pickPoint(kpts, ["nose", "nose_center"]);
-        const forehead = pickPoint(kpts, ["forehead", "forehead_center"]);
-        const chin = pickPoint(kpts, ["chin", "left_chin", "right_chin"]);
-        const leftEyeLeft = pickPoint(kpts, [
-          "left_corner_left",
-          "left_eye_left_corner",
-          "iris_left_left",
-        ]);
-        const leftEyeRight = pickPoint(kpts, [
-          "right_corner_left",
-          "left_eye_right_corner",
-          "iris_right_left",
-        ]);
-        const leftEyeTop = pickPoint(kpts, [
-          "top_left",
-          "upper_left",
-          "left_eye_top",
-          "upper_left_right",
-        ]);
-        const leftEyeBottom = pickPoint(kpts, [
-          "bottom_left",
-          "lower_left_left",
-          "left_eye_bottom",
-          "lower_left_right",
-        ]);
-        const rightEyeLeft = pickPoint(kpts, [
-          "left_corner_right",
-          "right_eye_left_corner",
-          "iris_left_right",
-        ]);
-        const rightEyeRight = pickPoint(kpts, [
-          "right_corner_right",
-          "right_eye_right_corner",
-          "iris_right_right",
-        ]);
-        const rightEyeTop = pickPoint(kpts, [
-          "top_right",
-          "upper_right_left",
-          "right_eye_top",
-          "upper_right_right",
-        ]);
-        const rightEyeBottom = pickPoint(kpts, [
-          "bottom_right",
-          "lower_right_left",
-          "right_eye_bottom",
-          "lower_right_right",
-        ]);
-        if (
-          !LI ||
-          !RI ||
-          !leftEyeLeft ||
-          !leftEyeRight ||
-          !leftEyeTop ||
-          !leftEyeBottom ||
-          !rightEyeLeft ||
-          !rightEyeRight ||
-          !rightEyeTop ||
-          !rightEyeBottom ||
-          !nose ||
-          !forehead ||
-          !chin
-        ) {
-          console.log("[GAZE INVALID]", {
-            LI: !!LI,
-            RI: !!RI,
-            nose: !!nose,
-            forehead: !!forehead,
-            chin: !!chin,
-            leftEyeLeft: !!leftEyeLeft,
-            leftEyeRight: !!leftEyeRight,
-            rightEyeLeft: !!rightEyeLeft,
-            rightEyeRight: !!rightEyeRight,
-          });
 
-          return {
-            yaw: 0,
-            pitch: 0,
-            valid: false,
-          };
-        }
-        const leftEyeWidth = leftEyeRight.x - leftEyeLeft.x;
-        const leftEyeHeight = leftEyeBottom.y - leftEyeTop.y;
-        const rightEyeWidth = rightEyeRight.x - rightEyeLeft.x;
-        const rightEyeHeight = rightEyeBottom.y - rightEyeTop.y;
-        if (
-          leftEyeWidth <= 0 ||
-          leftEyeHeight <= 0 ||
-          rightEyeWidth <= 0 ||
-          rightEyeHeight <= 0
-        ) {
-          console.log("[GAZE INVALID]", {
-            LI: !!LI,
-            RI: !!RI,
-            nose: !!nose,
-            forehead: !!forehead,
-            chin: !!chin,
-            leftEyeLeft: !!leftEyeLeft,
-            leftEyeRight: !!leftEyeRight,
-            rightEyeLeft: !!rightEyeLeft,
-            rightEyeRight: !!rightEyeRight,
-          });
-
-          return {
-            yaw: 0,
-            pitch: 0,
-            valid: false,
-          };
-        }
-        const leftEyeCenterX = (leftEyeLeft.x + leftEyeRight.x) / 2;
-        const leftIrisOffsetX = LI.x - leftEyeCenterX;
-        const leftEyeYaw = leftIrisOffsetX / (leftEyeWidth * 0.5);
-        const rightEyeCenterX = (rightEyeLeft.x + rightEyeRight.x) / 2;
-        const rightIrisOffsetX = RI.x - rightEyeCenterX;
-        const rightEyeYaw = rightIrisOffsetX / (rightEyeWidth * 0.5);
-        const leftEyeCenterY = (leftEyeTop.y + leftEyeBottom.y) / 2;
-        const leftIrisOffsetY = LI.y - leftEyeCenterY;
-        const leftEyePitch = leftIrisOffsetY / (leftEyeHeight * 0.5);
-        const rightEyeCenterY = (rightEyeTop.y + rightEyeBottom.y) / 2;
-        const rightIrisOffsetY = RI.y - rightEyeCenterY;
-        const rightEyePitch = rightIrisOffsetY / (rightEyeHeight * 0.5);
-        const leftEyeOpenness = (leftEyeBottom.y - leftEyeTop.y) / leftEyeWidth;
-        const rightEyeOpenness =
-          (rightEyeBottom.y - rightEyeTop.y) / rightEyeWidth;
-        const avgEyeOpenness = (leftEyeOpenness + rightEyeOpenness) / 2;
-        const opennessFactor = clamp((avgEyeOpenness - 0.25) / 0.15, -1, 1);
-        const eyeYaw = (leftEyeYaw + rightEyeYaw) / 2;
-        const irisPitch = (leftEyePitch + rightEyePitch) / 2;
-        const eyePitch = irisPitch * 0.7 + opennessFactor * 0.3;
-        const eyeMid = mid(
-          mid(leftEyeLeft, leftEyeRight),
-          mid(rightEyeLeft, rightEyeRight),
-        );
-        const faceMid = mid(forehead, chin);
-        const faceWidth = dist(leftEyeLeft, rightEyeRight);
-        const faceHeight = dist(forehead, chin);
-        const headYaw = clamp(
-          ((nose.x - eyeMid.x) / (faceWidth || 1)) * 2.5,
-          -1,
-          1,
-        );
-        const headPitch = clamp(
-          ((nose.y - faceMid.y) / (faceHeight || 1)) * 2.5,
-          -1,
-          1,
-        );
-        let yaw = eyeYaw * EYE_WEIGHT + headYaw * HEAD_WEIGHT;
-        let pitch = eyePitch * EYE_WEIGHT + headPitch * HEAD_WEIGHT;
-        yaw = clamp(yaw, -2.5, 2.5);
-        pitch = clamp(pitch, -2.5, 2.5);
-        yaw *= -1;
-        if (pitch < 0) {
-  pitch *= PITCH_NEGATIVE_GAIN;
-} else {
-  pitch *= PITCH_POSITIVE_GAIN;
-}
-        yaw *= YAW_MULTIPLIER;
-        pitch *= PITCH_MULTIPLIER;
-        console.log("[GAZE]", {
-          yaw: yaw.toFixed(2),
-          pitch: pitch.toFixed(2),
-        });
-        return { yaw, pitch, valid: true };
-      }
-      function resetBubbleCenter() {
         const targetEl = window.examStarted
           ? document.getElementById("examCard")
           : document.getElementById("examGate");
-        const rect = targetEl.getBoundingClientRect();
-        targetX = rect.left + rect.width / 2;
-        targetY = rect.top + rect.height / 2;
-        examCard.classList.remove("alert");
-        gazeBubble.classList.remove("alert");
+        const examRect = targetEl.getBoundingClientRect();
+        if (examRect.width < 20 || examRect.height < 20) return;
+        const examCx = examRect.left + examRect.width / 2;
+        const examCy = examRect.top + examRect.height / 2;
+
+        const nx =
+          (W_EYE * (sm.gx - calib.base.gx)) / EYE_EDGE_X +
+          (W_HEAD * (sm.yaw - calib.base.yaw)) / HEAD_EDGE_X;
+        const ny =
+          (W_EYE * (sm.gy - calib.base.gy)) / EYE_EDGE_Y +
+          (W_HEAD * (sm.pitch - calib.base.pitch)) / HEAD_EDGE_Y;
+
+        // minus on X because the raw image is un-mirrored (user's left = image right)
+        targetX = examCx - nx * (examRect.width / 2);
+        targetY = examCy + ny * (examRect.height / 2);
+
+        const pad = 8;
+        targetX = Math.max(pad, Math.min(window.innerWidth - pad, targetX));
+        targetY = Math.max(pad, Math.min(window.innerHeight - pad, targetY));
+
+        const INSET_PCT = 0.06;
+        const safeLeft = examRect.left + examRect.width * INSET_PCT;
+        const safeRight = examRect.right - examRect.width * INSET_PCT;
+        const safeTop = examRect.top + examRect.height * INSET_PCT;
+        const safeBottom = examRect.bottom - examRect.height * INSET_PCT;
+        const gazeOk =
+          targetX >= safeLeft &&
+          targetX <= safeRight &&
+          targetY >= safeTop &&
+          targetY <= safeBottom;
+
+        if (!gazeOk) {
+          examCard.classList.add("alert");
+          gazeBubble.classList.add("alert");
+          setVerification(false, "Looking away detected");
+          if (!awaySince) awaySince = performance.now();
+          if (window.allowStrikes && performance.now() - awaySince > AWAY_MS)
+            registerStrikeOnce();
+        } else {
+          awaySince = 0;
+          examCard.classList.remove("alert");
+          gazeBubble.classList.remove("alert");
+          setVerification(true, "Face & eyes centered");
+        }
         updateBubble();
       }
-     function moveBubbleFromGaze(yaw, pitch) {
-  // ============================================================
-  // FULL-SCREEN GAZE MAPPING
-  //
-  // The bubble represents the WHOLE browser/laptop screen.
-  // The exam card does NOT control the bubble position.
-  //
-  // Center gaze  -> screen center
-  // Left gaze    -> screen left
-  // Right gaze   -> screen right
-  // Up gaze      -> screen top
-  // Down gaze    -> screen bottom
-  // ============================================================
 
-  const activeTarget = window.examStarted
-    ? document.getElementById("examCard")
-    : document.getElementById("examGate");
-
-  const rect = activeTarget.getBoundingClientRect();
-
-  // ------------------------------------------------------------
-  // Convert model output into normalized gaze coordinates.
-  //
-  // These are deliberately independent for X and Y because
-  // vertical eye movement is naturally much smaller than
-  // horizontal eye movement.
-  // ------------------------------------------------------------
-
-  let normX = yaw / GAZE_X_SENSITIVITY;
-  let normY = pitch / GAZE_Y_SENSITIVITY;
-
-  // ------------------------------------------------------------
-  // STRONGER GAZE AMPLIFICATION
-  //
-  // This is the important part.
-  //
-  // Small eye movements become visible on the whole screen,
-  // while large movements are still capped safely.
-  // ------------------------------------------------------------
-
-  const X_GAIN = 2.20;
-  const Y_GAIN = 3.20;
-
-  normX *= X_GAIN;
-  normY *= Y_GAIN;
-
-  // Keep the gaze inside normalized screen space.
-  normX = clamp(normX, -1, 1);
-  normY = clamp(normY, -1, 1);
-
-  // ------------------------------------------------------------
-  // NON-LINEAR AMPLIFICATION
-  //
-  // Gives small/medium eye movements more visible movement
-  // without making the bubble jump violently.
-  // ------------------------------------------------------------
-
-  function amplify(value, power = 0.80) {
-    const sign = value < 0 ? -1 : 1;
-    return sign * Math.pow(Math.abs(value), power);
-  }
-
-  const screenX = amplify(normX);
-  const screenY = amplify(normY);
-
-  // ------------------------------------------------------------
-  // MAP DIRECTLY TO THE WHOLE VIEWPORT
-  //
-  // -1 = left/top
-  //  0 = center
-  // +1 = right/bottom
-  // ------------------------------------------------------------
-
-  const screenCenterX = window.innerWidth / 2;
-  const screenCenterY = window.innerHeight / 2;
-
-  // Use almost the entire screen.
-  const rangeX = window.innerWidth * 0.47;
-  const rangeY = window.innerHeight * 0.47;
-
-  targetX = screenCenterX + screenX * rangeX;
-  targetY = screenCenterY + screenY * rangeY;
-
-  // ------------------------------------------------------------
-  // Keep bubble visible.
-  //
-  // We don't allow it to disappear completely off-screen.
-  // ------------------------------------------------------------
-
-  const bubbleRadius = 18;
-
-  targetX = clamp(
-    targetX,
-    bubbleRadius,
-    window.innerWidth - bubbleRadius
-  );
-
-  targetY = clamp(
-    targetY,
-    bubbleRadius,
-    window.innerHeight - bubbleRadius
-  );
-
-  // ------------------------------------------------------------
-  // CHEATING / OUTSIDE-EXAM CHECK
-  //
-  // IMPORTANT:
-  // This still uses the actual exam-card rectangle.
-  // The card does NOT affect bubble movement.
-  // ------------------------------------------------------------
-
-  const margin = 15;
-
-  const gazeInsideExam =
-    targetX >= rect.left - margin &&
-    targetX <= rect.right + margin &&
-    targetY >= rect.top - margin &&
-    targetY <= rect.bottom + margin;
-
-  if (!gazeInsideExam) {
-    examCard.classList.add("alert");
-    gazeBubble.classList.add("alert");
-
-    setVerification(false, "Looking away detected");
-
-    if (!lookingAwaySince) {
-      lookingAwaySince = Date.now();
-    }
-
-    if (
-      window.allowStrikes &&
-      Date.now() - lookingAwaySince > AWAY_DELAY_MS
-    ) {
-      registerStrikeOnce();
-    }
-  } else {
-    lookingAwaySince = null;
-
-    examCard.classList.remove("alert");
-    gazeBubble.classList.remove("alert");
-
-    setVerification(true, "Eyes on exam");
-  }
-}
-      async function pickAccelerator() {
-        if (navigator.gpu) {
-          try {
-            const adapter = await navigator.gpu.requestAdapter();
-            if (adapter) return "webgpu";
-          } catch (_) {
-            // fall through to wasm
-          }
-        }
-        return "wasm";
-      }
       function setVerification(ok, reason) {
         const now = Date.now();
         if (ok !== verified && now - lastVerifiedChange < STABLE_MS) return;
@@ -2574,548 +2236,48 @@ const GAZE_Y_SENSITIVITY = 90;
           window.examStarted = true;
           window.allowStrikes = true;
           sessionStorage.setItem("examStarted", "1");
+
           setTimeout(() => {
             document.getElementById("examGate").style.display = "none";
             document.getElementById("examCard").style.display = "block";
+            console.log("Face verified → starting exam…");
           }, 150);
           setTimeout(() => {
             strikeBox.textContent = `Strikes: ${window.strikes}`;
           }, 200);
         }
       }
+
       function updateBubble() {
-  const SMOOTHING = 0.28;
+        bubbleX += (targetX - bubbleX) * 0.18;
+        bubbleY += (targetY - bubbleY) * 0.18;
+        gazeBubble.style.left = `${bubbleX}px`;
+        gazeBubble.style.top = `${bubbleY}px`;
+      }
 
-  bubbleX += (targetX - bubbleX) * SMOOTHING;
-  bubbleY += (targetY - bubbleY) * SMOOTHING;
-
-  gazeBubble.style.left = `${bubbleX}px`;
-  gazeBubble.style.top = `${bubbleY}px`;
-}
       function animLoop() {
         updateBubble();
         requestAnimationFrame(animLoop);
       }
       animLoop();
-      console.log("backend:", tf.getBackend());
-      console.log("tflite:", window.tflite);
-      async function loadModels() {
-        console.log("[FaceModel] Step 1: initializing LiteRT.js...");
 
-        try {
-          // ------------------------------------------------------------
-          // Load LiteRT.js directly from jsDelivr.
-          // WASM = CPU/XNNPACK execution.
-          // This is the reliable first test for your model.
-          // ------------------------------------------------------------
-          const {
-            loadLiteRt,
-            loadAndCompile,
-            Tensor: LiteRTTensor,
-          } = await import("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm");
-
-          const WASM_BASE =
-            "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/";
-
-          await loadLiteRt(WASM_BASE);
-
-          console.log("[FaceModel] Step 2: LiteRT.js WASM runtime ready.");
-
-          // ------------------------------------------------------------
-          // Load your W8A32 model.
-          // ------------------------------------------------------------
-          console.log(
-            "[FaceModel] Step 3: loading model:",
-            FULL_FACE_MODEL_URL,
-          );
-
-          const accelerator = await pickAccelerator();
-          console.log("[FaceModel] Using accelerator:", accelerator);
-
-          const litertModel = await loadAndCompile(FULL_FACE_MODEL_URL, {
-            accelerator,
-          });
-
-          console.log("[FaceModel] Step 4: MODEL LOADED SUCCESSFULLY.");
-
-          // ------------------------------------------------------------
-          // Read model metadata if available.
-          // ------------------------------------------------------------
-          let inputDetails = [];
-          let outputDetails = [];
-
-          try {
-            inputDetails =
-              typeof litertModel.getInputDetails === "function"
-                ? litertModel.getInputDetails()
-                : [];
-
-            outputDetails =
-              typeof litertModel.getOutputDetails === "function"
-                ? litertModel.getOutputDetails()
-                : [];
-          } catch (metaErr) {
-            console.warn("[FaceModel] Could not read model details:", metaErr);
-          }
-
-          console.log("[FaceModel] inputs:", inputDetails);
-
-          console.log("[FaceModel] outputs:", outputDetails);
-
-          // ------------------------------------------------------------
-          // We know your exported model is:
-          //
-          // INPUT  = [1, 3, 640, 640]
-          // OUTPUT = [1, 104, 8400]
-          //
-          // Keep these as fallback values in case metadata is unavailable.
-          // ------------------------------------------------------------
-          const inputShape = inputDetails?.[0]?.shape ?? [
-            1,
-            3,
-            MODEL_INPUT_SIZE,
-            MODEL_INPUT_SIZE,
-          ];
-
-          const outputShape = outputDetails?.[0]?.shape ?? [1, 104, 8400];
-
-          console.log("[FaceModel] Input shape:", inputShape);
-
-          console.log("[FaceModel] Output shape:", outputShape);
-
-          // ------------------------------------------------------------
-          // IMPORTANT:
-          //
-          // Keep the rest of your existing application unchanged.
-          //
-          // We create a small adapter that exposes:
-          //
-          //     faceModel.predict(tfTensor)
-          //
-          // just like your old code expects.
-          //
-          // LiteRT itself receives a REAL Float32Array, so there is no
-          // "Input tensor lacks data" problem.
-          // ------------------------------------------------------------
-          faceModel = {
-            inputs: [
-              {
-                name: inputDetails?.[0]?.name ?? "serving_default_args_0",
-                shape: inputShape,
-                dtype: "float32",
-              },
-            ],
-
-            outputs: [
-              {
-                name: outputDetails?.[0]?.name ?? "output",
-                shape: outputShape,
-                dtype: "float32",
-              },
-            ],
-
-            predict: async function (tfInput) {
-              if (!tfInput) {
-                throw new Error("[FaceModel] predict() received no input.");
-              }
-
-              // ----------------------------------------------------------
-              // Verify the TFJS tensor.
-              // ----------------------------------------------------------
-              if (!tfInput.shape) {
-                throw new Error("[FaceModel] Input does not have a shape.");
-              }
-
-              console.log(
-                "[FaceModel] Input:",
-                tfInput.shape,
-                tfInput.dtype,
-                tfInput.size,
-              );
-
-              // ----------------------------------------------------------
-              // Get REAL CPU data from the TFJS tensor.
-              //
-              // This is the important difference from the broken
-              // @tensorflow/tfjs-tflite path.
-              // ----------------------------------------------------------
-              const inputData = await tfInput.data();
-
-              if (!inputData || inputData.length === 0) {
-                throw new Error(
-                  "[FaceModel] TFJS input tensor contains no data.",
-                );
-              }
-
-              // ----------------------------------------------------------
-              // Create an actual LiteRT tensor containing the data.
-              // ----------------------------------------------------------
-              const litertInput = new LiteRTTensor(
-                new Float32Array(inputData),
-                inputShape,
-              );
-
-              let results = null;
-
-              try {
-                // --------------------------------------------------------
-                // REAL INFERENCE
-                // --------------------------------------------------------
-                const t0 = performance.now();
-
-                results = await litertModel.run([litertInput]);
-
-                const elapsed = performance.now() - t0;
-
-                console.log(
-                  `[FaceModel] LiteRT inference: ${elapsed.toFixed(2)} ms`,
-                );
-
-                if (!results || !results.length) {
-                  throw new Error("[FaceModel] LiteRT returned no output.");
-                }
-
-                // --------------------------------------------------------
-                // Read first output tensor.
-                // --------------------------------------------------------
-                const resultTensor = results[0];
-
-                const outputData = await resultTensor.data();
-
-                if (!outputData || outputData.length === 0) {
-                  throw new Error(
-                    "[FaceModel] LiteRT output contains no data.",
-                  );
-                }
-
-                // --------------------------------------------------------
-                // Convert LiteRT output back into a TFJS tensor.
-                //
-                // Your existing parseKeypointModelOutput() expects
-                // a TFJS tensor with dataSync().
-                // --------------------------------------------------------
-                const tfOutput = tf.tensor(
-                  new Float32Array(outputData),
-                  outputShape,
-                  "float32",
-                );
-
-                console.log(
-                  "[FaceModel] Output:",
-                  tfOutput.shape,
-                  tfOutput.dtype,
-                  tfOutput.size,
-                );
-
-                return tfOutput;
-              } finally {
-                // --------------------------------------------------------
-                // LiteRT uses manual memory management.
-                // --------------------------------------------------------
-                try {
-                  litertInput.delete();
-                } catch (_) {}
-
-                try {
-                  if (results) {
-                    results.forEach((tensor) => {
-                      try {
-                        tensor.delete();
-                      } catch (_) {}
-                    });
-
-                    try {
-                      results.delete();
-                    } catch (_) {}
-                  }
-                } catch (_) {}
-              }
-            },
-          };
-
-          // ------------------------------------------------------------
-          // REAL DUMMY INFERENCE TEST
-          // ------------------------------------------------------------
-          console.log("[FaceModel] Step 5: creating REAL dummy input...");
-
-          const dummyData = new Float32Array(
-            inputShape.reduce((a, b) => a * b, 1),
-          );
-
-          // All zeros.
-          dummyData.fill(0);
-
-          const dummyFace = tf.tensor(dummyData, inputShape, "float32");
-
-          console.log(
-            "[FaceModel] Dummy input:",
-            dummyFace.shape,
-            dummyFace.dtype,
-            dummyFace.size,
-          );
-
-          console.log("[FaceModel] First values:", dummyData.slice(0, 10));
-
-          console.log("[FaceModel] Step 6: calling LiteRT inference...");
-
-          const t0 = performance.now();
-
-          let dummyPred = null;
-
-          try {
-            dummyPred = await faceModel.predict(dummyFace);
-
-            const elapsed = performance.now() - t0;
-
-            console.log(
-              `[FaceModel] INFERENCE SUCCESS: ${elapsed.toFixed(2)} ms`,
-            );
-
-            console.log("[FaceModel] Output shape:", dummyPred.shape);
-
-            console.log("[FaceModel] Output dtype:", dummyPred.dtype);
-
-            console.log("[FaceModel] Output size:", dummyPred.size);
-
-            console.log(
-              "[FaceModel] First output values:",
-              dummyPred.dataSync().slice(0, 20),
-            );
-
-            console.log("[FaceModel] FPS:", (1000 / elapsed).toFixed(2));
-          } catch (err) {
-            console.error("[FaceModel] INFERENCE FAILED:", err);
-
-            throw err;
-          } finally {
-            dummyFace.dispose();
-
-            if (dummyPred) {
-              dummyPred.dispose();
-            }
-          }
-
-          console.log("[FaceModel] LiteRT model is READY.");
-        } catch (err) {
-          console.error("[FaceModel] LiteRT initialization failed:", err);
-
-          throw err;
-        }
+      let camera = null;
+      try {
+        camera = new Camera(videoElement, {
+          onFrame: async () => {
+            await faceMesh.send({ image: videoElement });
+          },
+          width: 1280,
+          height: 720,
+        });
+        faceMesh.onResults(onResults);
+        camera.start();
+      } catch (err) {
+        console.warn("Camera start failed:", err);
+        faceText.textContent =
+          "Camera unavailable — try localhost or allow camera access.";
+        faceIcon.textContent = "⚠";
       }
-      async function predictOnce({ refreshFace = true } = {}) {
-        if (window.disableGazeDetection) return;
-        if (!faceModel) return;
-        if (videoElement.readyState < 2) return;
-        bctx.drawImage(videoElement, 0, 0, buffer.width, buffer.height);
-        let faceFrame = null;
-        let faceOutput = null;
-        let bestFace = null;
-        try {
-          if (refreshFace) {
-            faceFrame = preprocessFrame(buffer, MODEL_INPUT_SIZE);
-            faceOutput = await faceModel.predict(faceFrame.tensor);
-            bestFace = await parseKeypointModelOutput(
-              faceOutput,
-              MODEL_INPUT_SIZE,
-              faceFrame.scale,
-              faceFrame.padX,
-              faceFrame.padY,
-              NUM_KPTS,
-            );
-            if (bestFace) {
-              console.log(
-                "[FACE DETECTED]",
-                "conf=",
-                bestFace.score.toFixed(4),
-                "bbox=",
-                bestFace.bbox,
-              );
-            } else {
-              console.log("[FACE DETECTED] NONE");
-            }
-            if (!bestFace) {
-              lastFaceDetected = false;
-              lastFaceScore = 0;
-              faceWarmupRemaining = 0;
-              setVerification(false, "Face not found");
-              resetBubbleCenter();
-              return;
-            }
-            console.log("[FACE]", {
-              confidence: bestFace.score,
-              bbox: bestFace.bbox,
-              keypoints: bestFace.kpts.length,
-            });
-            lastFaceDetection = {
-              score: bestFace.score,
-              bbox: {
-                x: bestFace.bbox[0],
-                y: bestFace.bbox[1],
-                width: bestFace.bbox[2],
-                height: bestFace.bbox[3],
-              },
-              kpts: bestFace.kpts,
-            };
-            lastFaceBox = lastFaceDetection.bbox;
-            frameSinceFaceRefresh = 0;
-            lastMotionGrayscale = null;
-            // DRAW DEBUG FACE BOX + KEYPOINTS
-            canvasCtx.clearRect(
-              0,
-              0,
-              canvasElement.width,
-              canvasElement.height,
-            );
-
-            const x = bestFace.bbox[0];
-            const y = bestFace.bbox[1];
-            const w = bestFace.bbox[2];
-            const h = bestFace.bbox[3];
-
-            canvasCtx.strokeStyle = "lime";
-            canvasCtx.lineWidth = 3;
-
-            canvasCtx.strokeRect(x, y, w, h);
-
-            canvasCtx.fillStyle = "red";
-
-            bestFace.kpts.forEach((k) => {
-              canvasCtx.beginPath();
-              canvasCtx.arc(k[0], k[1], 2, 0, Math.PI * 2);
-              canvasCtx.fill();
-            });
-
-            canvasCtx.fillStyle = "yellow";
-            canvasCtx.font = "16px Arial";
-
-            canvasCtx.fillText(
-              `Conf ${(bestFace.score * 100).toFixed(1)}%`,
-              x,
-              y - 10,
-            );
-          } else {
-            bestFace = lastFaceDetection;
-            frameSinceFaceRefresh++;
-          }
-          if (
-            !bestFace ||
-            !Array.isArray(bestFace.kpts) ||
-            bestFace.kpts.length < NUM_KPTS
-          ) {
-            if (bestFace?.kpts) {
-              const validPts = bestFace.kpts.filter((k) => k[2] > 0.5).length;
-
-              console.log("[KEYPOINTS]", validPts, "/", bestFace.kpts.length);
-            }
-
-            lastFaceDetected = false;
-            lastFaceScore = bestFace?.score ?? 0;
-
-            setVerification(false, "Face not found");
-
-            resetBubbleCenter();
-            return;
-          }
-          const gaze = estimateGazeFromKpts(bestFace.kpts);
-          lastFaceDetected = !!gaze.valid;
-          lastFaceScore = bestFace?.score ?? 0;
-          if (!gaze.valid) {
-            lastFaceDetected = false;
-            setVerification(false, "Tracking lost");
-            return;
-          }
-          const smoothed = smoothGaze(gaze.yaw, gaze.pitch);
-lastGaze = { yaw: smoothed.yaw, pitch: smoothed.pitch, valid: true };
-lastValidYaw = smoothed.yaw;
-lastValidPitch = smoothed.pitch;
-lastValidTime = Date.now();
-moveBubbleFromGaze(smoothed.yaw, smoothed.pitch);
-        } catch (err) {
-          console.error("Inference error:", err);
-          lastFaceDetected = false;
-          setVerification(false, "Inference error");
-          resetBubbleCenter();
-        } finally {
-          if (faceFrame) tf.dispose(faceFrame.tensor);
-          deepDispose(faceOutput);
-        }
-      }
-      async function startGazePipeline() {
-        try {
-          await loadModels();
-          const loop = async () => {
-            requestAnimationFrame(loop);
-            if (document.hidden || window.disableGazeDetection) return;
-            if (isProcessing) return;
-            const now = performance.now();
-            if (now - lastRun < targetInterval) return;
-            lastRun = now;
-            isProcessing = true;
-            try {
-              await predictOnce({ refreshFace: true });
-            } finally {
-              const dt = performance.now() - now;
-              inferenceEMA = inferenceEMA
-                ? inferenceEMA * 0.85 + dt * 0.15
-                : dt;
-              if (!lastFaceDetected) targetInterval = 250;
-              else if (inferenceEMA > 120) targetInterval = 250;
-              else if (inferenceEMA > 90) targetInterval = 110;
-              else targetInterval = 80;
-              isProcessing = false;
-            }
-          };
-          requestAnimationFrame(loop);
-        } catch (err) {
-          console.error("Gaze pipeline failed to start:", err);
-          faceText.textContent = "Gaze model failed to start";
-          faceIcon.textContent = "⚠";
-        }
-      }
-      async function startExamCamera() {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "user" },
-            audio: false,
-          });
-          videoElement.srcObject = stream;
-          await videoElement.play();
-          videoElement.muted = true;
-          await new Promise((resolve) => {
-            if (videoElement.readyState >= 2) resolve();
-            else videoElement.onloadedmetadata = () => resolve();
-          });
-
-          // FIX: buffer must match the camera's real resolution.
-          // Never hardcode this — a mismatched aspect ratio stretches
-          // every frame before it reaches the model.
-          buffer.width = videoElement.videoWidth || 640;
-          buffer.height = videoElement.videoHeight || 480;
-
-          canvasElement.width = videoElement.clientWidth || 640;
-          canvasElement.height = videoElement.clientHeight || 800;
-
-          console.log(
-            "[CAMERA] native:",
-            videoElement.videoWidth,
-            "x",
-            videoElement.videoHeight,
-            "| buffer set to:",
-            buffer.width,
-            "x",
-            buffer.height,
-          );
-
-          faceText.textContent = "Camera ready";
-        } catch (err) {
-          console.warn("Camera start failed:", err);
-          faceText.textContent =
-            "Camera unavailable — try localhost or allow camera access.";
-          faceIcon.textContent = "⚠";
-        }
-      }
-      startExamCamera();
-      startGazePipeline();
       let matchingPool = [];
       let questions = [];
 
@@ -3133,21 +2295,21 @@ moveBubbleFromGaze(smoothed.yaw, smoothed.pitch);
           `onchange="handleAnswerChange(${currentQuestionIndex})"`;
 
         let html = `
-    <h2>Question ${currentQuestionIndex + 1}</h2>
-    <div class="question">
-      <p>${q.questionText ?? ""}</p>
-      <div class="options" data-qid="${q.id}" data-qtype="${qType}">
-  `;
+          <h2>Question ${currentQuestionIndex + 1}</h2>
+          <div class="question">
+            <p>${q.questionText ?? ""}</p>
+            <div class="options" data-qid="${q.id}" data-qtype="${qType}">
+        `;
 
         //multiple-choice
         if (qType === "multiple-choice") {
           (q.options ?? []).forEach((opt) => {
             const checked = opt === selectedAnswer ? "checked" : "";
             html += `
-        <label>
-          <input type="radio" name="${q.id}" value="${opt}" ${checked} ${save()}>
-          ${opt}
-        </label>`;
+              <label>
+                <input type="radio" name="${q.id}" value="${opt}" ${checked} ${save()}>
+                ${opt}
+              </label>`;
           });
         }
 
@@ -3156,10 +2318,10 @@ moveBubbleFromGaze(smoothed.yaw, smoothed.pitch);
           ["True", "False"].forEach((opt) => {
             const checked = opt === selectedAnswer ? "checked" : "";
             html += `
-        <label>
-          <input type="radio" name="${q.id}" value="${opt}" ${checked} ${save()}>
-          ${opt}
-        </label>`;
+              <label>
+                <input type="radio" name="${q.id}" value="${opt}" ${checked} ${save()}>
+                ${opt}
+              </label>`;
           });
         }
 
@@ -3171,19 +2333,19 @@ moveBubbleFromGaze(smoothed.yaw, smoothed.pitch);
                 ? "checked"
                 : "";
             html += `
-        <label>
-          <input type="checkbox" name="${q.id}" value="${opt}" ${checked} ${save()}>
-          ${opt}
-        </label>`;
+              <label>
+                <input type="checkbox" name="${q.id}" value="${opt}" ${checked} ${save()}>
+                ${opt}
+              </label>`;
           });
         }
 
         //matching
         else if (qType === "matching" || qType === "dropdown") {
           const pool = Array.isArray(matchingPool) ? matchingPool : [];
-          html += `<select name="${q.id}" data-qid="${q.id}" ${save()}>  
-      <option value="">Select answer</option>
-    `;
+          html += `<select name="${q.id}" data-qid="${q.id}" ${save()}>
+            <option value="">Select answer</option>
+          `;
           pool.forEach((m) => {
             const selected = m === selectedAnswer ? "selected" : "";
             html += `<option value="${m}" ${selected}>${m}</option>`;

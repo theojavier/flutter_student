@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Gaze Calibration — 9-Point</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
+  body { font: 14px system-ui, sans-serif; background: transparent; color: #e6f0f8; overflow: hidden; }
+  
+  #mainScreen { display: flex; align-items: center; justify-content: center; min-height: 100vh; text-align: center; padding: 24px; }
+  #mainScreen.hidden { display: none; }
+  
+  #mainScreen .info-box { background: rgba(11, 18, 32, 0.95); padding: 32px; border-radius: 16px; border: 2px solid #1e90ff; }
+  
+  #calibrationOverlay { display: none; position: fixed; inset: 0; z-index: 20; background: rgba(11, 18, 32, 0.95); }
+  #calibrationOverlay.active { display: block; }
+  
+  #calMessage { position: absolute; top: 18px; left: 0; right: 0; text-align: center; font-size: 16px; font-weight: 600; }
+  
+  #dot { position: absolute; width: 30px; height: 30px; border-radius: 50%; transform: translate(-50%,-50%);
+         background: radial-gradient(circle, #0b1220 0 3px, #fff 3.5px); border: 5px solid #1e90ff;
+         transition: left .3s ease, top .3s ease; box-shadow: 0 0 20px rgba(30,144,255,0.6); }
+
+  .cam-preview { position: absolute; bottom: 20px; right: 20px; width: 200px; aspect-ratio: 4/3; 
+                 background: #000; border-radius: 8px; border: 2px solid #1e90ff; overflow: hidden; }
+  .cam-preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .cam-preview canvas { position: absolute; inset: 0; transform: scaleX(-1); }
+
+  button { background: #1e90ff; color: #06203a; border: 0; border-radius: 8px; padding: 12px 24px; 
+           font-weight: 600; cursor: pointer; font-size: 16px; box-shadow: 0 4px 12px rgba(30,144,255,0.3); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:hover:not(:disabled) { background: #3d9fff; }
+
+  .info-box { max-width: 500px; margin: 0 auto; }
+  .info-box h2 { font-size: 24px; margin-bottom: 12px; }
+  .info-box p { color: #9fb0c3; line-height: 1.6; margin-bottom: 20px; }
+  
+  .instruction-list { text-align: left; background: #071a2b; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
+  .instruction-list li { margin: 8px 0; color: #dbeefc; }
+</style>
+</head>
+<body>
+
+<!-- Start screen -->
+<div id="mainScreen">
+  <div class="info-box">
+    <h2>🎯 Gaze Calibration Required</h2>
+    <p>Before starting the exam, we need to calibrate your gaze tracking for accurate monitoring.</p>
+    
+    <ul class="instruction-list">
+      <li>✓ Keep your head still during calibration</li>
+      <li>✓ Look directly at each dot when it appears</li>
+      <li>✓ The process takes about 30 seconds</li>
+      <li>✓ Make sure your face is clearly visible</li>
+    </ul>
+    
+    <button id="startBtn">Start 9-Point Calibration</button>
+  </div>
+</div>
+
+<!-- Calibration overlay -->
+<div id="calibrationOverlay">
+  <div id="calMessage">Look at the dot and keep your head still</div>
+  <div id="dot"></div>
+  
+  <div class="cam-preview">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script>
+console.log('🎯 Gaze calibration HTML loaded!');
+const $ = id => document.getElementById(id);
+const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d');
+const dot = $('dot'), calMessage = $('calMessage');
+const calibrationOverlay = $('calibrationOverlay');
+const mainScreen = $('mainScreen');
+
+// Eye / head features (same as gaze-test-9pt.html)
+const R_EYE = { a: 33,  b: 133, iris: 468, up: 159, low: 145 };
+const L_EYE = { a: 362, b: 263, iris: 473, up: 386, low: 374 };
+
+function eyeGaze(lm, e, W, H) {
+  const A = lm[e.a], B = lm[e.b], I = lm[e.iris];
+  const ax = A.x*W, ay = A.y*H, bx = B.x*W, by = B.y*H, ix = I.x*W, iy = I.y*H;
+  const w = Math.hypot(bx-ax, by-ay);
+  const ex = (bx-ax)/w, ey = (by-ay)/w, nx = -ey, ny = ex;
+  const dx = ix - (ax+bx)/2, dy = iy - (ay+by)/2;
+  return { 
+    gx: (dx*ex + dy*ey)/w, 
+    gy: (dx*nx + dy*ny)/w,
+    ear: Math.hypot((lm[e.up].x-lm[e.low].x)*W, (lm[e.up].y-lm[e.low].y)*H)/w 
+  };
+}
+
+function headPose(lm) {
+  const n = lm[1], L = lm[234], R = lm[454], T = lm[10], C = lm[152];
+  return { 
+    yaw: (n.x-(L.x+R.x)/2)/Math.abs(R.x-L.x), 
+    pitch: (n.y-(T.y+C.y)/2)/Math.abs(C.y-T.y) 
+  };
+}
+
+const med = a => { const s=[...a].sort((x,y)=>x-y); return s[s.length>>1]; };
+
+// Ridge regression (same as gaze-test-9pt.html)
+const RIDGE = 0.02;
+const feats = (gx, gy, quad) => quad ? [1, gx, gy, gx*gx, gy*gy, gx*gy] : [1, gx, gy];
+
+function solve(A, b) {
+  const n = b.length;
+  for (let i = 0; i < n; i++) {
+    let p = i;
+    for (let r = i+1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r;
+    [A[i], A[p]] = [A[p], A[i]]; [b[i], b[p]] = [b[p], b[i]];
+    for (let r = i+1; r < n; r++) {
+      const f = A[r][i] / A[i][i];
+      for (let c = i; c < n; c++) A[r][c] -= f * A[i][c];
+      b[r] -= f * b[i];
+    }
+  }
+  const x = Array(n).fill(0);
+  for (let i = n-1; i >= 0; i--) {
+    let s = b[i];
+    for (let c = i+1; c < n; c++) s -= A[i][c] * x[c];
+    x[i] = s / A[i][i];
+  }
+  return x;
+}
+
+function fitModel(rows, quad) {
+  const F = rows.map(r => feats(r.gx, r.gy, quad));
+  const k = F[0].length, n = F.length;
+  const mu = Array(k).fill(0), sd = Array(k).fill(1);
+  for (let j = 1; j < k; j++) {
+    mu[j] = F.reduce((s, f) => s + f[j], 0) / n;
+    sd[j] = Math.sqrt(F.reduce((s, f) => s + (f[j]-mu[j])**2, 0) / n) || 1;
+  }
+  const Z = F.map(f => f.map((v, j) => j ? (v-mu[j])/sd[j] : 1));
+  const fitOne = key => {
+    const A = Array.from({length:k}, () => Array(k).fill(0)), b = Array(k).fill(0);
+    Z.forEach((z, i) => { 
+      for (let p = 0; p < k; p++) { 
+        b[p] += z[p]*rows[i][key]; 
+        for (let q = 0; q < k; q++) A[p][q] += z[p]*z[q]; 
+      } 
+    });
+    for (let p = 1; p < k; p++) A[p][p] += RIDGE * n;
+    return solve(A, b);
+  };
+  return { quad, mu, sd, wx: fitOne('sx'), wy: fitOne('sy') };
+}
+
+// 9-point calibration
+const G = [0.08, 0.5, 0.92];
+const ORDER = [
+  [G[1],G[1]], // center
+  [G[0],G[0]], [G[2],G[0]], [G[2],G[2]], [G[0],G[2]], // 4 corners
+  [G[1],G[0]], [G[2],G[1]], [G[1],G[2]], [G[0],G[1]]  // 4 edges
+];
+const SETTLE = 700, COLLECT = 1000, MIN_SAMPLES = 12;
+const BLINK_EAR = 0.14;
+
+const cal = { 
+  active: false, 
+  i: 0, 
+  t0: 0, 
+  phase: '', 
+  samples: [], 
+  rows: [], 
+  fx: 0, 
+  fy: 0 
+};
+
+let headBase = { yaw: 0, pitch: 0 };
+
+function beginDot() {
+  [cal.fx, cal.fy] = ORDER[cal.i];
+  dot.style.left = cal.fx*100 + '%'; 
+  dot.style.top = cal.fy*100 + '%';
+  cal.t0 = performance.now(); 
+  cal.phase = 'settle'; 
+  cal.samples = [];
+  calMessage.textContent = `Look at the dot and keep your head still  (${cal.i+1}/${ORDER.length})`;
+}
+
+function startCalibration() {
+  Object.assign(cal, { active: true, i: 0, rows: [] });
+  mainScreen.classList.add('hidden');
+  calibrationOverlay.classList.add('active');
+  beginDot();
+}
+
+function finishCalibration() {
+  cal.active = false;
+  
+  // Calculate head base
+  headBase = { 
+    yaw: med(cal.rows.map(r => r.yaw)), 
+    pitch: med(cal.rows.map(r => r.pitch)) 
+  };
+  
+  // Fit models
+  const modelLin = fitModel(cal.rows, false);
+  const modelQuad = fitModel(cal.rows, true);
+  
+  // Save to localStorage for exam.html to use
+  const calibrationData = {
+    headBase,
+    modelQuad,
+    modelLin,
+    smooth: 0.15, // Fixed smooth value as requested
+    timestamp: Date.now()
+  };
+  
+  localStorage.setItem('gazeCalibrationData', JSON.stringify(calibrationData));
+  
+  console.log('✓ Calibration complete, data saved to localStorage');
+  
+  // Notify parent window
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({ action: 'calibrationComplete' }, '*');
+  }
+  
+  // Show success message
+  calMessage.textContent = '✓ Calibration Complete! Starting exam...';
+  dot.style.display = 'none';
+  
+  setTimeout(() => {
+    calibrationOverlay.classList.remove('active');
+  }, 2000);
+}
+
+// Calibration loop
+setInterval(() => {
+  if (!cal.active) return;
+  const t = performance.now() - cal.t0;
+  
+  if (cal.phase === 'settle' && t > SETTLE) { 
+    cal.phase = 'collect'; 
+    cal.t0 = performance.now(); 
+    cal.samples = []; 
+  }
+  else if (cal.phase === 'collect' && t > COLLECT) {
+    if (cal.samples.length < MIN_SAMPLES) { 
+      beginDot(); 
+      return; 
+    }
+    cal.samples.forEach(s => cal.rows.push({ 
+      ...s, 
+      spot: cal.i, 
+      sx: cal.fx, 
+      sy: cal.fy 
+    }));
+    cal.i++;
+    cal.i >= ORDER.length ? finishCalibration() : beginDot();
+  }
+}, 50);
+
+$('startBtn').onclick = startCalibration;
+
+// MediaPipe setup
+const fm = new FaceMesh({ 
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` 
+});
+fm.setOptions({ 
+  maxNumFaces: 1, 
+  refineLandmarks: true, 
+  minDetectionConfidence: .55, 
+  minTrackingConfidence: .55 
+});
+
+fm.onResults(res => {
+  canvas.width = video.clientWidth; 
+  canvas.height = video.clientHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  if (!res.multiFaceLandmarks?.length) return;
+
+  const lm = res.multiFaceLandmarks[0];
+  const W = video.videoWidth, H = video.videoHeight; 
+  if (!W) return;
+
+  // Draw iris markers
+  ctx.fillStyle = '#1e90ff';
+  [468, 473].forEach(i => { 
+    ctx.beginPath(); 
+    ctx.arc(lm[i].x*canvas.width, lm[i].y*canvas.height, 4, 0, 7); 
+    ctx.fill(); 
+  });
+
+  const r = eyeGaze(lm, R_EYE, W, H), l = eyeGaze(lm, L_EYE, W, H);
+  if (r.ear < BLINK_EAR || l.ear < BLINK_EAR) return;
+
+  const hp = headPose(lm);
+  const raw = { 
+    gx:(r.gx+l.gx)/2, 
+    gy:(r.gy+l.gy)/2, 
+    yaw:hp.yaw, 
+    pitch:hp.pitch 
+  };
+
+  if (cal.active && cal.phase === 'collect') {
+    cal.samples.push(raw);
+  }
+});
+
+new Camera(video, { 
+  onFrame: async () => { await fm.send({ image: video }); }, 
+  width: 1280, 
+  height: 720 
+}).start();
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'package:super_overlay/super_overlay.dart';
 import 'firebase_options.dart';
 import 'widgets/responsive_scaffold.dart';
 import 'pages/home/home_page.dart';
@@ -27,10 +28,10 @@ void main() async {
   await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
 
   // wait for Firebase to restore the saved login (max 5 seconds)
-  await FirebaseAuth.instance
-      .authStateChanges()
-      .first
-      .timeout(const Duration(seconds: 5), onTimeout: () => null);
+  await FirebaseAuth.instance.authStateChanges().first.timeout(
+    const Duration(seconds: 5),
+    onTimeout: () => null,
+  );
 
   runApp(const MyApp());
 }
@@ -50,52 +51,42 @@ class GoRouterRefreshStream extends ChangeNotifier {
 
 final GoRouter router = GoRouter(
   initialLocation: '/home',
+  // 1. FIXED: Observers must be declared inside GoRouter, not MaterialApp.router
+  observers: [SuperOverlay.observer],
   refreshListenable: GoRouterRefreshStream(
     FirebaseAuth.instance.authStateChanges(),
   ),
   redirect: (BuildContext context, GoRouterState state) async {
     final path = state.uri.path;
     final loggingIn = path == '/login' || path == '/forgot';
-    final inExam = path.startsWith('/take-exam') ||
+    final inExam =
+        path.startsWith('/take-exam') ||
         path.startsWith('/examhtml') ||
+        path.startsWith('/calibrating') ||
         path.startsWith('/exam-result');
 
     var user = FirebaseAuth.instance.currentUser;
 
-
     if (user == null && !loggingIn) {
-      // Never yank a student out of an active exam over a transient auth
-      // blip -- Firebase Auth's cross-tab sync can broadcast a spurious
-      // null user during a brief network drop (confirmed: Firestore
-      // logged a 10s "backend unreachable" timeout during this exact
-      // scenario). The exam page has its own "auth not ready" handling
-      // and will recover once the connection returns.
       if (inExam) return null;
 
-      // Elsewhere, allow up to ~20s for a transient blip to resolve
-      // before treating it as a real sign-out.
       for (var i = 0; i < 20 && user == null; i++) {
         await Future.delayed(const Duration(seconds: 1));
         user = FirebaseAuth.instance.currentUser;
-        // debugPrint('[router.redirect] retry $i -> user=${user?.uid}');
       }
     }
 
     if (user == null && !loggingIn) {
-      // debugPrint('[router.redirect] -> /login (user still null)');
       return '/login';
     }
-    if (user != null && loggingIn) return '/home'; // already logged in
+    if (user != null && loggingIn) return '/home';
 
     return null;
   },
   routes: [
     /// Public Routes
     GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
-    GoRoute(
-      path: '/forgot',
-      builder: (context, state) => const ForgotPage(),
-    ),
+    GoRoute(path: '/forgot', builder: (context, state) => const ForgotPage()),
 
     ShellRoute(
       builder: (context, state, child) {
@@ -104,15 +95,13 @@ final GoRouter router = GoRouter(
 
         if (location.startsWith('/home')) {
           selectedIndex = 0;
-        } else if (location.startsWith('/exam-list'))
+        } else if (location.startsWith('/exam-list')) {
           selectedIndex = 1;
-        else if (location.startsWith('/schedule'))
+        } else if (location.startsWith('/schedule')) {
           selectedIndex = 2;
+        }
 
-        return ResponsiveScaffold(
-          selectedIndex: selectedIndex,
-          child: child,
-        );
+        return ResponsiveScaffold(selectedIndex: selectedIndex, child: child);
       },
       routes: [
         GoRoute(
@@ -150,6 +139,7 @@ final GoRouter router = GoRouter(
             );
           },
         ),
+
         GoRoute(
           path: '/exam-history',
           pageBuilder: (context, state) =>
@@ -160,16 +150,16 @@ final GoRouter router = GoRouter(
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: NotificationsPage()),
         ),
+
         GoRoute(
           name: 'examResult',
           path: '/exam-result/:examId',
           pageBuilder: (context, state) {
             final examId = state.pathParameters['examId']!;
-            return NoTransitionPage(
-              child: ExamResultPage(examId: examId),
-            );
+            return NoTransitionPage(child: ExamResultPage(examId: examId));
           },
         ),
+
         GoRoute(
           name: 'examhtml',
           path: '/examhtml/:examId',
@@ -181,6 +171,25 @@ final GoRouter router = GoRouter(
           ),
         ),
       ],
+    ),
+
+    // Calibration route - OUTSIDE ShellRoute (fullscreen, no sidebar)
+    // URL persists across reloads: /calibrating/:examId
+    GoRoute(
+      name: 'calibration',
+      path: '/calibrating/:examId',
+      pageBuilder: (context, state) {
+        final examId = state.pathParameters['examId']!;
+
+        return NoTransitionPage(
+          child: GazeCalibrationOverlay(
+            examId: examId,
+            onCalibrationComplete: () {
+              context.goNamed('examhtml', pathParameters: {"examId": examId});
+            },
+          ),
+        );
+      },
     ),
   ],
 );
@@ -197,13 +206,14 @@ class MyApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFF0B1220),
         canvasColor: const Color(0xFF0B1220),
         scrollbarTheme: ScrollbarThemeData(
-          thumbColor: WidgetStateProperty.all(Color.fromARGB(255, 24, 39, 68)),
+          thumbColor: WidgetStateProperty.all(
+            const Color.fromARGB(255, 24, 39, 68),
+          ),
           trackColor: WidgetStateProperty.all(Colors.black12),
           trackBorderColor: WidgetStateProperty.all(Colors.transparent),
           radius: const Radius.circular(8),
           thickness: WidgetStateProperty.all(8),
         ),
-
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.blue,
           background: const Color(0xFF0B1220),
@@ -211,6 +221,8 @@ class MyApp extends StatelessWidget {
       ),
       scrollBehavior: MyScrollBehavior(),
       routerConfig: router,
+      // 2. FIXED: Use the global initializer hook method for package rendering
+      builder: SuperOverlay.init(),
     );
   }
 }
