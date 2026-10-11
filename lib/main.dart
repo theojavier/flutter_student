@@ -192,6 +192,10 @@ final GoRouter router = GoRouter(
               'examhtml',
               pathParameters: {'examId': state.pathParameters['examId']!},
             ),
+            onCalibrationFailed: () => context.goNamed(
+              'take-exam',
+              pathParameters: {'examId': state.pathParameters['examId']!},
+            ),
           ),
         ),
       ),

@@ -19,16 +19,12 @@ class NotificationSummary {
 /// Paints the small triangle "pointer" that makes the notification box
 /// read as a chat/speech bubble, aimed up toward the bell icon.
 class _BubbleTrianglePainter extends CustomPainter {
-  final Color color;
-
-  const _BubbleTrianglePainter({
-    this.color = const Color(0xFF0F2B45),
-  });
+  const _BubbleTrianglePainter();
 
   @override
   void paint(Canvas canvas, Size size) {
     final fillPaint = Paint()
-      ..color = color
+      ..color = const Color(0xFF0F2B45)
       ..style = PaintingStyle.fill;
 
     final shadowPaint = Paint()
@@ -57,11 +53,7 @@ class _BubbleTrianglePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(
-    covariant _BubbleTrianglePainter oldDelegate,
-  ) {
-    return oldDelegate.color != color;
-  }
+  bool shouldRepaint(covariant _BubbleTrianglePainter oldDelegate) => false;
 }
 
 class NotificationBubbleSheet extends StatelessWidget {
@@ -213,51 +205,41 @@ class NotificationBubbleSheet extends StatelessWidget {
                       final item =
                           visibleNotifications[index];
 
-                      return ListTile(
-                        dense: true,
-
-                        contentPadding:
-                            const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 4,
-                        ),
-
-                        title: Text(
-                          item.title,
-                          maxLines: 2,
-                          overflow:
-                              TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontWeight: item.isRead
-                                ? FontWeight.w500
-                                : FontWeight.w700,
-                            color:
-                                const Color(0xFF102B45),
-                            fontSize: 13.5,
-                            height: 1.3,
+                      return Material(
+                        color: Colors.transparent,
+                        child: ListTile(
+                          dense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 4,
                           ),
-                        ),
-
-                        subtitle: Padding(
-                          padding:
-                              const EdgeInsets.only(
-                            top: 4,
-                          ),
-                          child: Text(
-                            item.message,
-                            maxLines: 1,
-                            overflow:
-                                TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color:
-                                  Color(0xFF5D6D7A),
-                              fontSize: 12,
+                          title: Text(
+                            item.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: item.isRead
+                                  ? FontWeight.w500
+                                  : FontWeight.w700,
+                              color: const Color(0xFF102B45),
+                              fontSize: 13.5,
+                              height: 1.3,
                             ),
                           ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              item.message,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFF5D6D7A),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          onTap: () => onTapItem(item),
                         ),
-
-                        onTap: () =>
-                            onTapItem(item),
                       );
                     },
                   ),
@@ -284,13 +266,14 @@ class NotificationBubbleSheet extends StatelessWidget {
                       mainAxisAlignment:
                           MainAxisAlignment.spaceBetween,
                       children: const [
-                        Text(
-                          'See all notifications',
-                          style: TextStyle(
-                            color: Color(0xFF5D6D7A),
-                            fontWeight:
-                                FontWeight.w500,
-                            fontSize: 14,
+                        Expanded(
+                          child: Text(
+                            'See all notifications',
+                            style: TextStyle(
+                              color: Color(0xFF5D6D7A),
+                              fontWeight: FontWeight.w500,
+                              fontSize: 14,
+                            ),
                           ),
                         ),
                         Icon(

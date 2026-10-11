@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:html' show IFrameElement;
 // ignore: undefined_prefixed_name
@@ -74,10 +73,11 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
               nav.isNotEmpty &&
               (nav.first as html.PerformanceNavigationTiming).type == "reload";
 
-          if (isReload)
+          if (isReload) {
             html.window.sessionStorage['isReloading'] = 'true';
-          else
+          } else {
             html.window.sessionStorage.remove('isReloading');
+          }
 
           WidgetsBinding.instance.addPostFrameCallback((_) {
             html.window.sessionStorage.remove('isReloading');
@@ -138,6 +138,8 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     if (!examDoc.exists) return false;
 
     final examData = examDoc.data()!;
+    if (examData['monitoringEnabled'] != true) return false;
+
     final allowedProgram = examData['program'];
     final allowedYearBlock = examData['yearBlock'];
 
@@ -256,7 +258,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
       }
       setState(() {});
       print(
-        "ExamHtmlPage updated iframe src for examId=${widget.examId}, studentId=${_resolvedStudentId}",
+        "ExamHtmlPage updated iframe src for examId=${widget.examId}, studentId=$_resolvedStudentId",
       );
     }
   }

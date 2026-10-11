@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   cloud_firestore
   firebase_auth
   firebase_core
+  flutter_blue_plus_winrt
   flutter_inappwebview_windows
   flutter_secure_storage_windows
   flutter_webrtc
@@ -13,6 +14,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
+  jni
   tflite_flutter
 )
 

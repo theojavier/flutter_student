@@ -131,6 +131,7 @@
         localStorage.getItem("cheatingCount") ?? "0",
         10,
       );
+      window.lastClippedCount = 0;
       window.cheatClipIndex = parseInt(
         localStorage.getItem("cheatClipIndex") ?? "0",
         10,
@@ -142,6 +143,13 @@
       const CHEAT_CLIP_DURATION_MS = 3000;
       const CHEAT_GROUP_WINDOW_MS = 3000;
       const CHEAT_CLIP_MAX_BYTES = 2 * 1024 * 1024;
+      const PENDING_STILL_KEY = "pendingCheatStill";
+      const webmParserPromise = import(
+        "https://cdn.jsdelivr.net/npm/@fix-webm-duration/parser@1.0.1/+esm"
+      ).catch((err) => {
+        console.error("Could not load WebM duration parser:", err);
+        return null;
+      });
       let studentId;
       let answers = {};
       // Flag to track if DOMContentLoaded ran
@@ -216,6 +224,51 @@
           }
         });
       }
+      function listenForExamDeviceMode(examId) {
+        if (window.__examDocListener) return window.__examDeviceModeReady;
+
+        let resolveInitialSnapshot;
+        let rejectInitialSnapshot;
+        let initialSnapshotReceived = false;
+        window.__examDeviceModeReady = new Promise((resolve, reject) => {
+          resolveInitialSnapshot = resolve;
+          rejectInitialSnapshot = reject;
+        });
+
+        window.__examDocListener = onSnapshot(
+          doc(db, "exams", examId),
+          (snap) => {
+            if (!snap.exists()) {
+              const error = new Error(`Exam ${examId} does not exist.`);
+              console.error("Could not read exam device mode:", error);
+              if (!initialSnapshotReceived) {
+                initialSnapshotReceived = true;
+                rejectInitialSnapshot(error);
+              }
+              return;
+            }
+
+            const isPc = snap.data()?.isPc !== false;
+            window.__examIsPcDoc = isPc;
+            console.log("Exam device mode:", isPc ? "PC" : "Mobile");
+
+            if (!initialSnapshotReceived) {
+              initialSnapshotReceived = true;
+              resolveInitialSnapshot(isPc);
+            }
+          },
+          (error) => {
+            console.error("Could not read exam device mode:", error);
+            if (!initialSnapshotReceived) {
+              initialSnapshotReceived = true;
+              rejectInitialSnapshot(error);
+            }
+          },
+        );
+
+        return window.__examDeviceModeReady;
+      }
+
       function getStudentDocRef(examId) {
         const uid = window.authUid;
         if (!uid) throw new Error("UID not ready yet");
@@ -264,6 +317,7 @@
           await heartbeatFn({
             examId: window.examData.examId,
             studentId: window.authUid,
+            camera: window.getCameraHealth?.() ?? null,
           });
 
           await setExamPresence(window.examData.examId, window.authUid, true);
@@ -301,6 +355,12 @@
         const { examId, studentId } = window.examData;
         const wasUnloading = sessionStorage.getItem("is_unloading");
         listenForStatusChanges(examId, studentId);
+        try {
+          await listenForExamDeviceMode(examId);
+        } catch {
+          console.error("Exam startup stopped because device mode is unavailable.");
+          return;
+        }
 
         if (wasUnloading) {
           window.isReloadSession = true;
@@ -330,12 +390,15 @@
         if (!window.examToken && auth.currentUser) {
           window.examToken = await getCurrentIdToken();
         }
-        await setExamPresence(examId, studentId, true);
+        await setExamPresence(examId, window.authUid, true);
         startExamHeartbeat();
         startCountdownFromFirestore(examId);
         await loadExamQuestions(examId);
         window.strikesLoadedPromise = loadExistingStrikes();
         await window.strikesLoadedPromise;
+        flushPendingStill(examId).catch((err) =>
+          console.warn("Pending still upload failed:", err),
+        );
         window.examReady = true;
         setTimeout(() => {
           window.isReloadSession = false;
@@ -419,7 +482,24 @@
         }
       }
 
+      function getLiveCameraStream() {
+        const stream = document.getElementById("input_video")?.srcObject;
+        if (
+          stream?.active &&
+          stream.getVideoTracks().some((track) => track.readyState === "live")
+        ) {
+          return stream;
+        }
+        return null;
+      }
+
       async function startCameraCapture() {
+        const liveStream = getLiveCameraStream();
+        if (liveStream) {
+          window.cameraCaptureStream = liveStream;
+          return true;
+        }
+
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           console.warn("Camera capture is not supported in this browser.");
           return false;
@@ -482,7 +562,22 @@
         return true;
       };
       window.__inheritedParentScreen = false;
+      function isPcExam() {
+        if (typeof window.__examIsPcDoc === "boolean") {
+          return window.__examIsPcDoc;
+        }
+        try {
+          if (typeof window.parent.__examIsPc === "boolean") {
+            return window.parent.__examIsPc;
+          }
+        } catch (err) {
+          console.warn("Could not read the exam device setting:", err);
+        }
+        return true;
+      }
+
       function tryInheritParentScreenStream() {
+        if (!isPcExam()) return false;
         if (window.cheatCaptureStream && window.cheatCaptureStream.active)
           return true;
         try {
@@ -507,6 +602,7 @@
       tryInheritParentScreenStream();
 
       async function startScreenCapture() {
+        if (!isPcExam()) return false;
         if (tryInheritParentScreenStream()) return true;
         if (window.cheatCaptureStream && window.cheatCaptureStream.active) {
           return true;
@@ -596,11 +692,39 @@
         return types.find((type) => MediaRecorder.isTypeSupported(type)) || "";
       }
 
-      function recordBlob(stream, durationMs) {
+      async function setWebmDuration(blob, durationMs) {
+        const parser = await webmParserPromise;
+        if (!parser) return blob;
+
+        const file = await parser.WebmFile.fromBlob(blob);
+        const segment = file.getSectionById(0x8538067);
+        const info = segment?.getSectionById(0x549a966);
+        const timecodeScale = info?.getSectionById(0xad7b1);
+        if (!segment || !info || !timecodeScale) {
+          throw new Error("WebM duration metadata sections are missing.");
+        }
+
+        timecodeScale.setValue(1_000_000);
+        let duration = info.getSectionById(0x489);
+        if (duration) {
+          duration.setValue(durationMs);
+        } else {
+          duration = new parser.WebmFloat("Duration");
+          duration.setValue(durationMs);
+          info.data.push({ id: 0x489, data: duration });
+        }
+
+        info.updateByData();
+        segment.updateByData();
+        file.updateByData();
+        return file.toBlob(blob.type);
+      }
+
+      function recordBlob(stream, durationMs, label) {
         return new Promise((resolve) => {
           if (!stream?.active || typeof MediaRecorder === "undefined") {
             console.warn(
-              "MediaRecorder or an active capture stream is unavailable.",
+              `${label} recording requires MediaRecorder and an active stream.`,
             );
             resolve(null);
             return;
@@ -620,26 +744,69 @@
           }
 
           const chunks = [];
+          let recordingStartedAt = performance.now();
           let timeoutId;
           let settled = false;
           const settle = (blob) => {
             if (settled) return;
             settled = true;
             clearTimeout(timeoutId);
+            const elapsedDurationMs = Math.round(
+              performance.now() - recordingStartedAt,
+            );
+            if (elapsedDurationMs < durationMs - 100) {
+              console.error(
+                `${label} recorder stopped before its target duration`,
+                {
+                  requestedDurationMs: durationMs,
+                  elapsedDurationMs,
+                },
+              );
+            }
+            console.info(`${label} clip recording finished`, {
+              requestedDurationMs: durationMs,
+              elapsedDurationMs,
+              blobBytes: blob?.size ?? 0,
+            });
             resolve(blob);
           };
 
           recorder.ondataavailable = (event) => {
             if (event.data?.size > 0) chunks.push(event.data);
           };
-          recorder.onstop = () => {
-            settle(
-              chunks.length
-                ? new Blob(chunks, {
-                    type: recorder.mimeType || "video/webm",
-                  })
-                : null,
-            );
+          recorder.onstop = async () => {
+            if (!chunks.length) {
+              settle(null);
+              return;
+            }
+
+            const rawBlob = new Blob(chunks, {
+              type: recorder.mimeType || "video/webm",
+            });
+            if (!rawBlob.type.includes("webm")) {
+              settle(rawBlob);
+              return;
+            }
+
+            try {
+              const elapsedDurationMs = performance.now() - recordingStartedAt;
+              const fixedBlob = await setWebmDuration(
+                rawBlob,
+                elapsedDurationMs,
+              );
+              if (fixedBlob !== rawBlob) {
+                console.info(`${label} WebM duration metadata set.`, {
+                  durationMs: Math.round(elapsedDurationMs),
+                });
+              }
+              settle(fixedBlob);
+            } catch (err) {
+              console.error(
+                `${label} WebM duration metadata repair failed; keeping raw recording.`,
+                err,
+              );
+              settle(rawBlob);
+            }
           };
           recorder.onerror = (event) => {
             console.warn("MediaRecorder error:", event.error);
@@ -648,6 +815,7 @@
 
           try {
             recorder.start(250);
+            recordingStartedAt = performance.now();
             timeoutId = setTimeout(() => {
               if (recorder.state !== "inactive") recorder.stop();
             }, durationMs);
@@ -658,48 +826,300 @@
         });
       }
 
+      async function recordCameraBlob(durationMs) {
+        const video = document.getElementById("input_video");
+        if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+          console.warn("Camera video is not ready to record.");
+          return null;
+        }
+        if (typeof HTMLCanvasElement.prototype.captureStream !== "function") {
+          console.warn(
+            "Canvas capture is unavailable; recording camera track directly.",
+          );
+          return recordBlob(window.cameraCaptureStream, durationMs, "camera");
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          console.warn("Could not create a camera recording canvas.");
+          return null;
+        }
+
+        const stream = canvas.captureStream(15);
+        let animationFrameId;
+        const drawFrame = () => {
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          }
+          animationFrameId = requestAnimationFrame(drawFrame);
+        };
+
+        drawFrame();
+        try {
+          return await recordBlob(stream, durationMs, "camera");
+        } finally {
+          cancelAnimationFrame(animationFrameId);
+          stream.getTracks().forEach((track) => track.stop());
+        }
+      }
+
+      function withTimeout(promise, ms) {
+        let timeoutId;
+        return Promise.race([
+          promise,
+          new Promise((resolve) => {
+            timeoutId = setTimeout(() => resolve(null), ms);
+          }),
+        ]).finally(() => clearTimeout(timeoutId));
+      }
+
+      function stillFromVideo(video, maxWidth = 640, quality = 0.7) {
+        return new Promise((resolve) => {
+          if (
+            !video ||
+            !video.videoWidth ||
+            video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+          ) {
+            resolve(null);
+            return;
+          }
+
+          const scale = Math.min(1, maxWidth / video.videoWidth);
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(video.videoWidth * scale);
+          canvas.height = Math.round(video.videoHeight * scale);
+          const context = canvas.getContext("2d");
+          if (!context) {
+            resolve(null);
+            return;
+          }
+
+          try {
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);
+          } catch (err) {
+            console.warn("Could not capture backup still:", err);
+            resolve(null);
+          }
+        });
+      }
+
+      async function stillFromStream(stream) {
+        if (!stream?.active) return null;
+        const video = document.createElement("video");
+        video.muted = true;
+        video.playsInline = true;
+        video.srcObject = stream;
+        try {
+          await video.play();
+          if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            await new Promise((resolve) =>
+              video.addEventListener("loadeddata", resolve, { once: true }),
+            );
+          }
+          return await stillFromVideo(video, 960, 0.6);
+        } catch (err) {
+          console.warn("Screen still failed:", err);
+          return null;
+        } finally {
+          video.srcObject = null;
+        }
+      }
+
+      function blobToDataUrl(blob) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      async function savePendingStill(examId, startedAt, startCount, stills) {
+        try {
+          if (!Object.keys(stills).length) return;
+          const data = { examId, uid: window.authUid, startedAt, startCount };
+          for (const [kind, blob] of Object.entries(stills)) {
+            data[kind] = await blobToDataUrl(blob);
+          }
+          localStorage.setItem(PENDING_STILL_KEY, JSON.stringify(data));
+        } catch (err) {
+          console.warn("Could not save backup still:", err);
+        }
+      }
+
+      function clearPendingStill(startedAt) {
+        try {
+          const saved = JSON.parse(
+            localStorage.getItem(PENDING_STILL_KEY) || "null",
+          );
+          if (!saved || saved.startedAt === startedAt) {
+            localStorage.removeItem(PENDING_STILL_KEY);
+          }
+        } catch (err) {
+          console.warn("Could not read saved backup still:", err);
+          localStorage.removeItem(PENDING_STILL_KEY);
+        }
+      }
+
+      async function flushPendingStill(examId) {
+        let pending = null;
+        try {
+          pending = JSON.parse(
+            localStorage.getItem(PENDING_STILL_KEY) || "null",
+          );
+        } catch (err) {
+          console.warn("Could not read pending backup still:", err);
+          localStorage.removeItem(PENDING_STILL_KEY);
+        }
+        if (!pending) return;
+
+        if (pending.examId !== examId || pending.uid !== window.authUid) {
+          localStorage.removeItem(PENDING_STILL_KEY);
+          return;
+        }
+
+        const blobs = {};
+        for (const kind of ["camera", "screen"]) {
+          if (pending[kind]) {
+            blobs[kind] = await (await fetch(pending[kind])).blob();
+          }
+        }
+        if (!Object.keys(blobs).length) {
+          localStorage.removeItem(PENDING_STILL_KEY);
+          return;
+        }
+
+        const ok = await uploadCheatClip(
+          examId,
+          blobs,
+          pending.startedAt,
+          pending.startCount,
+          pending.startCount,
+        );
+        if (ok) clearPendingStill(pending.startedAt);
+      }
+
       async function recordCheatClip(examId) {
         if (!examId) return;
-        // A clip is already recording. This strike falls inside its 3s window,
-        // so it is covered by that clip's "#start to #end" range.
+        // Strikes during recording are included in the clip's end count.
         if (window.cheatClipBusy) return;
+        if (Number(window.cheatingCount || 0) <= window.lastClippedCount) {
+          return;
+        }
         window.cheatClipBusy = true;
 
+        let blobs = null;
+        const stills = {};
+        const startedAt = Date.now();
+        const startCount = window.lastClippedCount + 1;
+        let endCount = startCount;
+
         try {
-          const startedAt = Date.now();
-          const startCount = Number(window.cheatingCount || 0);
-
-          const hasScreen = await startScreenCapture();
           const hasCamera = await startCameraCapture();
-          const screenStream = hasScreen ? window.cheatCaptureStream : null;
-          const cameraStream = hasCamera ? window.cameraCaptureStream : null;
+          let cameraStill = await stillFromVideo(
+            document.getElementById("input_video"),
+          );
+          if (!cameraStill && hasCamera) {
+            cameraStill = await withTimeout(
+              stillFromStream(window.cameraCaptureStream),
+              1000,
+            );
+          }
+          if (cameraStill) {
+            stills.camera = cameraStill;
+            await savePendingStill(examId, startedAt, startCount, stills);
+          }
 
-          if (!screenStream && !cameraStream) {
+          const hasScreen = isPcExam() ? await startScreenCapture() : false;
+          const screenStream = hasScreen ? window.cheatCaptureStream : null;
+          const screenRecording = screenStream
+            ? recordBlob(screenStream, CHEAT_CLIP_DURATION_MS, "screen")
+            : Promise.resolve(null);
+          const cameraRecording = hasCamera
+            ? recordCameraBlob(CHEAT_CLIP_DURATION_MS)
+            : Promise.resolve(null);
+
+          if (!screenStream && !hasCamera && !Object.keys(stills).length) {
             console.warn(
               "No screen or camera capture available, skipping clip.",
             );
             return;
           }
 
-          // Record screen and camera at the SAME time
+          const screenStillPromise = screenStream
+            ? withTimeout(stillFromStream(screenStream), 2000).then(
+                async (screenStill) => {
+                  if (screenStill) {
+                    stills.screen = screenStill;
+                    await savePendingStill(
+                      examId,
+                      startedAt,
+                      startCount,
+                      stills,
+                    );
+                  }
+                  return screenStill;
+                },
+              )
+            : Promise.resolve(null);
+
           const [screenBlob, cameraBlob] = await Promise.all([
-            recordBlob(screenStream, CHEAT_CLIP_DURATION_MS),
-            recordBlob(cameraStream, CHEAT_CLIP_DURATION_MS),
+            screenRecording,
+            cameraRecording,
+            screenStillPromise,
           ]);
 
-          const blobs = {};
-          if (screenBlob) blobs.screen = screenBlob;
-          if (cameraBlob) blobs.camera = cameraBlob;
+          blobs = {};
+          if (screenBlob) {
+            blobs.screen = screenBlob;
+          } else if (stills.screen) {
+            blobs.screen = stills.screen;
+            console.warn("Screen clip failed, using photo.");
+          }
+          if (cameraBlob) {
+            blobs.camera = cameraBlob;
+          } else if (stills.camera) {
+            blobs.camera = stills.camera;
+            console.warn("Camera clip failed, using photo.");
+          }
           if (Object.keys(blobs).length === 0) return;
 
-          // Strikes that happened during the 3s are included in the range
-          const endCount = Number(window.cheatingCount || startCount);
+          endCount = Number(window.cheatingCount || startCount);
+          window.lastClippedCount = endCount;
+        } catch (err) {
+          console.error("Cheat clip error:", err);
+        } finally {
+          window.cheatClipBusy = false;
+        }
 
+        if (!blobs) return;
+
+        uploadCheatClip(examId, blobs, startedAt, startCount, endCount).then(
+          (ok) => {
+            if (ok) clearPendingStill(startedAt);
+          },
+        );
+      }
+
+      async function uploadCheatClip(
+        examId,
+        blobs,
+        startedAt,
+        startCount,
+        endCount,
+      ) {
+        try {
           const parts = {};
           for (const [kind, blob] of Object.entries(blobs)) {
-            parts[kind] = blob.type.startsWith("video/mp4")
-              ? "video/mp4"
-              : "video/webm";
+            parts[kind] = blob.type.startsWith("image/")
+              ? "image/jpeg"
+              : blob.type.startsWith("video/mp4")
+                ? "video/mp4"
+                : "video/webm";
           }
 
           // ONE request = ONE clip number with both files
@@ -735,12 +1155,24 @@
               console.log(`${kind} cheat clip uploaded:`, upload.filePath);
             }),
           );
+          return true;
         } catch (err) {
-          console.error("Cheat clip error:", err);
-        } finally {
-          window.cheatClipBusy = false;
+          console.error("Cheat clip upload error:", err);
+          return false;
         }
       }
+
+      window.reportProctorEvent = function (type, durationMs = 0) {
+        const examId = window.examData?.examId;
+        if (!examId || !window.authUid || window.examFinished) return;
+        httpsCallable(functions, "reportProctorEvent")({
+          examId,
+          eventId: crypto.randomUUID(),
+          type,
+          durationMs: Math.round(durationMs),
+          clientTs: Date.now(),
+        }).catch((err) => console.warn("Proctor event failed:", err));
+      };
 
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
@@ -853,6 +1285,7 @@
       };
 
       window.submitExam = async function submitExam(forceIncomplete = false) {
+        const confirmButton = document.getElementById("confirmYes");
         try {
           const examId = window.examData?.examId;
 
@@ -870,6 +1303,11 @@
             );
           }
 
+          if (confirmButton) {
+            confirmButton.disabled = true;
+            confirmButton.textContent = "Submitting...";
+          }
+
           // Use the locally scoped functions and httpsCallable
           stopExamHeartbeat();
           const submitExamFunction = httpsCallable(functions, "submitExam");
@@ -883,7 +1321,14 @@
           handleSuccessfulSubmission(examId, result.data);
         } catch (err) {
           console.error("submitExam error:", err);
+          if (!window.examFinished) startExamHeartbeat();
           alert(`Submission failed: ${err.message}`);
+          window.disableGazeDetection = false;
+          if (confirmButton) {
+            confirmButton.disabled = false;
+            confirmButton.textContent = "Yes";
+            document.getElementById("confirmModal").style.display = "block";
+          }
         }
       };
 
@@ -895,12 +1340,27 @@
         window.answers = {};
         window.examData = null;
         window.cheatingCount = 0;
+        window.lastClippedCount = 0;
         window.strikes = 0;
 
         // Stop camera if running
         try {
           window.camera?.stop?.();
-        } catch (_) {}
+        } catch (err) {
+          console.warn("Could not stop the exam camera:", err);
+        }
+        for (const stream of [
+          window.cameraCaptureStream,
+          window.cheatCaptureStream,
+        ]) {
+          try {
+            stream?.getTracks?.().forEach((track) => track.stop());
+          } catch (err) {
+            console.warn("Could not stop an exam capture stream:", err);
+          }
+        }
+        window.cameraCaptureStream = null;
+        window.cheatCaptureStream = null;
 
         // Notify parent window or redirect
         if (window.parent && window.parent !== window) {
@@ -920,6 +1380,7 @@
           window.answers = {};
           window.examData = null;
           window.cheatingCount = 0;
+          window.lastClippedCount = 0;
           window.strikes = 0;
           window.parent.postMessage(
             {
@@ -1080,8 +1541,13 @@
         "examId",
         "examStarted",
         "is_unloading",
+        "gazeOnlineClicks",
       ];
-      const EXAM_LOCAL_KEYS = ["cheatingCount", "cheatClipIndex"];
+      const EXAM_LOCAL_KEYS = [
+        "cheatingCount",
+        "cheatClipIndex",
+        PENDING_STILL_KEY,
+      ];
 
       function clearExamStorage() {
         EXAM_SESSION_KEYS.forEach((key) => sessionStorage.removeItem(key));
@@ -1090,6 +1556,7 @@
       function resetExamRuntimeState() {
         window.examStarted = false;
         window.cheatingCount = 0;
+        window.lastClippedCount = 0;
         window.strikes = 0;
         window.examData = null;
         window.answers = {};
@@ -1103,34 +1570,6 @@
         if (window.examStarted) {
           sessionStorage.setItem("examStarted", "1");
         }
-      });
-
-      window.addEventListener("pagehide", (event) => {
-        if (event.persisted) return;
-        if (window.hasSubmitted || window.examFinished) return;
-
-        sessionStorage.setItem("is_unloading", "true");
-
-        if (window.examData?.examId && window.authUid && window.examToken) {
-          fetch(
-            "https://asia-southeast1-rd-final.cloudfunctions.net/markIncomplete",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${window.examToken}`,
-              },
-              body: JSON.stringify({
-                examId: window.examData.examId,
-                uid: window.authUid,
-              }),
-              keepalive: true,
-            },
-          ).catch(() => {});
-        }
-
-        clearExamStorage();
-        resetExamRuntimeState();
       });
 
       let currentQuestionIndex = 0;
@@ -1462,6 +1901,8 @@
             localStorage.setItem("cheatingCount", window.cheatingCount);
           }
         }
+
+        window.lastClippedCount = window.cheatingCount;
 
         // If local is higher than remote, push absolute value
         if (window.cheatingCount > remote) {
@@ -1989,317 +2430,71 @@
         targetY = bubbleY;
       const SENSITIVITY = 10.4;
 
-      // Landmark indices (refineLandmarks:true). a = image-left corner, b = image-right corner
-      const R_EYE = { a: 33, b: 133, iris: 468, up: 159, low: 145 }; // subject's right eye
-      const L_EYE = { a: 362, b: 263, iris: 473, up: 386, low: 374 }; // subject's left eye
-
-      // gx/gy = iris offset from eye center, as a fraction of eye width
-      // (work in pixels so x/y have equal scale; project on the eye-corner axis so head roll doesn't matter)
-      function eyeGaze(lm, e, W, H) {
-        const A = lm[e.a],
-          B = lm[e.b],
-          I = lm[e.iris];
-        const ax = A.x * W,
-          ay = A.y * H,
-          bx = B.x * W,
-          by = B.y * H,
-          ix = I.x * W,
-          iy = I.y * H;
-        const w = Math.hypot(bx - ax, by - ay);
-        const ex = (bx - ax) / w,
-          ey = (by - ay) / w; // along eye axis
-        const nx = -ey,
-          ny = ex; // perpendicular (down)
-        const dx = ix - (ax + bx) / 2,
-          dy = iy - (ay + by) / 2;
-        return {
-          gx: (dx * ex + dy * ey) / w,
-          gy: (dx * nx + dy * ny) / w,
-          ear:
-            Math.hypot(
-              (lm[e.up].x - lm[e.low].x) * W,
-              (lm[e.up].y - lm[e.low].y) * H,
-            ) / w,
-        };
+      function showCameraUnavailable() {
+        faceStatus.classList.remove("ok");
+        faceStatus.classList.add("bad");
+        faceText.textContent =
+          "Camera unavailable — try localhost or allow camera access.";
+        faceIcon.textContent = "⚠";
       }
 
-      // rough head pose from face landmarks (secondary signal)
-      function headPose(lm) {
-        const n = lm[1],
-          L = lm[234],
-          R = lm[454],
-          T = lm[10],
-          C = lm[152];
-        return {
-          yaw: (n.x - (L.x + R.x) / 2) / Math.abs(R.x - L.x),
-          pitch: (n.y - (T.y + C.y) / 2) / Math.abs(C.y - T.y),
-        };
+      </script>
+      <script src="gaze-core.js"></script>
+      <script src="exam-gaze-block.js"></script>
+      <script>
+      const GATE_DELAY_MS = 5000;
+      const GATE_DEFAULT_TEXT = "Please look at the screen to start your exam.";
+      let gateTimer = null;
+      let gateDeadline = 0;
+
+      function openExamFromGate() {
+        if (gateTimer !== null) {
+          clearInterval(gateTimer);
+          gateTimer = null;
+        }
+        if (window.examStarted) return;
+
+        window.examStarted = true;
+        window.allowStrikes = true;
+        sessionStorage.setItem("examStarted", "1");
+        document.getElementById("examGate").style.display = "none";
+        document.getElementById("examCard").style.display = "block";
+        strikeBox.textContent = `Strikes: ${window.cheatingCount || 0}`;
+        console.log("Face verified for 5s → starting exam…");
       }
 
-      const med = (a) => {
-        const s = [...a].sort((x, y) => x - y);
-        return s[s.length >> 1];
-      };
-      const spread = (a) => Math.max(...a) - Math.min(...a);
+      function startGateCountdown() {
+        if (gateTimer !== null || window.examStarted) return;
 
-      // ---- TUNING ----
-      const EYE_EDGE_X = 0.05; // gx change when you look at the card's left/right edge
-      const EYE_EDGE_Y = 0.03; // gy change when you look at the card's top/bottom edge
-      const HEAD_EDGE_X = 0.12; // yaw change for the same edge
-      const HEAD_EDGE_Y = 0.1;
-      const W_EYE = 1.0,
-        W_HEAD = 0.3; // eye is primary, head is secondary
-      const BLINK_EAR = 0.14;
-      const AWAY_MS = 700; // must be outside the safe zone this long before a strike
-
-      // Load calibration data from localStorage (set by gaze-calibration.html)
-      let SMOOTH = 0.15; // Default smooth value (as requested)
-      let calibrationModel = null;
-      let headBase = { yaw: 0, pitch: 0 };
-      let useQuadraticModel = true;
-
-      try {
-        const savedCalibration = localStorage.getItem("gazeCalibrationData");
-        if (savedCalibration) {
-          const calData = JSON.parse(savedCalibration);
-          console.log("✓ Loaded gaze calibration data from localStorage");
-
-          // Use the smooth value from calibration (should be 0.15)
-          SMOOTH = calData.smooth || 0.15;
-
-          // Load head base
-          if (calData.headBase) {
-            headBase = calData.headBase;
-          }
-
-          // Load the quadratic model (more accurate)
-          if (calData.modelQuad) {
-            calibrationModel = calData.modelQuad;
-            useQuadraticModel = true;
-            console.log("✓ Using quadratic calibration model");
-          } else if (calData.modelLin) {
-            calibrationModel = calData.modelLin;
-            useQuadraticModel = false;
-            console.log("✓ Using linear calibration model");
-          }
-        } else {
-          console.warn(
-            "⚠ No calibration data found, using fallback auto-calibration",
+        gateDeadline = Date.now() + GATE_DELAY_MS;
+        const message = document.querySelector("#examContentGate p");
+        const renderCountdown = () => {
+          const secondsLeft = Math.max(
+            0,
+            Math.ceil((gateDeadline - Date.now()) / 1000),
           );
-        }
-      } catch (err) {
-        console.error("Failed to load calibration data:", err);
-      }
-
-      const sm = { gx: 0, gy: 0, yaw: 0, pitch: 0, init: false };
-      const calib = { buf: [], done: !calibrationModel, base: headBase }; // Skip auto-cal if we have saved data
-      let awaySince = 0;
-
-      // Helper functions for using the calibration model
-      const feats = (gx, gy, quad) =>
-        quad ? [1, gx, gy, gx * gx, gy * gy, gx * gy] : [1, gx, gy];
-
-      function predictGaze(model, gx, gy) {
-        if (!model) return null;
-        const z = feats(gx, gy, model.quad).map((v, j) =>
-          j ? (v - model.mu[j]) / model.sd[j] : 1,
-        );
-        return [
-          z.reduce((s, v, j) => s + v * model.wx[j], 0),
-          z.reduce((s, v, j) => s + v * model.wy[j], 0),
-        ];
-      }
-      function onResults(results) {
-        if (window.disableGazeDetection) return;
-
-        const vw = videoElement.clientWidth,
-          vh = videoElement.clientHeight;
-        canvasElement.width = vw;
-        canvasElement.height = vh;
-        canvasCtx.clearRect(0, 0, vw, vh);
-
-        if (
-          !results.multiFaceLandmarks ||
-          results.multiFaceLandmarks.length === 0
-        ) {
-          setVerification(false, "Face not found");
-          targetX = window.innerWidth / 2;
-          targetY = window.innerHeight / 2;
-          updateBubble();
-          return;
-        }
-
-        const lm = results.multiFaceLandmarks[0];
-        const W = videoElement.videoWidth,
-          H = videoElement.videoHeight;
-        if (!W || !H) return;
-
-        // debug iris dots
-        canvasCtx.fillStyle = "rgba(30,144,255,0.95)";
-        [468, 473].forEach((i) => {
-          canvasCtx.beginPath();
-          canvasCtx.arc((1 - lm[i].x) * vw, lm[i].y * vh, 4, 0, Math.PI * 2);
-          canvasCtx.fill();
-        });
-
-        const r = eyeGaze(lm, R_EYE, W, H);
-        const l = eyeGaze(lm, L_EYE, W, H);
-        if (r.ear < BLINK_EAR || l.ear < BLINK_EAR) {
-          updateBubble();
-          return;
-        } // blink: hold last value
-
-        const hp = headPose(lm);
-        const raw = {
-          gx: (r.gx + l.gx) / 2,
-          gy: (r.gy + l.gy) / 2,
-          yaw: hp.yaw,
-          pitch: hp.pitch,
+          if (message) {
+            message.textContent =
+              secondsLeft > 0
+                ? `Face verified. Exam starts in ${secondsLeft}s. Keep looking at the screen.`
+                : GATE_DEFAULT_TEXT;
+          }
+          if (secondsLeft === 0) openExamFromGate();
         };
 
-        // smoothing with calibrated SMOOTH value (0.15)
-        if (!sm.init) {
-          Object.assign(sm, raw, { init: true });
+        renderCountdown();
+        if (!window.examStarted) {
+          gateTimer = setInterval(renderCountdown, 200);
         }
-        for (const k of ["gx", "gy", "yaw", "pitch"])
-          sm[k] += (raw[k] - sm[k]) * SMOOTH;
+      }
 
-        // If we have a calibration model, use it; otherwise do auto-calibration
-        if (calibrationModel) {
-          // Use the trained model from 9-point calibration
-          const pred = predictGaze(calibrationModel, sm.gx, sm.gy);
-          if (!pred) {
-            console.warn("Model prediction failed");
-            return;
-          }
-
-          const targetEl = window.examStarted
-            ? document.getElementById("examCard")
-            : document.getElementById("examGate");
-          const examRect = targetEl.getBoundingClientRect();
-          if (examRect.width < 20 || examRect.height < 20) return;
-
-          // pred[0] and pred[1] are normalized screen coordinates (0-1)
-          targetX = pred[0] * window.innerWidth;
-          targetY = pred[1] * window.innerHeight;
-
-          // Add small head pose correction
-          targetX -=
-            ((W_HEAD * (sm.yaw - headBase.yaw)) / HEAD_EDGE_X) *
-            (window.innerWidth / 2);
-          targetY +=
-            ((W_HEAD * (sm.pitch - headBase.pitch)) / HEAD_EDGE_Y) *
-            (window.innerHeight / 2);
-
-          // Clamp to screen bounds
-          const pad = 8;
-          targetX = Math.max(pad, Math.min(window.innerWidth - pad, targetX));
-          targetY = Math.max(pad, Math.min(window.innerHeight - pad, targetY));
-
-          // Check if gaze is within safe zone
-          const INSET_PCT = 0.06;
-          const safeLeft = examRect.left + examRect.width * INSET_PCT;
-          const safeRight = examRect.right - examRect.width * INSET_PCT;
-          const safeTop = examRect.top + examRect.height * INSET_PCT;
-          const safeBottom = examRect.bottom - examRect.height * INSET_PCT;
-          const gazeOk =
-            targetX >= safeLeft &&
-            targetX <= safeRight &&
-            targetY >= safeTop &&
-            targetY <= safeBottom;
-
-          if (!gazeOk) {
-            examCard.classList.add("alert");
-            gazeBubble.classList.add("alert");
-            setVerification(false, "Looking away detected");
-            if (!awaySince) awaySince = performance.now();
-            if (window.allowStrikes && performance.now() - awaySince > AWAY_MS)
-              registerStrikeOnce();
-          } else {
-            awaySince = 0;
-            examCard.classList.remove("alert");
-            gazeBubble.classList.remove("alert");
-            setVerification(true, "Face & eyes centered");
-          }
-          updateBubble();
-          return;
-        }
-
-        // FALLBACK: auto-calibration (only if no saved calibration model)
-        if (!calib.done) {
-          calib.buf.push({ ...sm });
-          faceText.textContent =
-            "Calibrating — look at the center of the screen";
-          if (calib.buf.length >= 30) {
-            const spread = (arr, key) =>
-              Math.max(...arr.map((s) => s[key])) -
-              Math.min(...arr.map((s) => s[key]));
-            if (
-              spread(calib.buf, "gx") > 0.04 ||
-              spread(calib.buf, "gy") > 0.04
-            ) {
-              calib.buf = []; // eyes were moving, restart
-            } else {
-              const med = (arr, key) => {
-                const s = [...arr].map((x) => x[key]).sort((a, b) => a - b);
-                return s[s.length >> 1];
-              };
-              for (const k of ["gx", "gy", "yaw", "pitch"])
-                calib.base[k] = med(calib.buf, k);
-              calib.done = true;
-            }
-          }
-          return;
-        }
-
-        const targetEl = window.examStarted
-          ? document.getElementById("examCard")
-          : document.getElementById("examGate");
-        const examRect = targetEl.getBoundingClientRect();
-        if (examRect.width < 20 || examRect.height < 20) return;
-        const examCx = examRect.left + examRect.width / 2;
-        const examCy = examRect.top + examRect.height / 2;
-
-        const nx =
-          (W_EYE * (sm.gx - calib.base.gx)) / EYE_EDGE_X +
-          (W_HEAD * (sm.yaw - calib.base.yaw)) / HEAD_EDGE_X;
-        const ny =
-          (W_EYE * (sm.gy - calib.base.gy)) / EYE_EDGE_Y +
-          (W_HEAD * (sm.pitch - calib.base.pitch)) / HEAD_EDGE_Y;
-
-        // minus on X because the raw image is un-mirrored (user's left = image right)
-        targetX = examCx - nx * (examRect.width / 2);
-        targetY = examCy + ny * (examRect.height / 2);
-
-        const pad = 8;
-        targetX = Math.max(pad, Math.min(window.innerWidth - pad, targetX));
-        targetY = Math.max(pad, Math.min(window.innerHeight - pad, targetY));
-
-        const INSET_PCT = 0.06;
-        const safeLeft = examRect.left + examRect.width * INSET_PCT;
-        const safeRight = examRect.right - examRect.width * INSET_PCT;
-        const safeTop = examRect.top + examRect.height * INSET_PCT;
-        const safeBottom = examRect.bottom - examRect.height * INSET_PCT;
-        const gazeOk =
-          targetX >= safeLeft &&
-          targetX <= safeRight &&
-          targetY >= safeTop &&
-          targetY <= safeBottom;
-
-        if (!gazeOk) {
-          examCard.classList.add("alert");
-          gazeBubble.classList.add("alert");
-          setVerification(false, "Looking away detected");
-          if (!awaySince) awaySince = performance.now();
-          if (window.allowStrikes && performance.now() - awaySince > AWAY_MS)
-            registerStrikeOnce();
-        } else {
-          awaySince = 0;
-          examCard.classList.remove("alert");
-          gazeBubble.classList.remove("alert");
-          setVerification(true, "Face & eyes centered");
-        }
-        updateBubble();
+      function cancelGateCountdown() {
+        if (gateTimer === null) return;
+        clearInterval(gateTimer);
+        gateTimer = null;
+        gateDeadline = 0;
+        const message = document.querySelector("#examContentGate p");
+        if (message) message.textContent = GATE_DEFAULT_TEXT;
       }
 
       function setVerification(ok, reason) {
@@ -2320,19 +2515,12 @@
         }
         faceText.textContent =
           reason || (verified ? "Face verified" : "Face not verified");
-        if (verified && !window.examStarted) {
-          window.examStarted = true;
-          window.allowStrikes = true;
-          sessionStorage.setItem("examStarted", "1");
-
-          setTimeout(() => {
-            document.getElementById("examGate").style.display = "none";
-            document.getElementById("examCard").style.display = "block";
-            console.log("Face verified → starting exam…");
-          }, 150);
-          setTimeout(() => {
-            strikeBox.textContent = `Strikes: ${window.strikes}`;
-          }, 200);
+        if (!window.examStarted) {
+          if (verified) {
+            startGateCountdown();
+          } else {
+            cancelGateCountdown();
+          }
         }
       }
 
@@ -2359,12 +2547,13 @@
           height: 720,
         });
         faceMesh.onResults(onResults);
-        camera.start();
+        camera.start().catch((err) => {
+          console.warn("Camera start failed:", err);
+          showCameraUnavailable();
+        });
       } catch (err) {
         console.warn("Camera start failed:", err);
-        faceText.textContent =
-          "Camera unavailable — try localhost or allow camera access.";
-        faceIcon.textContent = "⚠";
+        showCameraUnavailable();
       }
       let matchingPool = [];
       let questions = [];

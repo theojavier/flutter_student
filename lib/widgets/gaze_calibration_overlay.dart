@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'dart:ui_web' as ui;
@@ -5,11 +6,15 @@ import 'dart:ui_web' as ui;
 class GazeCalibrationOverlay extends StatefulWidget {
   final String examId;
   final VoidCallback onCalibrationComplete;
+  final VoidCallback onCalibrationFailed;
+  final VoidCallback? onCalibrationCancelled;
 
   const GazeCalibrationOverlay({
     super.key,
     required this.examId,
     required this.onCalibrationComplete,
+    required this.onCalibrationFailed,
+    this.onCalibrationCancelled,
   });
 
   @override
@@ -20,6 +25,9 @@ class _GazeCalibrationOverlayState extends State<GazeCalibrationOverlay> {
   static bool _factoryRegistered = false;
   static const String _viewType = 'gaze-calibration-overlay';
   bool _calibrationComplete = false;
+  bool _calibrationFailed = false;
+  bool _cancelled = false;
+  late final StreamSubscription<html.MessageEvent> _messageSubscription;
 
   @override
   void initState() {
@@ -28,7 +36,7 @@ class _GazeCalibrationOverlayState extends State<GazeCalibrationOverlay> {
     _ensureFactoryRegistered();
 
     // Listen for calibration completion message
-    html.window.onMessage.listen((event) {
+    _messageSubscription = html.window.onMessage.listen((event) {
       if (!mounted) return;
       final data = event.data;
       if (data is Map && data['action'] == 'calibrationComplete') {
@@ -42,8 +50,22 @@ class _GazeCalibrationOverlayState extends State<GazeCalibrationOverlay> {
             widget.onCalibrationComplete();
           }
         });
+      } else if (data is Map && data['action'] == 'calibrationFailed') {
+        if (_calibrationFailed) return;
+        _calibrationFailed = true;
+        widget.onCalibrationFailed();
+      } else if (data is Map && data['action'] == 'calibrationCancelled') {
+        if (_cancelled || _calibrationComplete) return;
+        _cancelled = true;
+        widget.onCalibrationCancelled?.call();
       }
     });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_messageSubscription.cancel());
+    super.dispose();
   }
 
   void _ensureFactoryRegistered() {
@@ -85,7 +107,7 @@ class _GazeCalibrationOverlayState extends State<GazeCalibrationOverlay> {
       child: Stack(
         children: [
           // Calibration iframe (fullscreen)
-          const HtmlElementView(viewType: _viewType),
+          const Positioned.fill(child: HtmlElementView(viewType: _viewType)),
 
           // Success overlay
           if (_calibrationComplete)

@@ -1,10 +1,7 @@
 import 'dart:async';
-import 'dart:html' as html;
-import 'dart:js_util' as js_util;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -12,6 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../helpers/SecureStorageHelper.dart';
 import 'package:flutter/foundation.dart';
 import 'package:super_overlay/super_overlay.dart';
+import '../../helpers/web_exam_media.dart';
 import '../../widgets/gaze_calibration_overlay.dart';
 
 class TakeExamPage extends StatefulWidget {
@@ -79,8 +77,8 @@ class _TakeExamPageState extends State<TakeExamPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     if (!_screenStreamHandedOff) {
-      _stopJsStream(_screenStream);
-      _stopJsStream(_cameraStream);
+      stopStream(_screenStream);
+      stopStream(_cameraStream);
     }
     _screenStream = null;
     _cameraStream = null;
@@ -93,19 +91,6 @@ class _TakeExamPageState extends State<TakeExamPage>
     setState(() {
       studentId = storedstudentId;
     });
-  }
-
-  void _clearStaleExamStorage() {
-    for (final key in const [
-      'examId',
-      'examStarted',
-      'is_unloading',
-    ]) {
-      html.window.sessionStorage.remove(key);
-    }
-    for (final key in const ['cheatingCount', 'cheatClipIndex']) {
-      html.window.localStorage.remove(key);
-    }
   }
 
   // ---------- Error popup ----------
@@ -233,7 +218,7 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   // ---------- Single "ready" popup that frames BOTH permissions ----------
 
-  Future<bool> _showReadyDialog() async {
+  Future<bool> _showReadyDialog({required bool isPc}) async {
     if (!mounted) return false;
     final proceed = await showDialog<bool>(
       context: context,
@@ -284,13 +269,16 @@ class _TakeExamPageState extends State<TakeExamPage>
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  "This exam needs two things from your browser:\n\n"
-                  "•  Full screen sharing (your ENTIRE screen, not a window or tab)\n"
-                  "•  Camera access, for a quick look-at-the-camera check\n\n"
-                  "You'll see two browser prompts next — please allow both.",
+                Text(
+                  isPc
+                      ? "This exam needs two things from your browser:\n\n"
+                            "•  Full screen sharing (your ENTIRE screen, not a window or tab)\n"
+                            "•  Camera access, for a quick look-at-the-camera check\n\n"
+                            "You'll see two browser prompts next — please allow both."
+                      : "This exam needs camera access for a quick look-at-the-camera check.\n\n"
+                            "Please allow the camera prompt.",
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: _mutedTextColor,
                     fontSize: 13.5,
                     height: 1.4,
@@ -336,71 +324,9 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   // ---------- Screen share (whole screen only) ----------
 
-  /// Stops every track on a raw JS MediaStream obtained via js_util.
-  void _stopJsStream(dynamic stream) {
-    if (stream == null) return;
-    try {
-      final dynamic tracks = js_util.callMethod(stream, 'getTracks', []);
-      final int len = (js_util.getProperty(tracks, 'length') as num).toInt();
-      for (var i = 0; i < len; i++) {
-        final dynamic track = js_util.getProperty(tracks, '$i');
-        js_util.callMethod(track, 'stop', []);
-      }
-    } catch (e) {
-      debugPrint('Failed to stop a media stream: $e');
-    }
-  }
-
-  /// Calls navigator.mediaDevices.getDisplayMedia directly via js_util
-  /// instead of dart:html's MediaDevices class, which doesn't expose that
-  /// method. This still returns the browser's real, native MediaStream —
-  /// which is exactly what lets us hand it to the exam.html iframe later
-  /// instead of exam.html calling getDisplayMedia() again (that second call
-  /// is what was causing the screen-share prompt to appear twice).
   Future<bool> _requestFullScreenShare() async {
     try {
-      final mediaDevices = html.window.navigator.mediaDevices;
-      if (mediaDevices == null) {
-        throw Exception("Screen sharing isn't supported in this browser.");
-      }
-
-      final dynamic promise = js_util.callMethod(
-        mediaDevices,
-        'getDisplayMedia',
-        [
-          js_util.jsify({
-            'video': {'displaySurface': 'monitor'},
-            'audio': false,
-          }),
-        ],
-      );
-      final dynamic stream = await js_util.promiseToFuture(promise);
-
-      final dynamic videoTracks = js_util.callMethod(
-        stream,
-        'getVideoTracks',
-        [],
-      );
-      final int trackCount = (js_util.getProperty(videoTracks, 'length') as num)
-          .toInt();
-
-      String displaySurface = '';
-      if (trackCount > 0) {
-        final dynamic track = js_util.getProperty(videoTracks, '0');
-        final dynamic settings = js_util.callMethod(track, 'getSettings', []);
-        displaySurface =
-            (js_util.getProperty(settings, 'displaySurface') as String?) ?? '';
-      }
-
-      if (trackCount == 0 ||
-          (displaySurface.isNotEmpty && displaySurface != 'monitor')) {
-        _stopJsStream(stream);
-        throw Exception(
-          'Please choose "Entire Screen" when prompted — sharing a window or browser tab is not allowed.',
-        );
-      }
-
-      _screenStream = stream; // kept alive on purpose, see doc comment above
+      _screenStream = await requestFullScreenShare();
       return true;
     } catch (e) {
       debugPrint("Screen share failed: $e");
@@ -415,6 +341,15 @@ class _TakeExamPageState extends State<TakeExamPage>
       }
       return false;
     }
+  }
+
+  void _releaseStreams() {
+    _screenStreamHandedOff = false;
+    stopStream(_screenStream);
+    stopStream(_cameraStream);
+    _screenStream = null;
+    _cameraStream = null;
+    clearExamHandOff();
   }
 
   // ---------- Camera / permissions ----------
@@ -437,17 +372,13 @@ class _TakeExamPageState extends State<TakeExamPage>
       await videoRenderer.initialize();
       videoRenderer.srcObject = stream;
 
-      if (context.mounted) {
-        showDialog(
+      Future<void>? cameraDialog;
+      if (mounted) {
+        cameraDialog = showDialog<void>(
           context: context,
           barrierDismissible: false,
+          useRootNavigator: true,
           builder: (ctx) {
-            Future.delayed(const Duration(seconds: 5), () {
-              if (ctx.mounted && Navigator.canPop(ctx)) {
-                Navigator.pop(ctx);
-              }
-            });
-
             return AlertDialog(
               backgroundColor: _cardColor,
               shape: RoundedRectangleBorder(
@@ -501,6 +432,11 @@ class _TakeExamPageState extends State<TakeExamPage>
 
       await Future.delayed(const Duration(seconds: 5));
       _detectFace();
+
+      if (cameraDialog != null && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        await cameraDialog;
+      }
 
       stream.getTracks().forEach((t) => t.stop());
       await videoRenderer.dispose();
@@ -675,238 +611,313 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   // Start / Resume / View Result button (real-time updates)
   Widget _buildExamAction(String subject, String uid) {
-    return StreamBuilder<DocumentSnapshot>(
-      stream: db
-          .collection("examResults")
-          .doc(widget.examId)
-          .collection("students")
-          .doc(FirebaseAuth.instance.currentUser!.uid)
-          .snapshots(),
-      builder: (context, resultSnap) {
-        if (resultSnap.hasError) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: db.collection("exams").doc(widget.examId).snapshots(),
+      builder: (context, examSnap) {
+        if (examSnap.hasError) {
           return _actionButton(
             label: "Error",
             icon: Icons.error_outline,
             color: _btnIncomplete,
-            hint: "Couldn't load your exam status.",
+            hint: "Couldn't check whether monitoring has started.",
             onPressed: () => _showErrorDialog(
-              title: "Couldn't load exam status",
+              title: "Couldn't check exam availability",
               message:
-                  "We couldn't check your exam status. Please check your connection and try again.",
-              details: resultSnap.error.toString(),
+                  "We couldn't check whether your instructor has started monitoring. Please try again.",
+              details: examSnap.error.toString(),
             ),
           );
         }
-        if (!resultSnap.hasData) {
+        if (!examSnap.hasData) {
           return _actionButton(label: "Loading...", onPressed: null);
         }
-
-        final doc = resultSnap.data!;
-        final now = DateTime.now().millisecondsSinceEpoch;
-
-        if (doc.exists && doc["status"] == "completed") {
-          return _actionButton(
-            label: "View Result",
-            icon: Icons.assessment_outlined,
-            color: _btnResult,
-            hint: "Exam completed.",
-            onPressed: () {
-              context.goNamed(
-                'examResult',
-                pathParameters: {'examId': widget.examId},
-              );
-            },
-          );
+        if (!examSnap.data!.exists) {
+          return _buildEmptyState(Icons.search_off_outlined, "Exam not found");
         }
 
-        if (doc.exists && doc["status"] == "in-progress") {
-          return _actionButton(
-            label: "In progress",
-            icon: Icons.hourglass_top_outlined,
-            color: _btnProgress,
-            hint: "Exam is already being taken.",
-            onPressed: () => _showErrorDialog(
-              title: "Exam in progress",
-              message: "Exam is already being taken.",
-              icon: Icons.hourglass_top_outlined,
-              color: _warnColor,
-            ),
-          );
-        }
+        final monitoringEnabled =
+            examSnap.data!.data()?["monitoringEnabled"] == true;
 
-        if (doc.exists && doc["status"] == "incomplete") {
-          return _actionButton(
-            label: "Incomplete",
-            icon: Icons.block_outlined,
-            color: _btnIncomplete,
-            hint: "You can't take this exam.",
-            onPressed: () => _showErrorDialog(
-              title: "Exam incomplete",
-              message: "You can't take the exam.",
-              icon: Icons.block_outlined,
-            ),
-          );
-        }
-
-        if (start != null && now < start!) {
-          return _actionButton(
-            label: "Not started",
-            icon: Icons.lock_clock_outlined,
-            hint: "Exam not started yet.",
-            onPressed: null,
-          );
-        }
-
-        if (end != null && now > end!) {
-          return _actionButton(
-            label: "Ended",
-            icon: Icons.event_busy_outlined,
-            hint: "Exam ended.",
-            onPressed: null,
-          );
-        }
-
-        //  Start new attempt — single seamless flow: one framing popup,
-        //  then full-screen check, then camera check. Only when BOTH pass
-        //  do we write Firestore and navigate to exam.html. Any failure
-        //  keeps the student right here so they can retry.
-        return _actionButton(
-          label: "Start Exam",
-          icon: Icons.play_arrow_rounded,
-          color: _btnStart,
-          hint:
-              "You'll be asked to share your full screen and allow your camera.",
-          onPressed: () async {
-            if (_starting) return;
-            _starting = true;
-
-            try {
-              _clearStaleExamStorage();
-              final agreed = await _showReadyDialog();
-              if (!agreed) return;
-
-              final screenOk = await _requestFullScreenShare();
-              if (!mounted || !screenOk) return; // popup already shown
-
-              final cameraOk = await _checkCameraAvailability();
-              if (!mounted) return;
-              if (!cameraOk) {
-                // Screen was granted but camera wasn't — release the
-                // screen share since we're not proceeding.
-                _stopJsStream(_screenStream);
-                _screenStream = null;
-                await _showErrorDialog(
-                  title: "Camera not available",
+        return StreamBuilder<DocumentSnapshot>(
+          stream: db
+              .collection("examResults")
+              .doc(widget.examId)
+              .collection("students")
+              .doc(FirebaseAuth.instance.currentUser!.uid)
+              .snapshots(),
+          builder: (context, resultSnap) {
+            if (resultSnap.hasError) {
+              return _actionButton(
+                label: "Error",
+                icon: Icons.error_outline,
+                color: _btnIncomplete,
+                hint: "Couldn't load your exam status.",
+                onPressed: () => _showErrorDialog(
+                  title: "Couldn't load exam status",
                   message:
-                      "No camera was detected or it is turned off. Turn on your camera, make sure no other app is using it, and allow camera access. You cannot take the exam without it.",
-                  icon: Icons.videocam_off_outlined,
-                  details: _cameraError,
-                );
-                return;
-              }
-
-              // Both confirmed — make the screen + camera streams reachable by
-              // exam.html so it can reuse the already-approved streams instead of
-              // opening a second permission flow.
-              if (_screenStream != null) {
-                js_util.setProperty(
-                  html.window,
-                  '__examScreenStream',
-                  _screenStream,
-                );
-              }
-              if (_cameraStream != null) {
-                js_util.setProperty(
-                  html.window,
-                  '__examCameraStream',
-                  _cameraStream,
-                );
-              }
-
-              final now = DateTime.now();
-              final startedAt = Timestamp.fromDate(now);
-              final monitoredAt = Timestamp.fromDate(
-                now.add(const Duration(minutes: 5)),
+                      "We couldn't check your exam status. Please check your connection and try again.",
+                  details: resultSnap.error.toString(),
+                ),
               );
-
-              final examDoc = await db
-                  .collection("exams")
-                  .doc(widget.examId)
-                  .get();
-              final examData = examDoc.data() ?? {};
-              final examStart = examData["startTime"] as Timestamp?;
-              final examEnd = examData["endTime"] as Timestamp?;
-              final examSubject = examData["subject"] ?? subject;
-              final examTeacher =
-                  examData["creator"] ??
-                  examData["teacher"] ??
-                  examData["createdBy"] ??
-                  "Unknown";
-
-              await db
-                  .collection("examResults")
-                  .doc(widget.examId)
-                  .collection("students")
-                  .doc(uid)
-                  .set({
-                    "examId": widget.examId,
-                    "uid": uid,
-                    "studentId": studentId ?? uid,
-                    "status": "in-progress",
-                    "cheatingCount": 0,
-                    "currentIndex": 0,
-                    "subject": examSubject,
-                    "teacher": examTeacher,
-                    "startTime": examStart ?? startedAt,
-                    "endTime": examEnd ?? monitoredAt,
-                    "startedAt": startedAt,
-                    "createdAt": startedAt,
-                    "lastHeartbeatAt": startedAt,
-                    "monitoringEnabled": true,
-                    "monitoringStartedAt": startedAt,
-                    "monitoringDeadlineAt": monitoredAt,
-                    "updatedAt": startedAt,
-                  }, SetOptions(merge: true));
-
-             if (!mounted) return;
-_screenStreamHandedOff = true;
-
-final router = GoRouter.of(context);
-await showGeneralDialog<void>(
-  context: context,
-  useRootNavigator: true,
-  barrierDismissible: false,
-  barrierColor: Colors.transparent,
-  transitionDuration: Duration.zero,
-  pageBuilder: (ctx, _, __) => Material(
-    type: MaterialType.transparency,
-    child: GazeCalibrationOverlay(
-      examId: widget.examId,
-      onCalibrationComplete: () {
-        Navigator.of(ctx, rootNavigator: true).pop();
-        router.goNamed(
-          'examhtml',
-          pathParameters: {'examId': widget.examId},
-        );
-      },
-    ),
-  ),
-);
-            } catch (e) {
-              _screenStreamHandedOff = false;
-              _stopJsStream(_screenStream);
-              _screenStream = null;
-              if (mounted) {
-                await _showErrorDialog(
-                  title: "Couldn't start the exam",
-                  message:
-                      "Something went wrong while starting the exam. Please try again.",
-                  details: e.toString(),
-                );
-              }
-            } finally {
-              _starting = false;
             }
+            if (!resultSnap.hasData) {
+              return _actionButton(label: "Loading...", onPressed: null);
+            }
+
+            final doc = resultSnap.data!;
+            final now = DateTime.now().millisecondsSinceEpoch;
+
+            if (doc.exists && doc["status"] == "completed") {
+              return _actionButton(
+                label: "View Result",
+                icon: Icons.assessment_outlined,
+                color: _btnResult,
+                hint: "Exam completed.",
+                onPressed: () {
+                  context.goNamed(
+                    'examResult',
+                    pathParameters: {'examId': widget.examId},
+                  );
+                },
+              );
+            }
+
+            if (doc.exists && doc["status"] == "in-progress") {
+              return _actionButton(
+                label: "In progress",
+                icon: Icons.hourglass_top_outlined,
+                color: _btnProgress,
+                hint: "Exam is already being taken.",
+                onPressed: () => _showErrorDialog(
+                  title: "Exam in progress",
+                  message: "Exam is already being taken.",
+                  icon: Icons.hourglass_top_outlined,
+                  color: _warnColor,
+                ),
+              );
+            }
+
+            if (doc.exists && doc["status"] == "incomplete") {
+              return _actionButton(
+                label: "Incomplete",
+                icon: Icons.block_outlined,
+                color: _btnIncomplete,
+                hint: "You can't take this exam.",
+                onPressed: () => _showErrorDialog(
+                  title: "Exam incomplete",
+                  message: "You can't take the exam.",
+                  icon: Icons.block_outlined,
+                ),
+              );
+            }
+
+            if (start != null && now < start!) {
+              return _actionButton(
+                label: "Not started",
+                icon: Icons.lock_clock_outlined,
+                hint: "Exam not started yet.",
+                onPressed: null,
+              );
+            }
+
+            if (end != null && now > end!) {
+              return _actionButton(
+                label: "Ended",
+                icon: Icons.event_busy_outlined,
+                hint: "Exam ended.",
+                onPressed: null,
+              );
+            }
+
+            if (!monitoringEnabled) {
+              return _actionButton(
+                label: "Waiting for monitoring",
+                icon: Icons.hourglass_empty,
+                hint:
+                    "Your instructor must start monitoring before you can take this exam.",
+                onPressed: null,
+              );
+            }
+
+            // Start new attempt with the permissions required for this exam.
+            return _actionButton(
+              label: "Start Exam",
+              icon: Icons.play_arrow_rounded,
+              color: _btnStart,
+              hint:
+                  "You'll be asked to allow your camera (and share your full screen on PC).",
+              onPressed: () async {
+                if (_starting) return;
+                _starting = true;
+
+                try {
+                  final latestExam = await db
+                      .collection("exams")
+                      .doc(widget.examId)
+                      .get();
+                  if (latestExam.data()?["monitoringEnabled"] != true) {
+                    await _showErrorDialog(
+                      title: "Monitoring hasn't started",
+                      message:
+                          "Your instructor must start monitoring before you can take this exam.",
+                      icon: Icons.hourglass_empty,
+                      color: _warnColor,
+                    );
+                    return;
+                  }
+
+                  final isPc = latestExam.data()?["isPc"] != false;
+                  clearStaleExamStorage();
+                  final agreed = await _showReadyDialog(isPc: isPc);
+                  if (!agreed) return;
+
+                  final screenOk = isPc
+                      ? await _requestFullScreenShare()
+                      : true;
+                  if (!mounted || !screenOk) return; // popup already shown
+
+                  final cameraOk = await _checkCameraAvailability();
+                  if (!mounted) return;
+                  if (!cameraOk) {
+                    // Release any screen share granted before camera validation failed.
+                    stopStream(_screenStream);
+                    _screenStream = null;
+                    await _showErrorDialog(
+                      title: "Camera not available",
+                      message:
+                          "No camera was detected or it is turned off. Turn on your camera, make sure no other app is using it, and allow camera access. You cannot take the exam without it.",
+                      icon: Icons.videocam_off_outlined,
+                      details: _cameraError,
+                    );
+                    return;
+                  }
+
+                  handOffExamStreams(
+                    screen: isPc ? _screenStream : null,
+                    camera: _cameraStream,
+                    isPc: isPc,
+                  );
+
+                  if (!mounted) return;
+                  _screenStreamHandedOff = true;
+
+                  final router = GoRouter.of(context);
+                  await showGeneralDialog<void>(
+                    context: context,
+                    useRootNavigator: true,
+                    barrierDismissible: false,
+                    barrierColor: Colors.transparent,
+                    transitionDuration: Duration.zero,
+                    pageBuilder: (ctx, _, __) => Material(
+                      type: MaterialType.transparency,
+                      child: GazeCalibrationOverlay(
+                        examId: widget.examId,
+                        onCalibrationComplete: () async {
+                          final now = DateTime.now();
+                          final startedAt = Timestamp.fromDate(now);
+                          final monitoredAt = Timestamp.fromDate(
+                            now.add(const Duration(minutes: 5)),
+                          );
+
+                          final examRef = db
+                              .collection("exams")
+                              .doc(widget.examId);
+                          final resultRef = db
+                              .collection("examResults")
+                              .doc(widget.examId)
+                              .collection("students")
+                              .doc(uid);
+
+                          try {
+                            await db.runTransaction((transaction) async {
+                              final examDoc = await transaction.get(examRef);
+                              final examData = examDoc.data() ?? {};
+                              if (!examDoc.exists ||
+                                  examData["monitoringEnabled"] != true) {
+                                throw StateError(
+                                  "Exam monitoring is not active.",
+                                );
+                              }
+
+                              final examStart =
+                                  examData["startTime"] as Timestamp?;
+                              final examEnd = examData["endTime"] as Timestamp?;
+                              final examSubject =
+                                  examData["subject"] ?? subject;
+                              final examTeacher =
+                                  examData["creator"] ??
+                                  examData["teacher"] ??
+                                  examData["createdBy"] ??
+                                  "Unknown";
+
+                              transaction.set(resultRef, {
+                                "examId": widget.examId,
+                                "uid": uid,
+                                "studentId": studentId ?? uid,
+                                "status": "in-progress",
+                                "cheatingCount": 0,
+                                "currentIndex": 0,
+                                "subject": examSubject,
+                                "teacher": examTeacher,
+                                "startTime": examStart ?? startedAt,
+                                "endTime": examEnd ?? monitoredAt,
+                                "startedAt": startedAt,
+                                "createdAt": startedAt,
+                                "lastHeartbeatAt": startedAt,
+                                "monitoringEnabled": true,
+                                "monitoringStartedAt": startedAt,
+                                "monitoringDeadlineAt": monitoredAt,
+                                "isPc": isPc,
+                                "updatedAt": startedAt,
+                              }, SetOptions(merge: true));
+                            });
+                          } on StateError {
+                            if (!mounted) return;
+                            Navigator.of(ctx, rootNavigator: true).pop();
+                            _releaseStreams();
+                            await _showErrorDialog(
+                              title: "Monitoring stopped",
+                              message:
+                                  "Your instructor must be monitoring the exam before you can start it.",
+                              icon: Icons.hourglass_empty,
+                              color: _warnColor,
+                            );
+                            return;
+                          }
+
+                          if (!mounted) return;
+                          Navigator.of(ctx, rootNavigator: true).pop();
+                          router.goNamed(
+                            'examhtml',
+                            pathParameters: {'examId': widget.examId},
+                          );
+                        },
+                        onCalibrationFailed: () {
+                          Navigator.of(ctx, rootNavigator: true).pop();
+                          _releaseStreams();
+                        },
+                        onCalibrationCancelled: () {
+                          Navigator.of(ctx, rootNavigator: true).pop();
+                          _releaseStreams();
+                        },
+                      ),
+                    ),
+                  );
+                } catch (e) {
+                  _releaseStreams();
+                  if (mounted) {
+                    await _showErrorDialog(
+                      title: "Couldn't start the exam",
+                      message:
+                          "Something went wrong while starting the exam. Please try again.",
+                      details: e.toString(),
+                    );
+                  }
+                } finally {
+                  _starting = false;
+                }
+              },
+            );
           },
         );
       },
