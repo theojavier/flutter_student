@@ -97,12 +97,12 @@ class _LoginPageState extends State<LoginPage> {
       } else {
         _showError("Access denied (not a student)");
       }
-    } on FirebaseFunctionsException catch (e) {
-      _showError(e.message ?? "Invalid Student ID or password");
+    } on FirebaseFunctionsException {
+      _showError("Incorrect Student ID or Password");
     } on FirebaseAuthException {
-      _showError("Invalid Student ID or password");
-    } catch (e) {
-      _showError("Login failed: $e");
+      _showError("Incorrect Student ID or Password");
+    } catch (_) {
+      _showError("Incorrect Student ID or Password");
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -483,7 +483,7 @@ class _LoginPageState extends State<LoginPage> {
                 const SizedBox(height: 2),
                 Text(
                   _loginError,
-                  style: const TextStyle(color: _mutedTextColor, fontSize: 12.5),
+                  style: const TextStyle(color: _mutedTextColor, fontSize: 14),
                 ),
               ],
             ),

@@ -20,12 +20,16 @@ const ORDER = [
 ];
 const PLAN = ORDER.map((_, spot) => ({ spot }));
 
-const SETTLE = 700, COLLECT = 1000;
-const MIN_SAMPLES = 12;
-const SMOOTH_TAU_MS = 250, BLINK_EAR = 0.14;
-const MAX_TRAIN_PX = 220;
-const MAX_GAZE_MOVEMENT = 0.18; // eye widths (still stage only)
-const MAX_HEAD_MOVEMENT = 0.12; // radians ≈ 7° (still stage only)
+const SETTLE = 700;
+const COLLECT_MIN = 600, COLLECT_MAX = 3500;
+const TARGET_SAMPLES = 15, MIN_SAMPLES = 8;
+const IS_MOBILE =
+  matchMedia("(pointer: coarse)").matches ||
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const SMOOTH_TAU_MS = 250, BLINK_EAR = IS_MOBILE ? 0.09 : 0.14;
+const MAX_GAZE_MOVEMENT = IS_MOBILE ? 0.25 : 0.18; // eye widths (still stage only)
+const MAX_HEAD_MOVEMENT = IS_MOBILE ? 0.2 : 0.12; // radians (still stage only)
+const maxTrainPx = () => Math.hypot(innerWidth, innerHeight) * (IS_MOBILE ? 0.18 : 0.10);
 const smooth = GazeCore.makeSmoother(SMOOTH_TAU_MS);
 
 const cal = {
@@ -80,7 +84,7 @@ function checkRealtimeMovement(s) {
 // ---------------- validation ----------------
 function validateSamples(samples) {
   if (samples.length < MIN_SAMPLES)
-    return { valid: false, reason: `Not enough samples (${samples.length} of ${MIN_SAMPLES}). Is your face fully visible?` };
+    return { valid: false, reason: `Not enough eye-tracking frames (${samples.length} of ${MIN_SAMPLES}). Keep your face and eyes visible, then try again.` };
 
   const gaze = Math.max(range(samples.map((s) => s.ox)), range(samples.map((s) => s.oy)));
   if (gaze > MAX_GAZE_MOVEMENT)
@@ -98,8 +102,9 @@ function validateSamples(samples) {
 }
 
 function validateFinalModel(rows, train) {
-  if (train > MAX_TRAIN_PX)
-    return { valid: false, reason: `Calibration accuracy too low!\nError: ${train.toFixed(0)}px (max acceptable: ${MAX_TRAIN_PX}px)\n\nPlease look directly at each dot.` };
+  const MAXPX = maxTrainPx();
+  if (train > MAXPX)
+    return { valid: false, reason: `Calibration accuracy too low!\nError: ${train.toFixed(0)}px (max acceptable: ${MAXPX.toFixed(0)}px)\n\nPlease look directly at each dot.` };
 
   const unique = new Set(
     rows.filter((r) => r.stage === "still").map((r) => `${r.ox.toFixed(2)},${r.oy.toFixed(2)}`),
@@ -262,16 +267,16 @@ setInterval(() => {
   if (!cal.active) return;
   const st = PLAN[cal.i];
   const t = performance.now() - cal.t0;
-  const collectMs = COLLECT;
-
   if (cal.phase === "settle" && t > SETTLE) {
     cal.phase = "collect";
     cal.t0 = performance.now();
     cal.samples = [];
-    dot.style.animationDuration = collectMs + "ms";
+    dot.style.animationDuration = COLLECT_MAX + "ms";
     dot.classList.add("collecting");
   } else if (cal.phase === "collect") {
-    if (t > collectMs) {
+    const enoughSamples =
+      cal.samples.length >= TARGET_SAMPLES && t > COLLECT_MIN;
+    if (enoughSamples || t > COLLECT_MAX) {
       dot.classList.remove("collecting");
       const v = validateSamples(cal.samples);
       if (!v.valid) {
@@ -324,8 +329,10 @@ fm.setOptions({
 
 fm.onResults((res) => {
   setReady();
-  canvas.width = video.clientWidth;
-  canvas.height = video.clientHeight;
+  if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
+    canvas.width = video.clientWidth;
+    canvas.height = video.clientHeight;
+  }
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!res.multiFaceLandmarks?.length) return;
 
@@ -345,7 +352,7 @@ fm.onResults((res) => {
   const s = smooth(raw, performance.now());
 
   if (cal.active && cal.phase === "collect") {
-    if (PLAN[cal.i].stage === "still") checkRealtimeMovement(s);
+    checkRealtimeMovement(s);
     cal.samples.push({ ...s });
   }
 });
@@ -356,8 +363,9 @@ fm.onResults((res) => {
     startLabel.textContent = "Starting camera…";
     await new Camera(video, {
       onFrame: async () => { await fm.send({ image: video }); },
-      width: 1280,
-      height: 720,
+      facingMode: "user",
+      width: IS_MOBILE ? 640 : 1280,
+      height: IS_MOBILE ? 480 : 720,
     }).start();
   } catch (e) {
     setLoadError(e);

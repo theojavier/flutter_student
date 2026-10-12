@@ -53,7 +53,11 @@ class _GazeCalibrationOverlayState extends State<GazeCalibrationOverlay> {
       } else if (data is Map && data['action'] == 'calibrationFailed') {
         if (_calibrationFailed) return;
         _calibrationFailed = true;
-        widget.onCalibrationFailed();
+
+        // let the "Maximum Attempts Reached" box stay visible before closing
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) widget.onCalibrationFailed();
+        });
       } else if (data is Map && data['action'] == 'calibrationCancelled') {
         if (_cancelled || _calibrationComplete) return;
         _cancelled = true;

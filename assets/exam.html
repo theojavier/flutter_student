@@ -29,6 +29,7 @@
         deleteField,
         onSnapshot,
         increment,
+        waitForPendingWrites,
       } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 
       import {
@@ -181,49 +182,105 @@
           restoreOrStartExam();
         }
       });
-      function listenForStatusChanges(examId, studentId) {
-        if (!authReady) {
-          const interval = setInterval(() => {
-            if (authReady) {
-              clearInterval(interval);
-              attachSnapshot(examId, studentId);
+      let statusUnsub = null;
+
+      function listenForStatusChanges(examId) {
+        if (statusUnsub) return;
+
+        const start = () => {
+          if (statusUnsub) return;
+          statusUnsub = onSnapshot(getStudentDocRef(examId), (snap) => {
+            if (
+              snap.exists() &&
+              snap.data().currentIndex === "stopped" &&
+              !window.hasSubmitted
+            ) {
+              window.hasSubmitted = true;
+              handleTeacherStop();
             }
-          }, 50);
-        } else {
-          attachSnapshot(examId, studentId);
+          });
+        };
+
+        if (authReady) {
+          start();
+          return;
         }
-      }
-      function attachSnapshot(examId, studentId) {
-        const resultRef = getStudentDocRef(examId);
 
-        onSnapshot(resultRef, (snap) => {
-          if (!snap.exists()) return;
-
-          const data = snap.data();
-          const currentIndex = data.currentIndex;
-
-          if (currentIndex === "stopped" && !window.hasSubmitted) {
-            const interval = setInterval(async () => {
-              if (window.examReady && !window.hasSubmitted) {
-                clearInterval(interval);
-                window.hasSubmitted = true;
-                await safeSetDoc(
-                  resultRef,
-                  {
-                    status: "incomplete",
-                  },
-                  { merge: true },
-                );
-                alert("The exam has been stopped.");
-                window.submitExam(true);
-              }
-            }, 50);
-
-            // Safety timeout to clear interval anyway
-            setTimeout(() => clearInterval(interval), 10000);
+        const interval = setInterval(() => {
+          if (authReady) {
+            clearInterval(interval);
+            start();
           }
-        });
+        }, 50);
       }
+
+      async function handleTeacherStop() {
+        window.examFinished = true;
+        window.allowStrikes = false;
+        window.disableGazeDetection = true;
+        window.skipIncompleteOnNextUnload = true;
+        showStopModal("submitting");
+
+        const startedAt = performance.now();
+        try {
+          const writeResult = await Promise.race([
+            waitForPendingWrites(db).then(() => "drained"),
+            new Promise((resolve) =>
+              setTimeout(() => resolve("timed out"), 3000),
+            ),
+          ]);
+          console.log(
+            `[stop] pending writes ${writeResult}: ${Math.round(
+              performance.now() - startedAt,
+            )}ms`,
+          );
+        } catch (err) {
+          console.warn(
+            `[stop] waiting for pending writes failed after ${Math.round(
+              performance.now() - startedAt,
+            )}ms:`,
+            err,
+          );
+        }
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const attemptStartedAt = performance.now();
+          const ok = await window.submitExam(true, { silent: true });
+          console.log(
+            `[stop] submit attempt ${attempt}: ${Math.round(
+              performance.now() - attemptStartedAt,
+            )}ms ok=${ok}`,
+          );
+          if (ok) return;
+          if (attempt < 3) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, 1000 * attempt),
+            );
+          }
+        }
+
+        showStopModal("failed");
+      }
+
+      function showStopModal(state) {
+        document.getElementById("confirmModal").style.display = "none";
+        document.getElementById("answermodelneeded").style.display = "none";
+        document.getElementById("stopModal").style.display = "block";
+        const failed = state === "failed";
+        document.getElementById("stopStatus").style.display = failed
+          ? "none"
+          : "flex";
+        document.getElementById("stopFailed").style.display = failed
+          ? "block"
+          : "none";
+      }
+
+      document.getElementById("stopRetryBtn").onclick = async () => {
+        showStopModal("submitting");
+        if (!(await window.submitExam(true, { silent: true }))) {
+          showStopModal("failed");
+        }
+      };
       function listenForExamDeviceMode(examId) {
         if (window.__examDocListener) return window.__examDeviceModeReady;
 
@@ -1177,6 +1234,7 @@
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
         return async function registerStrikeOnce() {
+          if (window.examFinished || window.hasSubmitted) return;
           const now = Date.now();
           if (now - lastAway < 1200) return;
           lastAway = now;
@@ -1284,15 +1342,18 @@
         }
       };
 
-      window.submitExam = async function submitExam(forceIncomplete = false) {
+      window.submitExam = async function submitExam(
+        forceIncomplete = false,
+        { silent = false } = {},
+      ) {
         const confirmButton = document.getElementById("confirmYes");
         try {
           const examId = window.examData?.examId;
 
           if (!examId) {
             console.error("Missing examId");
-            alert("Submission error: Missing exam data.");
-            return;
+            if (!silent) alert("Submission error: Missing exam data.");
+            return false;
           }
 
           // Get the user's ID token first
@@ -1319,16 +1380,20 @@
 
           console.log("Exam submitted successfully:", result.data);
           handleSuccessfulSubmission(examId, result.data);
+          return true;
         } catch (err) {
           console.error("submitExam error:", err);
           if (!window.examFinished) startExamHeartbeat();
-          alert(`Submission failed: ${err.message}`);
-          window.disableGazeDetection = false;
-          if (confirmButton) {
-            confirmButton.disabled = false;
-            confirmButton.textContent = "Yes";
-            document.getElementById("confirmModal").style.display = "block";
+          if (!silent) {
+            alert(`Submission failed: ${err.message}`);
+            window.disableGazeDetection = false;
+            if (confirmButton) {
+              confirmButton.disabled = false;
+              confirmButton.textContent = "Yes";
+              document.getElementById("confirmModal").style.display = "block";
+            }
           }
+          return false;
         }
       };
 
@@ -1960,6 +2025,69 @@
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
       }
 
+      #stopModal {
+        z-index: 10000;
+      }
+
+      .stop-card {
+        margin: 12vh auto;
+        width: min(420px, 92vw);
+        padding: 28px 24px;
+        border: 1px solid rgba(255, 107, 107, 0.35);
+        border-top: 4px solid var(--warn);
+      }
+
+      .stop-icon {
+        width: 52px;
+        height: 52px;
+        margin: 0 auto 14px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 107, 107, 0.12);
+        border: 1px solid rgba(255, 107, 107, 0.3);
+        color: var(--warn);
+        font-size: 18px;
+      }
+
+      .stop-card h3 {
+        margin: 0 0 8px;
+        font-size: 20px;
+        color: #f3fbff;
+      }
+
+      .stop-card p {
+        margin: 0 0 18px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .stop-status {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        color: #e6f0f8;
+      }
+
+      .stop-status .spinner {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        border-top-color: var(--accent);
+        animation: stop-spin 0.8s linear infinite;
+      }
+
+      @keyframes stop-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
       * {
         box-sizing: border-box;
       }
@@ -2363,6 +2491,31 @@
         >
           OK
         </button>
+      </div>
+    </div>
+    <div
+      id="stopModal"
+      class="modal"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="stopTitle"
+      aria-describedby="stopMsg"
+    >
+      <div class="modal-content stop-card">
+        <div class="stop-icon" aria-hidden="true">■</div>
+        <h3 id="stopTitle">Exam Stopped</h3>
+        <p id="stopMsg">
+          Your instructor has stopped this exam session. Your answers are being
+          saved and submitted.
+        </p>
+        <div id="stopStatus" class="stop-status">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Submitting your answers…</span>
+        </div>
+        <div id="stopFailed" style="display: none">
+          <p>We couldn't submit yet. Check your connection and try again.</p>
+          <button id="stopRetryBtn" class="btn">Try Again</button>
+        </div>
       </div>
     </div>
 

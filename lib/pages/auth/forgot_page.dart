@@ -71,12 +71,12 @@ class _ForgotPageState extends State<ForgotPage> {
       Future.delayed(const Duration(milliseconds: 1500), () {
         if (mounted) context.go('/login');
       });
-    } on FirebaseFunctionsException catch (e) {
-      _showError(e.message ?? "Verification failed");
-    } on FirebaseAuthException catch (e) {
-      _showError(e.message ?? "Error sending reset email");
-    } catch (e) {
-      _showError("Error: $e");
+    } on FirebaseFunctionsException {
+      _showError("Incorrect email or student ID");
+    } on FirebaseAuthException {
+      _showError("Incorrect email or student ID");
+    } catch (_) {
+      _showError("Incorrect email or student ID");
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -460,7 +460,7 @@ class _ForgotPageState extends State<ForgotPage> {
                 const SizedBox(height: 2),
                 Text(
                   message,
-                  style: const TextStyle(color: _mutedTextColor, fontSize: 12.5),
+                  style: const TextStyle(color: _mutedTextColor, fontSize: 14),
                 ),
               ],
             ),
