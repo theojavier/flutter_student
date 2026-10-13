@@ -331,13 +331,13 @@ function onResults(results) {
   const W = videoElement.videoWidth, H = videoElement.videoHeight;
   if (!W || !H) return;
 
-  // debug iris dots
-  canvasCtx.fillStyle = "rgba(30,144,255,0.95)";
-  [468, 473].forEach((i) => {
-    canvasCtx.beginPath();
-    canvasCtx.arc((1 - lm[i].x) * vw, lm[i].y * vh, 4, 0, Math.PI * 2);
-    canvasCtx.fill();
-  });
+  // REMOVED: Debug iris dots (students could use these to cheat)
+  // canvasCtx.fillStyle = "rgba(30,144,255,0.95)";
+  // [468, 473].forEach((i) => {
+  //   canvasCtx.beginPath();
+  //   canvasCtx.arc((1 - lm[i].x) * vw, lm[i].y * vh, 4, 0, Math.PI * 2);
+  //   canvasCtx.fill();
+  // });
 
   const raw = GazeCore.extract(lm, W, H);
   const now = performance.now();
