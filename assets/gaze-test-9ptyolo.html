@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Gaze test — 9-point calibration (YOLO eyes + gaze-core)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px system-ui, sans-serif; background: #0b1220; color: #e6f0f8; }
+  .wrap { display: grid; grid-template-columns: 1fr 340px; gap: 16px; padding: 16px; min-height: 100vh; }
+  #card { position: relative; border-radius: 10px; background: #0b2a44; min-height: 520px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+  #card.alert { outline: 3px solid #ff6b6b; }
+  #safe { position: absolute; inset: 6%; border: 1px dashed rgba(255,255,255,.2); pointer-events: none; }
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .cam { position: relative; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; }
+  video, canvas.ov { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .panel { background: #071a2b; border-radius: 8px; padding: 12px; }
+  .panel label { display: grid; grid-template-columns: 90px 1fr 48px; gap: 8px; align-items: center; margin: 6px 0; }
+  .panel .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .eyes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .eyes figure { margin: 0; text-align: center; font-size: 11px; color: #9fb4c6; }
+  .eyes canvas { width: 100%; aspect-ratio: 5/3; background: #000; border-radius: 6px; display: block; }
+  pre { margin: 0; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+  button { background: #1e90ff; color: #06203a; border: 0; border-radius: 6px; padding: 8px 14px; font-weight: 600; cursor: pointer; }
+  #bubble { position: fixed; width: 18px; height: 18px; border-radius: 50%; background: rgba(30,144,255,.95); pointer-events: none; transform: translate(-50%,-50%); z-index: 9; }
+  #bubble.alert { background: rgba(255,107,107,.95); }
+  #overlay { display: none; position: fixed; inset: 0; z-index: 20; background: rgba(7,18,32,.94); }
+  #calmsg { position: absolute; top: 18px; left: 0; right: 0; text-align: center; font-size: 15px; }
+  #caldbg { position: absolute; top: 46px; left: 0; right: 0; text-align: center; font: 12px ui-monospace, monospace; color: #9fb4c6; }
+  #dot { position: absolute; width: 30px; height: 30px; border-radius: 50%; transform: translate(-50%,-50%); background: radial-gradient(circle, #0b1220 0 3px, #fff 3.5px); border: 5px solid #1e90ff; transition: left .3s ease, top .3s ease; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="card"><div id="safe"></div>
+    <div><h2>Look around this card</h2>
+    <p>Run the 9-point calibration at your normal sitting distance, then test the middle of each edge, near and far.</p></div>
+  </div>
+  <div class="side">
+    <div class="cam"><video id="v" autoplay playsinline muted></video><canvas class="ov" id="c"></canvas></div>
+    <div class="panel">
+      <div class="eyes">
+        <figure><canvas id="eyeL" width="200" height="120"></canvas>L (landmarks 33–133)</figure>
+        <figure><canvas id="eyeR" width="200" height="120"></canvas>R (landmarks 362–263)</figure>
+      </div>
+      <pre id="px">eye size: waiting for face…</pre>
+    </div>
+    <div class="panel"><pre id="hud">loading…</pre></div>
+    <div class="panel">
+      <div class="row"><button id="cal">Start 9-point calibration</button></div>
+      <div class="row"><input id="quad" type="checkbox" checked><label for="quad" style="display:inline;margin:0">Quadratic model (off = linear)</label></div>
+      <div class="row"><input id="dist" type="checkbox" checked><label for="dist" style="display:inline;margin:0">Distance compensation</label></div>
+      <div class="row"><input id="rf" type="checkbox" checked><label for="rf" style="display:inline;margin:0">Refine pass (2x slower, recalibrate after changing)</label></div>
+      <div class="row"><input id="tt" type="checkbox" checked><label for="tt" style="display:inline;margin:0">Crop averaging x3 (slower, recalibrate after changing)</label></div>
+      <label>STEADY Hz <input id="st" type="range" min="0.2" max="3" step="0.1" value="1"><span id="stv"></span></label>
+      <label>BETA <input id="be" type="range" min="0" max="20" step="1" value="6"><span id="bev"></span></label>
+    </div>
+  </div>
+</div>
+<div id="bubble"></div>
+<div id="overlay"><div id="calmsg"></div><div id="caldbg"></div><div id="dot"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="gaze-core.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const video = $('v'), canvas = $('c'), ctx = canvas.getContext('2d');
+const card = $('card'), bubble = $('bubble'), hud = $('hud'), pxEl = $('px');
+const overlay = $('overlay'), dot = $('dot'), calmsg = $('calmsg'), calDbg = $('caldbg');
+
+// ================= CONFIG =================
+const MODEL_URL = './model_1024/best_w8a32_640.tflite';
+const JSON_URL  = './model_1024/eye_keypoint_names.json';
+const ACCEL = 'webgpu';
+let S = 128;                        // overwritten by "imgsz" from eye_keypoint_names.json once it loads
+const NK = 13, CONF = 0.05, KCONF = 0.30, BLINK_EAR = 0.14, DISAGREE = 0.10;
+let TTA = 3;                        // crops averaged per eye (1 = off). Jitter from the model drops ~sqrt(TTA), cost grows with TTA
+const VARS = [[0.025, -0.02, 1.03], [-0.025, 0.02, 0.97]];   // extra crops: shift (x, y in eye-widths) and zoom
+const IRIS_Y_NO_TB = true;          // vertical gaze ignores the noisy iris top/bottom points
+const FLIP = { L: false, R: true };
+const EYES = { L: [33, 133, 159, 145], R: [362, 263, 386, 374] };
+const CAM_W = 1920, CAM_H = 1080;   // more camera pixels on the eye = the biggest win at distance
+let REFINE = true;                  // 2nd pass: re-centre the crop on the model's OWN corners
+const EYE_PER_RAD = 0.4;            // same constant as gaze-core.js
+const SCALE_REF = 0.28;             // face-width/frame-width the distance factor is relative to
+const REF_EYE_PX = 50;              // eye width (px) at which smoothing is at its base value
+let J = null, eyeModel = null, LTensor = null, lastMs = 0;
+let NHWC = false;                   // detected from the model's real input shape after loading
+let modelInfo = '';
+let why = '', lastScore = 0;        // why the last frame produced no eye result (shown in the overlay / HUD)
+
+const cc = document.createElement('canvas'); cc.width = cc.height = S;
+const cctx = cc.getContext('2d', { willReadFrequently: true });
+cctx.imageSmoothingEnabled = true; cctx.imageSmoothingQuality = 'high';
+
+const shapeOf = d => d && d.shape ? Array.from(d.shape) : null;
+
+async function initEyeModel() {
+  try {
+    J = await (await fetch(JSON_URL)).json();
+
+    S = J.imgsz || 128;
+    cc.width = cc.height = S;
+
+    if (!navigator.gpu) {
+      throw new Error('WebGPU is unavailable. Check Chrome and your GPU driver.');
+    }
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      throw new Error('Chrome could not find a WebGPU adapter.');
+    }
+    console.log('WebGPU adapter:', adapter.info);
+
+    const m = await import('https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm');
+    await m.loadLiteRt('https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/');
+
+    eyeModel = await m.loadAndCompile(MODEL_URL, { accelerator: ACCEL });
+    LTensor = m.Tensor;
+
+    // ask the model what it really wants (size + NCHW/NHWC) instead of assuming
+    let msg = 'Eye model loaded (WebGPU).';
+    try {
+      const inS = shapeOf(eyeModel.getInputDetails?.()[0]), outS = shapeOf(eyeModel.getOutputDetails?.()[0]);
+      if (inS && inS.length === 4) {
+        NHWC = inS[3] === 3 && inS[1] !== 3;
+        const ms = NHWC ? inS[1] : inS[2];
+        msg += `\nmodel input ${JSON.stringify(inS)} -> ${NHWC ? 'NHWC' : 'NCHW'}, page crop ${S}`;
+        if (ms !== S) msg += `\n!! model wants ${ms}px but eye_keypoint_names.json imgsz is ${S}`;
+      }
+      if (outS) msg += `\nmodel output ${JSON.stringify(outS)}`;
+      console.log('LiteRT input/output details:', eyeModel.getInputDetails?.(), eyeModel.getOutputDetails?.());
+    } catch (e) { console.warn('could not read model details:', e); }
+    modelInfo = msg;
+    hud.textContent = msg;
+    console.log(msg);
+  } catch (e) {
+    console.error('GPU initialization failed:', e);
+    hud.textContent = 'GPU initialization failed: ' + e.message;
+  }
+}
+
+initEyeModel();
+// ---------- crop + inference ----------
+function eyeM(A, B, flip) {
+  const cx = (A.x+B.x)/2, cy = (A.y+B.y)/2, w = Math.hypot(B.x-A.x, B.y-A.y), ang = Math.atan2(B.y-A.y, B.x-A.x);
+  const s = S/(w*J.K), c = Math.cos(-ang), n = Math.sin(-ang), f = flip ? -1 : 1;
+  const a = s*f*c, b = -s*f*n, d = s*n, e = s*c;
+  return { M: [a, b, J.center_px[0]-(a*cx+b*cy), d, e, J.center_px[1]-(d*cx+e*cy)], w, ang };
+}
+function unmap(M, x, y) {
+  const det = M[0]*M[4]-M[1]*M[3], dx = x-M[2], dy = y-M[5];
+  return { x: (M[4]*dx-M[1]*dy)/det, y: (-M[3]*dx+M[0]*dy)/det };
+}
+function cropTensor(M) {
+  cctx.setTransform(1,0,0,1,0,0); cctx.fillStyle = '#727272'; cctx.fillRect(0,0,S,S);
+  cctx.setTransform(M[0], M[3], M[1], M[4], M[2], M[5]);
+  cctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+  const d = cctx.getImageData(0,0,S,S).data, n = S*S, t = new Float32Array(3*n);
+  if (NHWC) for (let i = 0; i < n; i++) { t[3*i] = d[4*i]/255; t[3*i+1] = d[4*i+1]/255; t[3*i+2] = d[4*i+2]/255; }
+  else      for (let i = 0; i < n; i++) { t[i] = d[4*i]/255; t[n+i] = d[4*i+1]/255; t[2*n+i] = d[4*i+2]/255; }
+  return t;
+}
+async function infer(t) {
+  const inp = new LTensor(t, NHWC ? [1,S,S,3] : [1,3,S,S]); let out, f;
+  try { out = await eyeModel.run([inp]); f = Float32Array.from(await out[0].data()); }
+  finally { try { inp.delete(); } catch(_){} try { out && out.forEach(o => o.delete()); } catch(_){} }
+  const NC = NK*3; let rows, get, ks;
+  if (f.length % (5+NC) === 0 && f.length % (6+NC) !== 0) { rows = f.length/(5+NC); get = (r,c) => f[c*rows+r]; ks = 5; }
+  else { rows = f.length/(6+NC); get = (r,c) => f[r*(6+NC)+c]; ks = 6; }
+  let bi = 0, bs = -1;
+  for (let r = 0; r < rows; r++) { const s = get(r,4); if (s > bs) { bs = s; bi = r; } }
+  lastScore = bs;
+  if (bs < CONF) return null;
+  const k = []; for (let j = 0; j < NK; j++) k.push([get(bi,ks+3*j), get(bi,ks+3*j+1), get(bi,ks+3*j+2)]);
+  if (Math.max(...k.map(p => Math.max(Math.abs(p[0]), Math.abs(p[1])))) <= 2) k.forEach(p => { p[0] *= S; p[1] *= S; });
+  return { score: bs, k };
+}
+async function runEye(lab, A, B) {
+  const { M, w, ang } = eyeM(A, B, FLIP[lab]);
+  const res = await infer(cropTensor(M));
+  return res && { ...res, M, w, ang, flip: FLIP[lab], A, B };
+}
+// same eye, crop nudged by v = [shift x, shift y (eye-widths), zoom]
+function runVariant(lab, A, B, v) {
+  const w = Math.hypot(B.x-A.x, B.y-A.y), cx = (A.x+B.x)/2 + v[0]*w, cy = (A.y+B.y)/2 + v[1]*w;
+  const hx = (B.x-A.x)/2*v[2], hy = (B.y-A.y)/2*v[2];
+  return runEye(lab, { x: cx-hx, y: cy-hy }, { x: cx+hx, y: cy+hy });
+}
+
+// iris offset in IMAGE axes (eye-widths): x vs corner midpoint, y vs centre of the lid opening
+function eyeOff(r) {
+  const k = r.k, cl = k[J.idx.corner_left], cr = k[J.idx.corner_right];
+  const wc = Math.max(Math.hypot(cr[0]-cl[0], cr[1]-cl[1]), 1);
+  const mean = ids => [ids.reduce((s,i) => s+k[i][0], 0)/ids.length, ids.reduce((s,i) => s+k[i][1], 0)/ids.length];
+  let yIds = J.iris_idx;
+  if (IRIS_Y_NO_TB) { const side = yIds.filter(i => !/top|bottom/.test(J.names[i])); if (side.length) yIds = side; }
+  const irisX = mean(J.iris_idx)[0], irisY = mean(yIds)[1], up = mean(J.upper_idx), lo = mean(J.lower_idx);
+  let fx = (irisX-(cl[0]+cr[0])/2)/wc; const fy = (irisY-(up[1]+lo[1])/2)/wc;
+  if (r.flip) fx = -fx;
+  const c = Math.cos(r.ang), s = Math.sin(r.ang);          // undo the crop rotation -> camera axes
+  return { ox: c*fx - s*fy, oy: s*fx + c*fy };
+}
+function eyeQuality(r) {
+  const core = [...J.iris_idx, J.idx.corner_left, J.idx.corner_right];
+  const kc = Math.max(0, Math.min(1, core.reduce((s,i) => s + r.k[i][2], 0)/core.length));
+  return r.score * kc * Math.max(0, Math.min(1, (r.ear-BLINK_EAR)/0.10));
+}
+const trk = {};   // smoothed MediaPipe corners per eye (a steadier crop)
+async function yoloEye(lab, [a,b,u,l], lm, W, H) {
+  const P = i => ({ x: lm[i].x*W, y: lm[i].y*H });
+  const ear = Math.hypot((lm[u].x-lm[l].x)*W, (lm[u].y-lm[l].y)*H)/Math.hypot((lm[b].x-lm[a].x)*W, (lm[b].y-lm[a].y)*H);
+  if (ear < BLINK_EAR) { why += `${lab}: eye closed (ear ${ear.toFixed(2)}) `; return null; }
+  let A = P(a), B = P(b); const t = trk[lab];
+  if (t) { A = { x: t.A.x+(A.x-t.A.x)*.5, y: t.A.y+(A.y-t.A.y)*.5 }; B = { x: t.B.x+(B.x-t.B.x)*.5, y: t.B.y+(B.y-t.B.y)*.5 }; }
+  trk[lab] = { A, B };
+  let r = await runEye(lab, A, B);
+  if (!r) { why += `${lab}: model score ${lastScore.toFixed(3)} < ${CONF} `; return null; }
+  if (REFINE) {
+    const p1 = unmap(r.M, ...r.k[J.idx.corner_left].slice(0,2)), p2 = unmap(r.M, ...r.k[J.idx.corner_right].slice(0,2));
+    const [A2, B2] = r.flip ? [p2, p1] : [p1, p2];
+    if (Math.abs(Math.hypot(B2.x-A2.x, B2.y-A2.y)/Math.hypot(B.x-A.x, B.y-A.y) - 1) < 0.3) {
+      const r2 = await runEye(lab, A2, B2); if (r2 && r2.score >= r.score*0.8) r = r2;
+    }
+  }
+  const rs = [r];                                               // test-time averaging: nudged crops, same eye
+  for (const v of VARS.slice(0, Math.max(0, TTA-1))) {
+    const rv = await runVariant(lab, r.A, r.B, v);
+    if (rv && rv.score >= r.score*0.8) rs.push(rv);
+  }
+  rs.forEach(x => x.ear = ear);
+  const offs = rs.map(x => eyeOff(x)), mean = k => offs.reduce((s,o) => s+o[k], 0)/offs.length;
+  return { lab, ox: mean('ox'), oy: mean('oy'), q: rs.reduce((s,x) => s+eyeQuality(x), 0)/rs.length, r, eyePx: r.w };
+}
+async function yoloGaze(lm, W, H) {
+  why = '';
+  const per = [];
+  for (const [lab, ids] of Object.entries(EYES)) { const e = await yoloEye(lab, ids, lm, W, H); if (e) per.push(e); }
+  if (!per.length) return null;
+  let use = per, note = per.length > 1 ? 'eyes agree' : 'one eye';
+  if (per.length === 2 && Math.abs(per[0].ox-per[1].ox) > DISAGREE) { use = [per[0].q >= per[1].q ? per[0] : per[1]]; note = 'DISAGREE -> ' + use[0].lab; }
+  const ws = use.map(p => Math.max(p.q, 1e-3)), sw = ws.reduce((a,b) => a+b, 0);
+  const avg = k => use.reduce((s,p,i) => s+p[k]*ws[i], 0)/sw;
+  return { ox: avg('ox'), oy: avg('oy'), eyePx: avg('eyePx'), per, note };
+}
+
+// ---------- eye crops (like the MediaPipe page): real camera pixels + the model's keypoints ----------
+const EYE_VIEW = { L: $('eyeL'), R: $('eyeR') };
+function drawEyeCrop(cv, e) {
+  const c = cv.getContext('2d');
+  c.fillStyle = '#000'; c.fillRect(0, 0, cv.width, cv.height);
+  if (!e) return;
+  const { A, B } = e.r;                                             // eye corners the model was run on
+  const cx = (A.x+B.x)/2, cy = (A.y+B.y)/2, w = Math.hypot(B.x-A.x, B.y-A.y);
+  const sw = w*1.8, sh = sw*0.6, sx = cx - sw/2, sy = cy - sh/2, k = cv.width/sw;   // same 5:3 shape as the canvas
+  c.imageSmoothingEnabled = false;                                  // show the true camera pixels
+  c.drawImage(video, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+  e.r.k.forEach((p, j) => {                                         // model keypoints (crop space) -> camera -> this canvas
+    if (p[2] < KCONF) return;
+    const q = unmap(e.r.M, p[0], p[1]);
+    c.fillStyle = `hsl(${j*27},90%,60%)`; c.beginPath(); c.arc((q.x-sx)*k, (q.y-sy)*k, 2.5, 0, 7); c.fill();
+  });
+}
+function showEyes(g, W, H) {
+  const lines = [`camera ${W}x${H} px`];
+  for (const [lab, cv] of Object.entries(EYE_VIEW)) {
+    const e = g && g.per.find(p => p.lab === lab);
+    drawEyeCrop(cv, e);
+    lines.push(e ? `${lab}: width ${e.eyePx.toFixed(0)} px  score ${e.r.score.toFixed(2)}  q ${e.q.toFixed(2)}${e.eyePx < 30 ? '  << too small' : e.eyePx < 45 ? '  (small)' : ''}`
+                 : `${lab}: not detected`);
+  }
+  pxEl.textContent = lines.join('\n');
+}
+
+// ---------- features: median filter -> adaptive smoothing -> head + distance normalisation ----------
+const med = GazeCore.med, hist = { ox: [], oy: [] };
+const sm = { init: false, t: 0 };
+const KEYS = ['ox','oy','yaw','pitch','roll','cx','cy','scale'];
+// 1 Euro filter: heavy smoothing while the eye is still (kills jitter), light smoothing while it moves (no lag)
+class OneEuro {
+  constructor() { this.x = null; this.dx = 0; this.t = 0; }
+  static a(c, dt) { return 1 / (1 + 1/(2*Math.PI*c)/dt); }
+  f(x, t, minC, beta) {
+    if (this.x === null) { this.x = x; this.t = t; return x; }
+    const dt = Math.max((t-this.t)/1000, 1e-3); this.t = t;
+    this.dx += OneEuro.a(1, dt) * ((x-this.x)/dt - this.dx);          // smoothed speed (eye-widths / s)
+    this.x += OneEuro.a(minC + beta*Math.abs(this.dx), dt) * (x-this.x);
+    return this.x;
+  }
+}
+const euro = { ox: new OneEuro(), oy: new OneEuro() };
+let minCut = 1.0, beta = 6;   // minCut: Hz while still (lower = steadier). beta: how fast the filter opens up when the eye moves
+function smooth(raw, eyePx, now) {
+  for (const k of ['ox','oy']) { hist[k].push(raw[k]); if (hist[k].length > 3) hist[k].shift(); raw[k] = med(hist[k]); }
+  if (!sm.init) { KEYS.forEach(k => sm[k] = raw[k]); sm.init = true; sm.t = now; }
+  const a = 1 - Math.exp(-(now-sm.t)/250); sm.t = now;                // head features: plain smoothing
+  KEYS.forEach(k => { if (k !== 'ox' && k !== 'oy') sm[k] += (raw[k]-sm[k])*a; });
+  const mc = minCut * Math.max(0.4, Math.min(1, eyePx/REF_EYE_PX));  // small/far eyes -> steadier
+  sm.ox = euro.ox.f(raw.ox, now, mc, beta); sm.oy = euro.oy.f(raw.oy, now, mc, beta);
+}
+let ratio = 1;
+function features() {
+  ratio = $('dist').checked ? Math.max(0.4, Math.min(2.5, SCALE_REF/sm.scale)) : 1;   // screen offset grows with distance
+  return { ox: (sm.ox - EYE_PER_RAD*sm.yaw)*ratio, oy: (sm.oy - EYE_PER_RAD*sm.pitch)*ratio,
+           yaw: sm.yaw, pitch: sm.pitch, roll: sm.roll, cx: sm.cx, cy: sm.cy, scale: sm.scale };
+}
+function clean(rows) {   // drop noisy samples per dot (outside ~4.5 MAD of that dot's median)
+  const out = [];
+  for (let s = 0; s < 9; s++) {
+    const r = rows.filter(x => x.spot === s); if (!r.length) continue;
+    const mx = med(r.map(x => x.ox)), my = med(r.map(x => x.oy));
+    const dx = 4.5*med(r.map(x => Math.abs(x.ox-mx))) + 0.004, dy = 4.5*med(r.map(x => Math.abs(x.oy-my))) + 0.004;
+    out.push(...r.filter(x => Math.abs(x.ox-mx) <= dx && Math.abs(x.oy-my) <= dy));
+  }
+  return out;
+}
+
+// ---------- 9-point calibration (fit / predict / leave-one-out from gaze-core.js) ----------
+const G = [0.08, 0.5, 0.92];
+const ORDER = [[G[1],G[1]], [G[0],G[0]], [G[2],G[0]], [G[2],G[2]], [G[0],G[2]], [G[1],G[0]], [G[2],G[1]], [G[1],G[2]], [G[0],G[1]]];
+// The dot only moves on once it has enough samples. A slow pipeline (few frames per second) used to
+// never reach MIN_SAMPLES in COLLECT ms, so the dot restarted on the same spot forever.
+const SETTLE = 700, COLLECT = 1000, COLLECT_MAX = 6000, MIN_SAMPLES = 8, MIN_HARD = 3;
+const cal = { active: false, i: 0, t0: 0, phase: '', samples: [], rows: [], fx: 0, fy: 0 };
+const models = { lin: null, quad: null }, errs = {};
+
+function beginDot() {
+  [cal.fx, cal.fy] = ORDER[cal.i];
+  dot.style.left = cal.fx*100 + '%'; dot.style.top = cal.fy*100 + '%';
+  cal.t0 = performance.now(); cal.phase = 'settle'; cal.samples = [];
+  calmsg.textContent = `Look at the dot and keep your head still  (${cal.i+1}/${ORDER.length})`;
+}
+function startCal() { if (!eyeModel) return; Object.assign(cal, { active: true, i: 0, rows: [] }); models.lin = models.quad = null; overlay.style.display = 'block'; beginDot(); }
+function finishCal() {
+  cal.active = false; overlay.style.display = 'none';
+  const rows = clean(cal.rows);
+  models.lin = GazeCore.fit(rows, false); models.quad = GazeCore.fit(rows, true);
+  errs.lin  = { train: GazeCore.trainErr(rows, models.lin),  loo: GazeCore.looErr(rows, false) };
+  errs.quad = { train: GazeCore.trainErr(rows, models.quad), loo: GazeCore.looErr(rows, true) };
+  errs.kept = rows.length + '/' + cal.rows.length;
+}
+setInterval(() => {
+  if (!cal.active) return;
+  const t = performance.now() - cal.t0;
+  if (cal.phase === 'settle' && t > SETTLE) { cal.phase = 'collect'; cal.t0 = performance.now(); cal.samples = []; return; }
+  if (cal.phase !== 'collect') return;
+  const n = cal.samples.length;
+  calDbg.textContent = `samples ${n}/${MIN_SAMPLES}  |  ${lastMs.toFixed(0)} ms per frame` + (why ? '  |  ' + why : '');
+  if ((t > COLLECT && n >= MIN_SAMPLES) || (t > COLLECT_MAX && n >= MIN_HARD)) {
+    cal.samples.forEach(s => cal.rows.push({ ...s, spot: cal.i, sx: cal.fx, sy: cal.fy }));
+    cal.i++; cal.i >= ORDER.length ? finishCal() : beginDot();
+  } else if (t > COLLECT_MAX) {                                   // still (almost) nothing: keep trying, say why
+    cal.t0 = performance.now(); cal.samples = [];
+  }
+}, 50);
+$('cal').onclick = startCal;
+$('st').oninput = e => { minCut = +e.target.value; $('stv').textContent = minCut; }; $('stv').textContent = minCut;
+$('be').oninput = e => { beta = +e.target.value; $('bev').textContent = beta; }; $('bev').textContent = beta;
+$('rf').onchange = e => { REFINE = e.target.checked; };
+$('tt').onchange = e => { TTA = e.target.checked ? 3 : 1; };
+
+let awaySince = 0, strikes = 0, lastStrike = 0, busy = false;
+let bx = innerWidth/2, by = innerHeight/2, tx = bx, ty = by;
+(function loop() { bx += (tx-bx)*.18; by += (ty-by)*.18; bubble.style.left = bx+'px'; bubble.style.top = by+'px'; requestAnimationFrame(loop); })();
+
+// ---------- MediaPipe: face, eye corners, head pose ----------
+const fm = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+fm.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: .55, minTrackingConfidence: .55 });  // refine: gaze-core reads iris landmarks for head features
+
+fm.onResults(async res => {
+  if (busy || !eyeModel) return;
+  busy = true;
+  try {
+    canvas.width = video.clientWidth; canvas.height = video.clientHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!res.multiFaceLandmarks?.length) { why = 'face not found'; if (!cal.active) hud.textContent = 'Face not found'; return; }
+    const lm = res.multiFaceLandmarks[0], W = video.videoWidth, H = video.videoHeight; if (!W) return;
+
+    const t0 = performance.now();
+    const g = await yoloGaze(lm, W, H); lastMs = performance.now() - t0;
+    showEyes(g, W, H);
+    if (!g) {
+      if (!cal.active) hud.textContent = `No eye result\n${why}\nbest model score ${lastScore.toFixed(3)} (needs >= ${CONF})\n${lastMs.toFixed(0)} ms\n${modelInfo}`;
+      return;
+    }
+
+    const sx = canvas.width/W, sy = canvas.height/H;
+    g.per.forEach(p => p.r.k.forEach((k, j) => {
+      if (k[2] < KCONF) return;
+      const q = unmap(p.r.M, k[0], k[1]);
+      ctx.fillStyle = `hsl(${j*27},90%,60%)`; ctx.beginPath(); ctx.arc(q.x*sx, q.y*sy, 2.5, 0, 7); ctx.fill();
+    }));
+
+    const h = GazeCore.extract(lm, W, H);   // yaw, pitch, roll, cx, cy, scale (its own ox/oy are ignored)
+    smooth({ ox: g.ox, oy: g.oy, yaw: h.yaw, pitch: h.pitch, roll: h.roll, cx: h.cx, cy: h.cy, scale: h.scale }, g.eyePx, performance.now());
+    const f = features();
+
+    if (cal.active) { if (cal.phase === 'collect') cal.samples.push(f); return; }
+    const model = $('quad').checked ? models.quad : models.lin;
+    if (!model) { hud.textContent = 'Press "Start 9-point calibration".'; return; }
+
+    const p = GazeCore.predict(model, f);
+    tx = Math.max(8, Math.min(innerWidth-8,  p.x*innerWidth));
+    ty = Math.max(8, Math.min(innerHeight-8, p.y*innerHeight));
+
+    const rect = card.getBoundingClientRect(), ins = .06;
+    const ok = tx >= rect.left+rect.width*ins && tx <= rect.right-rect.width*ins && ty >= rect.top+rect.height*ins && ty <= rect.bottom-rect.height*ins;
+    card.classList.toggle('alert', !ok); bubble.classList.toggle('alert', !ok);
+    if (!ok) {
+      if (!awaySince) awaySince = performance.now();
+      if (performance.now()-awaySince > 700 && performance.now()-lastStrike > 1200) { strikes++; lastStrike = performance.now(); }
+    } else awaySince = 0;
+
+    hud.textContent =
+`strikes: ${strikes}   model: ${model.quad ? 'quadratic' : 'linear'}   kept ${errs.kept}
+
+avg error in px (lower = better)
+              fit    leave-one-dot-out
+linear     ${errs.lin.train.toFixed(0).padStart(5)}    ${errs.lin.loo.toFixed(0).padStart(5)}
+quadratic  ${errs.quad.train.toFixed(0).padStart(5)}    ${errs.quad.loo.toFixed(0).padStart(5)}
+
+ox ${f.ox.toFixed(3)}  oy ${f.oy.toFixed(3)}  dist x${ratio.toFixed(2)}
+${g.per.map(e => `${e.lab} ox ${e.ox.toFixed(3)} oy ${e.oy.toFixed(3)} q ${e.q.toFixed(2)}`).join('\n')}
+eye ${g.eyePx.toFixed(0)}px | cam ${W}x${H} | crop ${S} x${TTA} | ${g.note} | ${lastMs.toFixed(0)} ms`;
+  } catch (e) { console.error(e); why = 'error: ' + e.message; hud.textContent = 'Error: ' + e.message; }
+  finally { busy = false; }
+});
+
+new Camera(video, { onFrame: async () => { await fm.send({ image: video }); }, width: CAM_W, height: CAM_H }).start();
+</script>
+</body>
+</html>
