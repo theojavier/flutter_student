@@ -63,6 +63,18 @@ class _TakeExamPageState extends State<TakeExamPage>
   bool _dialogOpen = false; // an error popup is showing
   String? _cameraError; // last camera test error (for the popup details)
 
+  void _clearStaleExamStorage() {
+    const sessionKeys = ['examStarted', 'is_unloading', 'gazeOnlineClicks'];
+    const localKeys = ['cheatingCount', 'cheatClipIndex', 'pendingCheatStill'];
+
+    for (final key in sessionKeys) {
+      web.window.sessionStorage.removeItem(key);
+    }
+    for (final key in localKeys) {
+      web.window.localStorage.removeItem(key);
+    }
+  }
+
   // Kept alive (NOT stopped) once the permission checks pass, so the
   // exam iframe can reuse the same streams instead of requesting them again.
   JSObject? _screenStream;
@@ -951,6 +963,10 @@ class _TakeExamPageState extends State<TakeExamPage>
                 }
                 return;
               }
+
+              // Start with clean per-attempt state while preserving exam/student
+              // identifiers, gaze calibration, and authentication storage.
+              _clearStaleExamStorage();
 
               // Make streams reachable by exam.html
               if (isPc && _screenStream != null) {

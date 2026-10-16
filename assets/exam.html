@@ -425,6 +425,17 @@
           sessionStorage.removeItem("is_unloading");
 
           const resultRef = getStudentDocRef(examId);
+          const resultSnap = await getDoc(resultRef);
+          const status = resultSnap.exists()
+            ? resultSnap.data().status
+            : null;
+          if (status === "completed" || status === "incomplete") {
+            window.parent.postMessage(
+              { action: "finishExam", examId },
+              "*",
+            );
+            return;
+          }
           await setDoc(resultRef, { status: "in-progress" }, { merge: true });
         } else {
           window.isReloadSession = false;
@@ -2665,7 +2676,7 @@
       let targetX = bubbleX,
         targetY = bubbleY;
       let lastBubbleT = performance.now();
-      const BUBBLE_TAU_MS = 90; // raise to 150 if still jumpy
+      const BUBBLE_TAU_MS = 200; // raise to 150 if still jumpy
       const SENSITIVITY = 10.4;
 
       function showCameraUnavailable() {
