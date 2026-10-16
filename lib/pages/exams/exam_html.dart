@@ -40,6 +40,21 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
         (nav.first as html.PerformanceNavigationTiming).type == 'reload';
   }
 
+  /// Navigates right away from a message sent by the exam.html iframe.
+  ///
+  /// Do NOT wrap this in WidgetsBinding.addPostFrameCallback: that callback
+  /// does not ask Flutter to draw a frame, it only runs after the next frame
+  /// that happens for some other reason. While the student is sitting on the
+  /// iframe, Flutter is idle (the iframe gets all the mouse/keyboard events),
+  /// so the callback can wait a very long time. context.go() itself schedules
+  /// the frame it needs.
+  void _goTo(String path) {
+    if (!mounted) return;
+    context.go(path);
+    // Belt and braces: make sure Flutter wakes up and draws the new page now.
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -95,15 +110,11 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
               if (_finishHandled) return;
               _finishHandled = true;
               final examId = '${data['examId'] ?? widget.examId}';
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) context.go('/exam-result/$examId');
-              });
+              _goTo('/exam-result/$examId');
             } else if (action == 'navigate') {
               final path = data['path'];
               if (path is String && path.isNotEmpty) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) context.go(path);
-                });
+                _goTo(path);
               }
             }
           });
@@ -191,9 +202,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
       final status = resultDoc.data()?['status'];
 
       if (status == 'completed') {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) context.go('/exam-result/${widget.examId}');
-        });
+        _goTo('/exam-result/${widget.examId}');
         return;
       }
 
