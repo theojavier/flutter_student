@@ -11,6 +11,8 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../helpers/SecureStorageHelper.dart';
 import 'package:flutter/foundation.dart';
+import 'package:super_overlay/super_overlay.dart';
+import '../../widgets/gaze_calibration_overlay.dart';
 
 class TakeExamPage extends StatefulWidget {
   final String examId;
@@ -43,6 +45,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   static const Color _successColor = Color(0xFF4ADE80);
   static const Color _errorColor = Color(0xFFF87171);
   static const Color _warnColor = Color(0xFFFBBF24);
+  OverlayHandle? calibrationHandle;
 
   // Button colors
   static const Color _btnStart = Color(0xFF3D8BFF);
@@ -72,7 +75,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     _loadStudentId();
   }
 
- @override
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     if (!_screenStreamHandedOff) {
@@ -83,6 +86,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     _cameraStream = null;
     super.dispose();
   }
+
   Future<void> _loadStudentId() async {
     final storedstudentId = await SecureStorageHelper.read('studentId');
     if (!mounted) return;
@@ -250,8 +254,11 @@ class _TakeExamPageState extends State<TakeExamPage>
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: _accentColor.withOpacity(0.4)),
                   ),
-                  child: const Icon(Icons.shield_outlined,
-                      size: 30, color: _accentColor),
+                  child: const Icon(
+                    Icons.shield_outlined,
+                    size: 30,
+                    color: _accentColor,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 const Text(
@@ -344,18 +351,25 @@ class _TakeExamPageState extends State<TakeExamPage>
         throw Exception("Screen sharing isn't supported in this browser.");
       }
 
-      final dynamic promise = js_util.callMethod(mediaDevices, 'getDisplayMedia', [
-        js_util.jsify({
-          'video': {'displaySurface': 'monitor'},
-          'audio': false,
-        }),
-      ]);
+      final dynamic promise = js_util.callMethod(
+        mediaDevices,
+        'getDisplayMedia',
+        [
+          js_util.jsify({
+            'video': {'displaySurface': 'monitor'},
+            'audio': false,
+          }),
+        ],
+      );
       final dynamic stream = await js_util.promiseToFuture(promise);
 
-      final dynamic videoTracks =
-          js_util.callMethod(stream, 'getVideoTracks', []);
-      final int trackCount =
-          (js_util.getProperty(videoTracks, 'length') as num).toInt();
+      final dynamic videoTracks = js_util.callMethod(
+        stream,
+        'getVideoTracks',
+        [],
+      );
+      final int trackCount = (js_util.getProperty(videoTracks, 'length') as num)
+          .toInt();
 
       String displaySurface = '';
       if (trackCount > 0) {
@@ -611,9 +625,11 @@ class _TakeExamPageState extends State<TakeExamPage>
 
           final data = snapshot.data!.data() as Map<String, dynamic>;
           final subject = data["subject"] ?? "Unknown";
-          start = widget.startMillis ??
+          start =
+              widget.startMillis ??
               data["startTime"]?.toDate().millisecondsSinceEpoch;
-          end = widget.endMillis ??
+          end =
+              widget.endMillis ??
               data["endTime"]?.toDate().millisecondsSinceEpoch;
 
           final teacher =
@@ -636,10 +652,7 @@ class _TakeExamPageState extends State<TakeExamPage>
           ];
 
           return _pageBody(
-            card: _detailsCard(
-              subject: subject.toString(),
-              rows: rows,
-            ),
+            card: _detailsCard(subject: subject.toString(), rows: rows),
             action: _buildExamAction(subject.toString(), uid),
           );
         },
@@ -748,7 +761,8 @@ class _TakeExamPageState extends State<TakeExamPage>
           label: "Start Exam",
           icon: Icons.play_arrow_rounded,
           color: _btnStart,
-          hint: "You'll be asked to share your full screen and allow your camera.",
+          hint:
+              "You'll be asked to share your full screen and allow your camera.",
           onPressed: () async {
             if (_starting) return;
             _starting = true;
@@ -801,13 +815,16 @@ class _TakeExamPageState extends State<TakeExamPage>
                 now.add(const Duration(minutes: 5)),
               );
 
-              final examDoc =
-                  await db.collection("exams").doc(widget.examId).get();
+              final examDoc = await db
+                  .collection("exams")
+                  .doc(widget.examId)
+                  .get();
               final examData = examDoc.data() ?? {};
               final examStart = examData["startTime"] as Timestamp?;
               final examEnd = examData["endTime"] as Timestamp?;
               final examSubject = examData["subject"] ?? subject;
-              final examTeacher = examData["creator"] ??
+              final examTeacher =
+                  examData["creator"] ??
                   examData["teacher"] ??
                   examData["createdBy"] ??
                   "Unknown";
@@ -818,33 +835,36 @@ class _TakeExamPageState extends State<TakeExamPage>
                   .collection("students")
                   .doc(uid)
                   .set({
-                "examId": widget.examId,
-                "uid": uid,
-                "studentId": studentId ?? uid,
-                "status": "in-progress",
-                "cheatingCount": 0,
-                "currentIndex": 0,
-                "subject": examSubject,
-                "teacher": examTeacher,
-                "startTime": examStart ?? startedAt,
-                "endTime": examEnd ?? monitoredAt,
-                "startedAt": startedAt,
-                "createdAt": startedAt,
-                "lastHeartbeatAt": startedAt,
-                "monitoringEnabled": true,
-                "monitoringStartedAt": startedAt,
-                "monitoringDeadlineAt": monitoredAt,
-                "updatedAt": startedAt,
-              }, SetOptions(merge: true));
+                    "examId": widget.examId,
+                    "uid": uid,
+                    "studentId": studentId ?? uid,
+                    "status": "in-progress",
+                    "cheatingCount": 0,
+                    "currentIndex": 0,
+                    "subject": examSubject,
+                    "teacher": examTeacher,
+                    "startTime": examStart ?? startedAt,
+                    "endTime": examEnd ?? monitoredAt,
+                    "startedAt": startedAt,
+                    "createdAt": startedAt,
+                    "lastHeartbeatAt": startedAt,
+                    "monitoringEnabled": true,
+                    "monitoringStartedAt": startedAt,
+                    "monitoringDeadlineAt": monitoredAt,
+                    "updatedAt": startedAt,
+                  }, SetOptions(merge: true));
 
               if (!mounted) return;
               _screenStreamHandedOff = true;
+
+              // Navigate to calibration page with examId in URL
               context.goNamed(
-                'examhtml',
+                'calibration',
                 pathParameters: {"examId": widget.examId},
+                extra: true, // Flag to indicate valid calibration session
               );
             } catch (e) {
-               _screenStreamHandedOff = false;
+              _screenStreamHandedOff = false;
               _stopJsStream(_screenStream);
               _screenStream = null;
               if (mounted) {
@@ -891,10 +911,9 @@ class _TakeExamPageState extends State<TakeExamPage>
       children: [
         Expanded(
           child: ScrollConfiguration(
-            behavior: ScrollConfiguration.of(context).copyWith(
-              scrollbars: false,
-              overscroll: false,
-            ),
+            behavior: ScrollConfiguration.of(
+              context,
+            ).copyWith(scrollbars: false, overscroll: false),
             child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -907,10 +926,7 @@ class _TakeExamPageState extends State<TakeExamPage>
             ),
           ),
         ),
-        if (action != null) ...[
-          const SizedBox(height: 10),
-          action,
-        ],
+        if (action != null) ...[const SizedBox(height: 10), action],
       ],
     );
   }
@@ -961,8 +977,11 @@ class _TakeExamPageState extends State<TakeExamPage>
                 color: _cardColor,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.fact_check_outlined,
-                  color: Colors.white, size: 18),
+              child: const Icon(
+                Icons.fact_check_outlined,
+                color: Colors.white,
+                size: 18,
+              ),
             ),
           ),
           const SizedBox(width: 10),
@@ -1011,10 +1030,10 @@ class _TakeExamPageState extends State<TakeExamPage>
     final Color color = s == "completed"
         ? _successColor
         : s == "in-progress"
-            ? _warnColor
-            : s == "incomplete"
-                ? _errorColor
-                : _accentColor;
+        ? _warnColor
+        : s == "incomplete"
+        ? _errorColor
+        : _accentColor;
     final label = status.isEmpty
         ? "—"
         : status[0].toUpperCase() + status.substring(1);
@@ -1259,8 +1278,9 @@ class _TakeExamPageState extends State<TakeExamPage>
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final double w =
-            (constraints.maxWidth * 0.25).clamp(120.0, 260.0).toDouble();
+        final double w = (constraints.maxWidth * 0.25)
+            .clamp(120.0, 260.0)
+            .toDouble();
 
         return Row(
           children: [
@@ -1329,10 +1349,7 @@ class _TakeExamPageState extends State<TakeExamPage>
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [
-              _cardColor.withOpacity(0.9),
-              _cardColor.withOpacity(0.55),
-            ],
+            colors: [_cardColor.withOpacity(0.9), _cardColor.withOpacity(0.55)],
           ),
           border: Border.all(color: Colors.white.withOpacity(0.06)),
         ),

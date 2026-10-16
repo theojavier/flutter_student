@@ -1,10 +1,10 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'package:go_router/go_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:html' show IFrameElement;
 // ignore: undefined_prefixed_name
@@ -29,6 +29,8 @@ class ExamHtmlPage extends StatefulWidget {
 class _ExamHtmlPageState extends State<ExamHtmlPage> {
   String? _resolvedStudentId;
   String? _authUid;
+  StreamSubscription<html.MessageEvent>? _msgSub;
+  bool _finishHandled = false;
 
   bool _isPageReload() {
     if (!kIsWeb) return false;
@@ -42,9 +44,9 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
   void initState() {
     super.initState();
 
-    // Lock the ResponsiveScaffold drawer/burger menu for as long as this
-    // page is on screen, regardless of which route got us here.
-    ExamLockState.isInExam.value = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ExamLockState.isInExam.value = true;
+    });
 
     _authUid = FirebaseAuth.instance.currentUser?.uid;
     if (_authUid == null) {
@@ -71,28 +73,21 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
               nav.isNotEmpty &&
               (nav.first as html.PerformanceNavigationTiming).type == "reload";
 
-          if (isReload)
+          if (isReload) {
             html.window.sessionStorage['isReloading'] = 'true';
-          else
+          } else {
             html.window.sessionStorage.remove('isReloading');
+          }
 
           WidgetsBinding.instance.addPostFrameCallback((_) {
             html.window.sessionStorage.remove('isReloading');
           });
 
-          html.window.onMessage.listen((event) {
-            if (!mounted) return; // prevent navigation after dispose
+          if (!mounted) return;
+          _msgSub?.cancel();
+          _msgSub = html.window.onMessage.listen((event) {
+            if (!mounted) return;
             final data = event.data;
-<<<<<<< Updated upstream
-            if (data is Map) {
-              final action = data['action'];
-              if (action == 'finishExam') {
-                final examId = data['examId'];
-                context.go('/exam-result/$examId');
-              } else if (action == 'navigate') {
-                final path = data['path'];
-                if (path is String && path.isNotEmpty) {
-=======
             if (data is! Map) return;
 
             final action = data['action'];
@@ -113,7 +108,6 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
               if (path is String && path.isNotEmpty) {
                 debugPrint('✅ navigate message received: $path');
                 if (mounted) {
->>>>>>> Stashed changes
                   context.go(path);
                 }
               }
@@ -150,6 +144,8 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     if (!examDoc.exists) return false;
 
     final examData = examDoc.data()!;
+    if (examData['monitoringEnabled'] != true) return false;
+
     final allowedProgram = examData['program'];
     final allowedYearBlock = examData['yearBlock'];
 
@@ -184,7 +180,6 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
     return true;
   }
-  
 
   Future<void> checkExamStatusAndNavigate() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -203,34 +198,11 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
         final status = resultDoc.data()?['status'];
         debugPrint('📊 Exam status check: $status');
 
-<<<<<<< Updated upstream
-      if (status == 'completed') {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) context.go('/exam-result/${widget.examId}');
-        });
-        return;
-      }
-
-      if (status == 'incomplete') {
-        final nav = html.window.performance.getEntriesByType('navigation');
-        final isReload = nav.isNotEmpty &&
-            (nav.first as html.PerformanceNavigationTiming).type == 'reload';
-
-        if (isReload) {
-          await resultRef.set(
-            {
-              'status': 'in-progress',
-              'updatedAt': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
-          );
-=======
         if (status == 'completed') {
           debugPrint('✅ Status is completed, navigating to result page');
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) context.go('/exam-result/${widget.examId}');
           });
->>>>>>> Stashed changes
           return;
         }
 
@@ -275,8 +247,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     final viewType = 'exam-html-view-$examId-$studentId';
     ui.platformViewRegistry.registerViewFactory(viewType, (int viewId) {
       final iframe = IFrameElement()
-        ..src =
-            '${html.window.location.origin}/assets/exam.html?examId=$examId'
+        ..src = '${html.window.location.origin}/assets/exam.html?examId=$examId'
         ..style.border = 'none'
         ..style.width = '100%'
         ..style.height = '100%'
@@ -305,7 +276,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
       }
       setState(() {});
       print(
-        "ExamHtmlPage updated iframe src for examId=${widget.examId}, studentId=${_resolvedStudentId}",
+        "ExamHtmlPage updated iframe src for examId=${widget.examId}, studentId=$_resolvedStudentId",
       );
     }
   }
@@ -328,6 +299,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
   @override
   void dispose() {
+    _msgSub?.cancel();
     final isReload = _isPageReload();
 
     if (kIsWeb && !isReload && _authUid != null && _resolvedStudentId != null) {
@@ -341,19 +313,16 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
         if (!mounted) return;
         if (doc.exists && doc.data()?['status'] == 'completed') return;
 
-        await resultRef.set(
-          {
-            'status': 'incomplete',
-            'submittedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
+        await resultRef.set({
+          'status': 'incomplete',
+          'submittedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
       });
     }
 
-    // Release the drawer lock as soon as this page leaves the tree, however
-    // that happens (exam finished, kicked back to /home, back button, etc).
-    ExamLockState.isInExam.value = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ExamLockState.isInExam.value = false;
+    });
     super.dispose();
   }
 

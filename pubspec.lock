@@ -898,6 +898,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
+  super_overlay:
+    dependency: "direct main"
+    description:
+      name: super_overlay
+      sha256: "16feb37ab45127df130bf4fedb0fde68556e5ba8599351ae615a0eb9bfc9d0b4"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.1"
   syncfusion_flutter_calendar:
     dependency: "direct main"
     description:

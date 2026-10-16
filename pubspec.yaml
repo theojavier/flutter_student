@@ -56,6 +56,7 @@ dependencies:
   tflite_web: ^0.4.0
   image: ^4.0.17
   pointer_interceptor: ^0.10.1
+  super_overlay: ^0.3.1
 
 
 dev_dependencies:
@@ -83,12 +84,6 @@ flutter:
   assets:
     - assets/image/
     - assets/exam.html
-<<<<<<< Updated upstream
-    - assets/exam.html
-    - assets/model_1024/best_int8.tflite
-    - assets/model_1024/best_dynamic.tflite
-    - assets/model_1024/best_dynamic_640.tflite
-=======
     - assets/gaze-calibration.html
     - assets/yolo-eye.js
     - assets/gaze-core.js
@@ -97,7 +92,6 @@ flutter:
     - assets/inference-worker.js
     - assets/model_1024/best_int8_640.tflite
     - assets/model_1024/best_fp32_640.tflite
->>>>>>> Stashed changes
     - assets/model_1024/best_w8a32_640.tflite
     - assets/model_1024/best_w8a16_640.tflite
     - assets/model_1024/eye_keypoint_names.json
