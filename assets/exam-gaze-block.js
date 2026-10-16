@@ -392,13 +392,6 @@ async function onResults(results) {
     raw = await YoloEye.extract(lm, W, H, videoElement); // lm = full MediaPipe landmarks array
   } catch (err) {
     console.error("YOLO extract failed:", err);
-    yoloBusy = false;
-    // If GPU device is lost, show error and stop processing
-    if (err.message && err.message.includes('GPU device lost')) {
-      alert('GPU error detected. Please reload the page to continue the exam.');
-      window.submitting = true; // Stop all processing
-      if (window.camera?.stop) window.camera.stop();
-    }
     return;
   } finally {
     yoloBusy = false;

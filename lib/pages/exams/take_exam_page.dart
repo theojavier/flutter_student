@@ -1,17 +1,17 @@
 import 'dart:async';
-import 'dart:html' as html;
-import 'dart:js_util' as js_util;
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
+import 'package:web/web.dart' as web;
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../helpers/SecureStorageHelper.dart';
 import 'package:flutter/foundation.dart';
-import 'package:super_overlay/super_overlay.dart';
 import '../../widgets/gaze_calibration_overlay.dart';
 
 class TakeExamPage extends StatefulWidget {
@@ -45,7 +45,6 @@ class _TakeExamPageState extends State<TakeExamPage>
   static const Color _successColor = Color(0xFF4ADE80);
   static const Color _errorColor = Color(0xFFF87171);
   static const Color _warnColor = Color(0xFFFBBF24);
-  OverlayHandle? calibrationHandle;
 
   // Button colors
   static const Color _btnStart = Color(0xFF3D8BFF);
@@ -57,6 +56,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   String? studentId;
   int? start;
   int? end;
+  bool _monitoringEnabled = false; // set from the exam document in build()
 
   bool _leftApp = false; // app went to background
   bool _starting = false; // Start Exam flow is running
@@ -65,18 +65,49 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   // Kept alive (NOT stopped) once the permission checks pass, so the
   // exam iframe can reuse the same streams instead of requesting them again.
-  dynamic _screenStream;
-  dynamic _cameraStream;
+  JSObject? _screenStream;
+  JSObject? _cameraStream;
   bool _screenStreamHandedOff = false;
+
+  // Realtime: streams are created ONCE. Creating them inside build() would
+  // resubscribe (and flash "Loading...") every time the page rebuilds.
+  late final Stream<DocumentSnapshot> _examStream = db
+      .collection("exams")
+      .doc(widget.examId)
+      .snapshots();
+  Stream<DocumentSnapshot>? _resultStream;
+
+  // Ticks once a second, but only rebuilds when the exam crosses a boundary
+  // (not started -> open -> ended).
+  Timer? _ticker;
+  int _lastPhase = -1;
+
+  /// 0 = not started yet, 1 = open, 2 = ended
+  int _computePhase() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (start != null && now < start!) return 0;
+    if (end != null && now > end!) return 2;
+    return 1;
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadStudentId();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      final phase = _computePhase();
+      if (phase != _lastPhase) {
+        _lastPhase = phase;
+        setState(() {}); // re-evaluates Not started / Start / Ended
+      }
+    });
   }
 
   @override
   void dispose() {
+    _ticker?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     if (!_screenStreamHandedOff) {
       _stopJsStream(_screenStream);
@@ -323,22 +354,22 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   // ---------- Screen share (whole screen only) ----------
 
-  /// Stops every track on a raw JS MediaStream obtained via js_util.
-  void _stopJsStream(dynamic stream) {
+  /// Stops every track on a raw JS MediaStream obtained via js_interop.
+  void _stopJsStream(JSObject? stream) {
     if (stream == null) return;
     try {
-      final dynamic tracks = js_util.callMethod(stream, 'getTracks', []);
-      final int len = (js_util.getProperty(tracks, 'length') as num).toInt();
+      final tracks = stream.callMethod<JSArray>('getTracks'.toJS);
+      final len = (tracks.getProperty('length'.toJS) as JSNumber).toDartInt;
       for (var i = 0; i < len; i++) {
-        final dynamic track = js_util.getProperty(tracks, '$i');
-        js_util.callMethod(track, 'stop', []);
+        final track = tracks.getProperty(i.toJS);
+        (track as JSObject).callMethod('stop'.toJS);
       }
     } catch (e) {
       debugPrint('Failed to stop a media stream: $e');
     }
   }
 
-  /// Calls navigator.mediaDevices.getDisplayMedia directly via js_util
+  /// Calls navigator.mediaDevices.getDisplayMedia directly via js_interop
   /// instead of dart:html's MediaDevices class, which doesn't expose that
   /// method. This still returns the browser's real, native MediaStream —
   /// which is exactly what lets us hand it to the exam.html iframe later
@@ -346,37 +377,31 @@ class _TakeExamPageState extends State<TakeExamPage>
   /// is what was causing the screen-share prompt to appear twice).
   Future<bool> _requestFullScreenShare() async {
     try {
-      final mediaDevices = html.window.navigator.mediaDevices;
+      final mediaDevices = web.window.navigator.mediaDevices;
+      // ignore: unnecessary_null_comparison
       if (mediaDevices == null) {
         throw Exception("Screen sharing isn't supported in this browser.");
       }
 
-      final dynamic promise = js_util.callMethod(
-        mediaDevices,
-        'getDisplayMedia',
-        [
-          js_util.jsify({
-            'video': {'displaySurface': 'monitor'},
-            'audio': false,
-          }),
-        ],
-      );
-      final dynamic stream = await js_util.promiseToFuture(promise);
+      final options = {
+        'video': {'displaySurface': 'monitor'},
+        'audio': false,
+      }.jsify();
 
-      final dynamic videoTracks = js_util.callMethod(
-        stream,
-        'getVideoTracks',
-        [],
-      );
-      final int trackCount = (js_util.getProperty(videoTracks, 'length') as num)
-          .toInt();
+      final promise = (mediaDevices as JSObject)
+          .callMethod<JSPromise<JSObject>>('getDisplayMedia'.toJS, options);
+      final stream = await promise.toDart;
+
+      final videoTracks = stream.callMethod<JSArray>('getVideoTracks'.toJS);
+      final trackCount =
+          (videoTracks.getProperty('length'.toJS) as JSNumber).toDartInt;
 
       String displaySurface = '';
       if (trackCount > 0) {
-        final dynamic track = js_util.getProperty(videoTracks, '0');
-        final dynamic settings = js_util.callMethod(track, 'getSettings', []);
-        displaySurface =
-            (js_util.getProperty(settings, 'displaySurface') as String?) ?? '';
+        final track = videoTracks.getProperty(0.toJS) as JSObject;
+        final settings = track.callMethod<JSObject>('getSettings'.toJS);
+        final surface = settings.getProperty('displaySurface'.toJS);
+        displaySurface = (surface as JSString?)?.toDart ?? '';
       }
 
       if (trackCount == 0 ||
@@ -406,103 +431,32 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   // ---------- Camera / permissions ----------
 
+  /// Only asks for camera permission (no preview, no waiting). The stream is
+  /// stopped right away so gaze calibration / exam.html can open the camera
+  /// themselves without hitting "camera already in use".
   Future<bool> _checkCameraAvailability() async {
     _cameraError = null;
     try {
       final devices = await navigator.mediaDevices.enumerateDevices();
       final hasVideoInput = devices.any((d) => d.kind == 'videoinput');
-      if (!hasVideoInput) return false;
+      if (!hasVideoInput) {
+        _cameraError = 'No camera was detected.';
+        return false;
+      }
 
-      // Single camera acquisition — this is the only place we call
-      // getUserMedia for the camera.
       final stream = await navigator.mediaDevices.getUserMedia({
         'video': true,
         'audio': false,
       });
 
-      final videoRenderer = RTCVideoRenderer();
-      await videoRenderer.initialize();
-      videoRenderer.srcObject = stream;
-
-      if (context.mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) {
-            Future.delayed(const Duration(seconds: 5), () {
-              if (ctx.mounted && Navigator.canPop(ctx)) {
-                Navigator.pop(ctx);
-              }
-            });
-
-            return AlertDialog(
-              backgroundColor: _cardColor,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: Colors.white.withOpacity(0.08)),
-              ),
-              title: const Text(
-                'Camera Test',
-                style: TextStyle(
-                  color: _textColor,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'Please look at the screen',
-                    style: TextStyle(color: _mutedTextColor),
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
-                    width: 240,
-                    height: 180,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: _accentColor.withOpacity(0.6),
-                        width: 2,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _accentColor.withOpacity(0.35),
-                          blurRadius: 14,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: RTCVideoView(videoRenderer, mirror: true),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      }
-
-      await Future.delayed(const Duration(seconds: 5));
-      _detectFace();
-
       stream.getTracks().forEach((t) => t.stop());
-      await videoRenderer.dispose();
-
+      await stream.dispose();
       return true;
     } catch (e) {
-      debugPrint("Camera test failed: $e");
+      debugPrint("Camera permission failed: $e");
       _cameraError = e.toString();
       return false;
     }
-  }
-
-  // Placeholder for future face detection logic
-  void _detectFace() {
-    //: implement face detection
   }
 
   //  Anti-tab-switch: warn (popup) when the student comes back after leaving
@@ -543,9 +497,16 @@ class _TakeExamPageState extends State<TakeExamPage>
       );
     }
 
+    _resultStream ??= db
+        .collection("examResults")
+        .doc(widget.examId)
+        .collection("students")
+        .doc(uid)
+        .snapshots();
+
     return _pageShell(
-      child: FutureBuilder<DocumentSnapshot>(
-        future: db.collection("exams").doc(widget.examId).get(),
+      child: StreamBuilder<DocumentSnapshot>(
+        stream: _examStream,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return _buildEmptyState(
@@ -560,12 +521,7 @@ class _TakeExamPageState extends State<TakeExamPage>
           }
           if (!snapshot.data!.exists) {
             return StreamBuilder<DocumentSnapshot>(
-              stream: db
-                  .collection("examResults")
-                  .doc(widget.examId)
-                  .collection("students")
-                  .doc(FirebaseAuth.instance.currentUser!.uid)
-                  .snapshots(),
+              stream: _resultStream,
               builder: (context, resultSnap) {
                 if (!resultSnap.hasData || !resultSnap.data!.exists) {
                   return _buildEmptyState(
@@ -626,11 +582,15 @@ class _TakeExamPageState extends State<TakeExamPage>
           final data = snapshot.data!.data() as Map<String, dynamic>;
           final subject = data["subject"] ?? "Unknown";
           start =
-              widget.startMillis ??
-              data["startTime"]?.toDate().millisecondsSinceEpoch;
+              data["startTime"]?.toDate().millisecondsSinceEpoch ??
+              widget.startMillis;
           end =
-              widget.endMillis ??
-              data["endTime"]?.toDate().millisecondsSinceEpoch;
+              data["endTime"]?.toDate().millisecondsSinceEpoch ??
+              widget.endMillis;
+          _lastPhase = _computePhase();
+
+          // Used by _buildExamAction to show the gray "Need monitoring" button
+          _monitoringEnabled = data["monitoringEnabled"] == true;
 
           final teacher =
               "${data["creator"] ?? data["teacher"] ?? data["createdBy"] ?? "Unknown"}";
@@ -753,10 +713,22 @@ class _TakeExamPageState extends State<TakeExamPage>
           );
         }
 
-        //  Start new attempt — single seamless flow: one framing popup,
-        //  then full-screen check, then camera check. Only when BOTH pass
-        //  do we write Firestore and navigate to exam.html. Any failure
-        //  keeps the student right here so they can retry.
+        // Monitoring not enabled by the instructor: gray, disabled button
+        if (!_monitoringEnabled) {
+          return _actionButton(
+            label: "Need monitoring",
+            icon: Icons.visibility_off_outlined,
+            color: Colors.grey,
+            hint:
+                "Your instructor must enable monitoring before you can start.",
+            onPressed: null,
+          );
+        }
+
+        //  Start new attempt — reordered flow: permission popup first,
+        //  then full-screen check, then camera permission (no preview),
+        //  then calibration runs last. Any failure keeps the student right
+        //  here so they can retry.
         return _actionButton(
           label: "Start Exam",
           icon: Icons.play_arrow_rounded,
@@ -768,19 +740,161 @@ class _TakeExamPageState extends State<TakeExamPage>
             _starting = true;
 
             try {
-              final agreed = await _showReadyDialog();
-              if (!agreed) return;
+              // Fetch exam document to check monitoring settings
+              final examDoc = await db
+                  .collection("exams")
+                  .doc(widget.examId)
+                  .get();
 
-              final screenOk = await _requestFullScreenShare();
-              if (!mounted || !screenOk) return; // popup already shown
+              if (!examDoc.exists) {
+                await _showErrorDialog(
+                  title: "Exam not found",
+                  message: "The exam document could not be found.",
+                );
+                return;
+              }
 
+              final examData = examDoc.data() ?? {};
+              final monitoringEnabled = examData["monitoringEnabled"] == true;
+              final isPc = examData["isPc"] != false; // default to true
+
+              // Backup check (the button is already gray if this is false)
+              if (!monitoringEnabled) {
+                await _showErrorDialog(
+                  title: "Monitoring Required",
+                  message:
+                      "This exam requires monitoring to be enabled by your instructor before you can start.",
+                  icon: Icons.lock_outline,
+                  color: _warnColor,
+                );
+                return;
+              }
+
+              // Step 1: framing popup (first thing the student sees)
+              final String dialogMessage = isPc
+                  ? "This exam needs two things from your browser:\n\n"
+                        "•  Full screen sharing (your ENTIRE screen, not a window or tab)\n"
+                        "•  Camera access, for monitoring\n\n"
+                        "You'll see two browser prompts next — please allow both. "
+                        "After that, a quick eye calibration will start."
+                  : "This exam needs camera access for monitoring.\n\n"
+                        "You'll see a browser prompt next — please allow it. "
+                        "After that, a quick eye calibration will start.";
+
+              final agreed = await showDialog<bool>(
+                context: context,
+                barrierDismissible: false,
+                builder: (ctx) {
+                  return Dialog(
+                    backgroundColor: Colors.transparent,
+                    insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 380),
+                      padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+                      decoration: BoxDecoration(
+                        color: _cardColor,
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: _accentColor.withOpacity(0.45),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.4),
+                            blurRadius: 24,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: _accentColor.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: _accentColor.withOpacity(0.4),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.shield_outlined,
+                              size: 30,
+                              color: _accentColor,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            "Before you begin",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: _textColor,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            dialogMessage,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: _mutedTextColor,
+                              fontSize: 13.5,
+                              height: 1.4,
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 44,
+                            child: ElevatedButton(
+                              onPressed: () => Navigator.of(ctx).pop(true),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _accentColor,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                textStyle: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              child: const Text("Continue"),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(false),
+                            child: const Text(
+                              "Cancel",
+                              style: TextStyle(color: _mutedTextColor),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+
+              if (agreed != true) return;
+
+              // Step 2: screen share (PC exams only)
+              if (isPc) {
+                final screenOk = await _requestFullScreenShare();
+                if (!mounted || !screenOk) return; // popup already shown
+              }
+
+              // Step 3: camera permission only (no preview)
               final cameraOk = await _checkCameraAvailability();
               if (!mounted) return;
               if (!cameraOk) {
-                // Screen was granted but camera wasn't — release the
-                // screen share since we're not proceeding.
-                _stopJsStream(_screenStream);
-                _screenStream = null;
+                if (isPc) {
+                  _stopJsStream(_screenStream);
+                  _screenStream = null;
+                }
                 await _showErrorDialog(
                   title: "Camera not available",
                   message:
@@ -791,20 +905,63 @@ class _TakeExamPageState extends State<TakeExamPage>
                 return;
               }
 
-              // Both confirmed — make the screen + camera streams reachable by
-              // exam.html so it can reuse the already-approved streams instead of
-              // opening a second permission flow.
-              if (_screenStream != null) {
-                js_util.setProperty(
-                  html.window,
-                  '__examScreenStream',
+              // Step 4: gaze calibration (runs AFTER permissions are granted)
+              bool closed = false;
+              final calibrationOk = await showDialog<bool>(
+                context: context,
+                barrierDismissible: false,
+                barrierColor: const Color(0xF00B1220),
+                useSafeArea: false,
+                builder: (ctx) {
+                  void close(bool ok) {
+                    if (closed) return;
+                    closed = true;
+                    if (ctx.mounted) Navigator.of(ctx).pop(ok);
+                  }
+
+                  return PopScope(
+                    canPop: false,
+                    child: Dialog.fullscreen(
+                      backgroundColor: Colors.transparent,
+                      child: GazeCalibrationOverlay(
+                        examId: widget.examId,
+                        onCalibrationComplete: () => close(true),
+                        onCalibrationFailed: () => close(false),
+                        onCalibrationCancelled: () => close(false),
+                      ),
+                    ),
+                  );
+                },
+              );
+
+              if (!mounted || calibrationOk != true) {
+                // Release the screen share so it doesn't keep running
+                if (isPc) {
+                  _stopJsStream(_screenStream);
+                  _screenStream = null;
+                }
+                if (mounted) {
+                  await _showErrorDialog(
+                    title: "Calibration Required",
+                    message:
+                        "Gaze calibration is required to take this exam. Please complete the calibration process to continue.",
+                    icon: Icons.visibility_off_outlined,
+                    color: _warnColor,
+                  );
+                }
+                return;
+              }
+
+              // Make streams reachable by exam.html
+              if (isPc && _screenStream != null) {
+                (web.window as JSObject).setProperty(
+                  '__examScreenStream'.toJS,
                   _screenStream,
                 );
               }
               if (_cameraStream != null) {
-                js_util.setProperty(
-                  html.window,
-                  '__examCameraStream',
+                (web.window as JSObject).setProperty(
+                  '__examCameraStream'.toJS,
                   _cameraStream,
                 );
               }
@@ -815,11 +972,6 @@ class _TakeExamPageState extends State<TakeExamPage>
                 now.add(const Duration(minutes: 5)),
               );
 
-              final examDoc = await db
-                  .collection("exams")
-                  .doc(widget.examId)
-                  .get();
-              final examData = examDoc.data() ?? {};
               final examStart = examData["startTime"] as Timestamp?;
               final examEnd = examData["endTime"] as Timestamp?;
               final examSubject = examData["subject"] ?? subject;
@@ -857,11 +1009,10 @@ class _TakeExamPageState extends State<TakeExamPage>
               if (!mounted) return;
               _screenStreamHandedOff = true;
 
-              // Navigate to calibration page with examId in URL
+              // Navigate to exam.html via shell route
               context.goNamed(
-                'calibration',
+                'exam',
                 pathParameters: {"examId": widget.examId},
-                extra: true, // Flag to indicate valid calibration session
               );
             } catch (e) {
               _screenStreamHandedOff = false;

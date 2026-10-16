@@ -24,6 +24,7 @@ const YoloEye = (() => {
     minCut: 0.5, // VERY LOW: maximum smoothing when still
     beta: 4, // VERY LOW: minimal reaction to noise
     boxSmoothing: 0.85, // MAXIMUM: very stable box
+    gpuRetries: 0, // 0 = go straight to CPU after GPU reset
   };
 
   const NK = 13, CONF = 0.05, KCONF = 0.30, DISAGREE = 0.10;
@@ -40,7 +41,23 @@ const YoloEye = (() => {
 
   let S = 128, J = null, eyeModel = null, LTensor = null, NHWC = false, V = null;
   let lastScore = 0, why = "", initPromise = null, error = null, info = "", usedAccel = "", lastGaze = null;
-  let deviceLost = false; // flag to stop all processing when GPU crashes
+  
+  // GPU-reset recovery state
+  let recovering = null;   // Promise while the model is being rebuilt
+  let gpuLosses = 0;
+  let failed = false;      // true only if even the CPU fallback could not load
+  let litert = null;       // LiteRT module, loaded once and reused
+
+  class GpuLost extends Error {}
+  const isGpuLoss = (e) => {
+    const m = String((e && e.message) || e || "");
+    return (
+      (m.includes("Device") && m.includes("lost")) ||
+      m.includes("mapAsync") ||
+      m.includes("DXGI") ||
+      (e && e.name === "OperationError")
+    );
+  };
 
   const cc = document.createElement("canvas");
   cc.width = cc.height = S;
@@ -53,18 +70,20 @@ const YoloEye = (() => {
   const shapeOf = (d) => (d && d.shape ? Array.from(d.shape) : null);
 
   // ---------- model loading ----------
-  async function load() {
-    const jr = await fetch(cfg.jsonUrl);
-    if (!jr.ok) throw new Error(`Could not load ${cfg.jsonUrl} (HTTP ${jr.status})`);
-    J = await jr.json();
-    S = J.imgsz || 128;
-    cc.width = cc.height = S;
+  async function getLiteRt() {
+    if (!litert) {
+      const m = await import(cfg.litertBase + "/+esm");
+      await m.loadLiteRt(cfg.litertBase + "/wasm/");
+      litert = m;
+    }
+    return litert;
+  }
 
-    const m = await import(cfg.litertBase + "/+esm");
-    await m.loadLiteRt(cfg.litertBase + "/wasm/");
-
+  // Compile the model with the first accelerator in `accels` that works.
+  async function compile(accels) {
+    const m = await getLiteRt();
     let lastErr = null;
-    for (const accel of cfg.accelerators) {
+    for (const accel of accels) {
       try {
         if (accel === "webgpu") {
           if (!navigator.gpu) throw new Error("WebGPU is unavailable");
@@ -73,14 +92,24 @@ const YoloEye = (() => {
         }
         eyeModel = await m.loadAndCompile(cfg.modelUrl, { accelerator: accel });
         usedAccel = accel;
-        break;
+        LTensor = m.Tensor;
+        return;
       } catch (e) {
         lastErr = e;
         console.warn(`YoloEye: ${accel} failed:`, e);
       }
     }
-    if (!eyeModel) throw lastErr || new Error("Eye model could not be loaded");
-    LTensor = m.Tensor;
+    throw lastErr || new Error("Eye model could not be loaded");
+  }
+
+  async function load() {
+    const jr = await fetch(cfg.jsonUrl);
+    if (!jr.ok) throw new Error(`Could not load ${cfg.jsonUrl} (HTTP ${jr.status})`);
+    J = await jr.json();
+    S = J.imgsz || 128;
+    cc.width = cc.height = S;
+
+    await compile(cfg.accelerators);
 
     info = `Eye model loaded (${usedAccel}).`;
     try {
@@ -95,6 +124,29 @@ const YoloEye = (() => {
       console.warn("YoloEye: could not read model details:", e);
     }
     console.log(info);
+  }
+
+  // Called when the GPU resets mid-exam: drop the dead model, rebuild in the background.
+  function handleGpuLoss(err) {
+    if (recovering) return;
+    gpuLosses++;
+    console.error(`YoloEye: GPU device lost (#${gpuLosses}), recovering…`, err);
+
+    const old = eyeModel;
+    eyeModel = null;
+    lastResult = null;
+    try { old?.delete?.(); } catch (_) {}
+    for (const k of Object.keys(trk)) delete trk[k];
+
+    const accels = gpuLosses <= cfg.gpuRetries ? cfg.accelerators : ["wasm"];
+    recovering = compile(accels)
+      .then(() => console.warn(`YoloEye: recovered on ${usedAccel} after GPU reset #${gpuLosses}.`))
+      .catch((e) => {
+        failed = true;
+        error = e;
+        console.error("YoloEye: recovery failed:", e);
+      })
+      .finally(() => { recovering = null; });
   }
 
   function init(opts = {}) {
@@ -133,25 +185,17 @@ const YoloEye = (() => {
     return t;
   }
   async function infer(t) {
-    if (deviceLost) throw new Error('GPU device lost - reload page to recover');
-    
+    if (!eyeModel) throw new GpuLost("model not available");
+
     const inp = new LTensor(t, NHWC ? [1, S, S, 3] : [1, 3, S, S]);
     let out, f;
     try {
       out = await eyeModel.run([inp]);
       f = Float32Array.from(await out[0].data());
     } catch (e) {
-      // GPU device lost - attempt to recover
-      if (e.message && (e.message.includes('Device') && e.message.includes('lost') || e.message.includes('mapAsync') || e.name === 'OperationError')) {
-        console.error('YoloEye: GPU device lost:', e);
-        deviceLost = true;
-        try { inp.delete(); } catch (_) {}
-        try { out && out.forEach((o) => o.delete()); } catch (_) {}
-        // Reset model and reinitialize
-        eyeModel = null;
-        initPromise = null;
-        error = new Error('GPU device lost - reload page to recover');
-        throw error;
+      if (usedAccel === "webgpu" && isGpuLoss(e)) {
+        handleGpuLoss(e);
+        throw new GpuLost("GPU device lost");
       }
       throw e;
     } finally {
@@ -257,26 +301,23 @@ const YoloEye = (() => {
   //  - eyePx is the eye width in camera pixels (used to smooth small/far eyes harder)
   //  - returns null when YOLO has no usable result (blink, low score, model not loaded yet, OR still processing previous frame)
   // Call it from ONE place at a time (use a busy flag in onResults) — it shares one crop canvas.
-  let lastResult = null; // cache last valid result for when we're busy
+  let lastResult = null;
   async function extract(lm, W, H, video) {
-    if (deviceLost) return null; // stop processing if GPU is dead
-    if (!eyeModel) return lastResult; // return cached result while model loads
-    if (busy) return lastResult; // skip frame if still processing previous one
-    
+    if (recovering || failed) return null; // rebuilding (or dead): skip frames quietly
+    if (!eyeModel) return lastResult;
+    if (busy) return lastResult;
+
     busy = true;
     try {
       V = video;
       const g = await yoloGaze(lm, W, H);
       lastGaze = g;
-      if (!g) return lastResult; // return cached result on failure
-      const h = GazeCore.extract(lm, W, H); // head pose + MediaPipe ear; its own ox/oy are ignored
+      if (!g) return lastResult;
+      const h = GazeCore.extract(lm, W, H);
       lastResult = { ear: h.ear, ox: g.ox, oy: g.oy, yaw: h.yaw, pitch: h.pitch, roll: h.roll, cx: h.cx, cy: h.cy, scale: h.scale, eyePx: g.eyePx };
       return lastResult;
     } catch (e) {
-      // If any error occurs, check if it's GPU-related
-      if (e.message && (e.message.includes('GPU device') || e.message.includes('mapAsync'))) {
-        deviceLost = true;
-      }
+      if (e instanceof GpuLost) return null; // recovery already started; just skip this frame
       throw e;
     } finally {
       busy = false;
@@ -362,5 +403,7 @@ const YoloEye = (() => {
     get why() { return why; },
     get lastGaze() { return lastGaze; },
     get accelerator() { return usedAccel; },
+    get status() { return failed ? "failed" : recovering ? "recovering" : eyeModel ? "ok" : "loading"; },
+    get gpuLosses() { return gpuLosses; },
   };
 })();
