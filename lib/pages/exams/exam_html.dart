@@ -83,6 +83,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
           html.window.onMessage.listen((event) {
             if (!mounted) return; // prevent navigation after dispose
             final data = event.data;
+<<<<<<< Updated upstream
             if (data is Map) {
               final action = data['action'];
               if (action == 'finishExam') {
@@ -91,6 +92,28 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
               } else if (action == 'navigate') {
                 final path = data['path'];
                 if (path is String && path.isNotEmpty) {
+=======
+            if (data is! Map) return;
+
+            final action = data['action'];
+            if (action == 'finishExam') {
+              if (_finishHandled) return;
+              _finishHandled = true;
+              final examId = '${data['examId'] ?? widget.examId}';
+              debugPrint(
+                '✅ finishExam message received, navigating to /exam-result/$examId',
+              );
+
+              // Navigate immediately without postFrameCallback to avoid delays
+              if (mounted) {
+                context.go('/exam-result/$examId');
+              }
+            } else if (action == 'navigate') {
+              final path = data['path'];
+              if (path is String && path.isNotEmpty) {
+                debugPrint('✅ navigate message received: $path');
+                if (mounted) {
+>>>>>>> Stashed changes
                   context.go(path);
                 }
               }
@@ -167,17 +190,20 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
-    final resultRef = FirebaseFirestore.instance
-        .collection("examResults")
-        .doc(widget.examId)
-        .collection("students")
-        .doc(uid);
+    try {
+      final resultRef = FirebaseFirestore.instance
+          .collection("examResults")
+          .doc(widget.examId)
+          .collection("students")
+          .doc(uid);
 
-    final resultDoc = await resultRef.get();
+      final resultDoc = await resultRef.get();
 
-    if (resultDoc.exists) {
-      final status = resultDoc.data()?['status'];
+      if (resultDoc.exists) {
+        final status = resultDoc.data()?['status'];
+        debugPrint('📊 Exam status check: $status');
 
+<<<<<<< Updated upstream
       if (status == 'completed') {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) context.go('/exam-result/${widget.examId}');
@@ -198,14 +224,44 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
             },
             SetOptions(merge: true),
           );
+=======
+        if (status == 'completed') {
+          debugPrint('✅ Status is completed, navigating to result page');
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) context.go('/exam-result/${widget.examId}');
+          });
+>>>>>>> Stashed changes
           return;
         }
 
-        // Do not force the user home just because a previous session stored
-        // "incomplete". That stale value is often created by a refresh or a
-        // forced page close. The exam should continue unless it was truly completed.
-        return;
+        if (status == 'incomplete') {
+          final nav = html.window.performance.getEntriesByType('navigation');
+          final isReload =
+              nav.isNotEmpty &&
+              (nav.first as html.PerformanceNavigationTiming).type == 'reload';
+
+          if (isReload) {
+            debugPrint(
+              '🔄 Page reload detected, updating status to in-progress',
+            );
+            await resultRef.set({
+              'status': 'in-progress',
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+            return;
+          }
+
+          // Do not force the user home just because a previous session stored
+          // "incomplete". That stale value is often created by a refresh or a
+          // forced page close. The exam should continue unless it was truly completed.
+          debugPrint('⚠️ Status is incomplete but not blocking (not a reload)');
+          return;
+        }
+      } else {
+        debugPrint('📝 No exam result document found yet');
       }
+    } catch (e) {
+      debugPrint('❌ Error checking exam status: $e');
     }
 
     return;

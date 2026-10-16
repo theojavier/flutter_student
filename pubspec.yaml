@@ -83,12 +83,24 @@ flutter:
   assets:
     - assets/image/
     - assets/exam.html
+<<<<<<< Updated upstream
     - assets/exam.html
     - assets/model_1024/best_int8.tflite
     - assets/model_1024/best_dynamic.tflite
     - assets/model_1024/best_dynamic_640.tflite
+=======
+    - assets/gaze-calibration.html
+    - assets/yolo-eye.js
+    - assets/gaze-core.js
+    - assets/gaze-calibration.js
+    - assets/exam-gaze-block.js
+    - assets/inference-worker.js
+    - assets/model_1024/best_int8_640.tflite
+    - assets/model_1024/best_fp32_640.tflite
+>>>>>>> Stashed changes
     - assets/model_1024/best_w8a32_640.tflite
-    - assets/model_1024/best_w8a16.tflite
+    - assets/model_1024/best_w8a16_640.tflite
+    - assets/model_1024/eye_keypoint_names.json
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
