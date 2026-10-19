@@ -465,6 +465,11 @@
         }
 
         const track = tracks[0];
+        if (track.readyState !== "live") {
+    console.warn("Received screen stream is no longer live.");
+    return false;
+  }
+
         const settings = track.getSettings?.() || {};
         const displaySurface = settings.displaySurface || "monitor";
         const allowed =

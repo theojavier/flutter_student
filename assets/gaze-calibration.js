@@ -32,11 +32,11 @@ const IS_MOBILE =
   matchMedia("(pointer: coarse)").matches ||
   /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-// The YOLO pipeline is slower than MediaPipe alone (several model runs per frame), so a dot
-// gets longer to collect. The dot moves on as soon as it has TARGET_SAMPLES, or at COLLECT_MAX.
+// Collect three-frame averaged readings per dot; move on after TARGET_SAMPLES or COLLECT_MAX.
 const SETTLE = 700;
 const COLLECT_MIN = 600, COLLECT_MAX = 6000;
-const TARGET_SAMPLES = 20, MIN_SAMPLES = 12; // INCREASED: collect more frames for averaging
+const FRAMES_PER_AVG = 3;
+const TARGET_SAMPLES = 8, MIN_SAMPLES = 5;
 const SMOOTH_TAU_MS = 250, BLINK_EAR = IS_MOBILE ? 0.09 : 0.14;
 const MAX_GAZE_MOVEMENT = IS_MOBILE ? 0.40 : 0.35; // VERY RELAXED: validate the AVERAGE, not individual frames
 const MAX_HEAD_MOVEMENT = IS_MOBILE ? 0.35 : 0.28; // VERY RELAXED: validate the AVERAGE
@@ -45,10 +45,10 @@ const CAM_W = IS_MOBILE ? 1280 : 1920, CAM_H = IS_MOBILE ? 720 : 1080;
 const maxTrainPx = () => Math.hypot(innerWidth, innerHeight) * (IS_MOBILE ? 0.22 : 0.15); // RELAXED: we're averaging multiple frames
 
 YoloEye.cfg.blinkEar = BLINK_EAR;
-const smooth = YoloEye.makeSmoother(SMOOTH_TAU_MS);
+const smooth = YoloEye.makeSmoother(SMOOTH_TAU_MS, 1);
 
 const cal = {
-  active: false, i: 0, t0: 0, phase: "", samples: [], rows: [],
+  active: false, i: 0, t0: 0, phase: "", samples: [], frameBuf: [], rows: [],
   fx: 0, fy: 0, invalidAttempts: 0, maxInvalidAttempts: 3,
   modelFails: 0, restartAll: false,
   baselineGaze: null, baselineHead: null, lastFeedback: "",
@@ -72,6 +72,15 @@ function clearFeedback() {
   cal.lastFeedback = "";
 }
 
+function avgFrames(frames) {
+  const out = {};
+  for (const k of Object.keys(frames[0])) {
+    if (typeof frames[0][k] === "number")
+      out[k] = frames.reduce((sum, frame) => sum + frame[k], 0) / frames.length;
+  }
+  return out;
+}
+
 function checkRealtimeMovement(s) {
   if (!cal.active || cal.phase !== "collect") return;
   if (!cal.baselineGaze) {
@@ -93,13 +102,13 @@ function checkRealtimeMovement(s) {
   else if (gazeDrift > MAX_GAZE_MOVEMENT * 0.7) showFeedback("⚠️ Keep looking at the dot!", "error");
   else if (headMove > MAX_HEAD_MOVEMENT * 0.4) showFeedback("Head moving - try to stay still", "warning");
   else if (gazeDrift > MAX_GAZE_MOVEMENT * 0.4) showFeedback("Eyes drifting - focus on the dot", "warning");
-  else if (cal.samples.length > 5) clearFeedback();
+  else if (cal.samples.length > 3) clearFeedback();
 }
 
 // ---------------- validation ----------------
 function validateSamples(samples) {
   if (samples.length < MIN_SAMPLES)
-    return { valid: false, reason: `Not enough eye-tracking frames (${samples.length} of ${MIN_SAMPLES}). Keep your face and eyes visible, then try again.` };
+    return { valid: false, reason: `Not enough averaged eye-tracking readings (${samples.length} of ${MIN_SAMPLES}). Keep your face and eyes visible, then try again.` };
 
   const gaze = Math.max(trimmedRange(samples.map((s) => s.ox)), trimmedRange(samples.map((s) => s.oy)));
   if (gaze > MAX_GAZE_MOVEMENT)
@@ -125,10 +134,14 @@ function cleanSamples(r) {
   return kept.length ? kept : r;
 }
 
-function validateFinalModel(rows, train) {
+function validateFinalModel(rows, train, accuracy) {
   const MAXPX = maxTrainPx();
   if (train > MAXPX)
     return { valid: false, reason: `Calibration accuracy too low!\nError: ${train.toFixed(0)}px (max acceptable: ${MAXPX.toFixed(0)}px)\n\nPlease look directly at each dot.` };
+
+  const MAXLOO = maxTrainPx();
+  if (accuracy > MAXLOO)
+    return { valid: false, reason: `Calibration accuracy too low!\nHeld-out-position error: ${accuracy.toFixed(0)}px (max acceptable: ${MAXLOO.toFixed(0)}px)\n\nPlease look directly at each dot.` };
 
   const unique = new Set(
     rows.filter((r) => r.stage === "still").map((r) => `${r.ox.toFixed(2)},${r.oy.toFixed(2)}`),
@@ -196,6 +209,7 @@ function beginDot() {
   cal.t0 = performance.now();
   cal.phase = "settle";
   cal.samples = [];
+  cal.frameBuf = [];
   cal.baselineGaze = null;
   cal.baselineHead = null;
   clearFeedback();
@@ -257,7 +271,7 @@ function finishCalibration() {
     `train lin ${errs.lin.train.toFixed(0)} / quad ${errs.quad.train.toFixed(0)}px | loo lin ${errs.lin.loo.toFixed(0)} / quad ${errs.quad.loo.toFixed(0)}px`,
   );
 
-  const check = validateFinalModel(rows, errs[best].train);
+  const check = validateFinalModel(rows, errs[best].train, errs[best].loo);
   if (!check.valid) {
     console.warn("❌ Final model rejected:", check.reason);
     failAttempt(check.reason, true);
@@ -298,6 +312,7 @@ setInterval(() => {
     cal.phase = "collect";
     cal.t0 = performance.now();
     cal.samples = [];
+    cal.frameBuf = [];
     dot.style.animationDuration = COLLECT_MAX + "ms";
     dot.classList.add("collecting");
   } else if (cal.phase === "collect") {
@@ -312,25 +327,17 @@ setInterval(() => {
         return;
       }
       
-      // AVERAGE all samples into ONE stable reading per dot
+      // Keep each cleaned three-frame average as a separate training row.
       const cleaned = cleanSamples(cal.samples);
-      const avg = {
-        ox: med(cleaned.map(s => s.ox)),
-        oy: med(cleaned.map(s => s.oy)),
-        yaw: med(cleaned.map(s => s.yaw)),
-        pitch: med(cleaned.map(s => s.pitch)),
-        roll: med(cleaned.map(s => s.roll)),
-        cx: med(cleaned.map(s => s.cx)),
-        cy: med(cleaned.map(s => s.cy)),
-        scale: med(cleaned.map(s => s.scale)),
-        spot: st.spot,
-        stage: "still",
-        sx: cal.fx,
-        sy: cal.fy
-      };
-      
-      // Push ONE averaged sample (not 20+ individual noisy frames)
-      cal.rows.push(avg);
+      for (const sample of cleaned) {
+        cal.rows.push({
+          ...sample,
+          spot: st.spot,
+          stage: "still",
+          sx: cal.fx,
+          sy: cal.fy,
+        });
+      }
       cal.invalidAttempts = 0;
       cal.i++;
       cal.i >= PLAN.length ? finishCalibration() : beginDot();
@@ -397,7 +404,11 @@ fm.onResults(async (res) => {
 
     if (cal.active && cal.phase === "collect") {
       checkRealtimeMovement(s);
-      cal.samples.push({ ...s });
+      cal.frameBuf.push({ ...s });
+      if (cal.frameBuf.length === FRAMES_PER_AVG) {
+        cal.samples.push(avgFrames(cal.frameBuf));
+        cal.frameBuf = [];
+      }
     }
   } catch (e) {
     console.error(e);

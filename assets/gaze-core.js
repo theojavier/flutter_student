@@ -43,8 +43,13 @@ const GazeCore = (() => {
   // the same screen spot, so the image-frame offset stays put. The old eye-axis
   // projection rotated with the head and dragged the bubble.)
   function eyeOffset(lm, e, W, H) {
-    const A = lm[e.a], B = lm[e.b], I = lm[e.iris];
-    const ax = A.x * W, ay = A.y * H, bx = B.x * W, by = B.y * H;
+    const A = lm[e.a],
+      B = lm[e.b],
+      I = lm[e.iris];
+    const ax = A.x * W,
+      ay = A.y * H,
+      bx = B.x * W,
+      by = B.y * H;
     const w = Math.hypot(bx - ax, by - ay) || 1;
     return {
       ox: (I.x * W - (ax + bx) / 2) / w,
@@ -61,7 +66,10 @@ const GazeCore = (() => {
   // where the face sits in the frame (cx, cy) and how big it is (scale ~ distance).
   function headFeatures(lm, W, H) {
     const P = (i) => [lm[i].x * W, lm[i].y * H, lm[i].z * W];
-    const L = P(234), R = P(454), T = P(10), C = P(152);
+    const L = P(234),
+      R = P(454),
+      T = P(10),
+      C = P(152);
     const xAxis = unit(sub(R, L));
     const yRaw = sub(C, T);
     const k = dot3(yRaw, xAxis);
@@ -159,12 +167,17 @@ const GazeCore = (() => {
   function fit(rows, quad) {
     const F = rows.map((r) => feats(r, quad));
     const wts = rows.map((r) => r.w ?? 1); // optional per-row weight
-    const k = F[0].length, n = wts.reduce((a, b) => a + b, 0), nEye = nEyeTerms(quad);
-    const mu = Array(k).fill(0), sd = Array(k).fill(1);
+    const k = F[0].length,
+      n = wts.reduce((a, b) => a + b, 0),
+      nEye = nEyeTerms(quad);
+    const mu = Array(k).fill(0),
+      sd = Array(k).fill(1);
     for (let j = 1; j < k; j++) {
       mu[j] = F.reduce((s, f, i) => s + wts[i] * f[j], 0) / n;
       sd[j] =
-        Math.sqrt(F.reduce((s, f, i) => s + wts[i] * (f[j] - mu[j]) ** 2, 0) / n) || 1;
+        Math.sqrt(
+          F.reduce((s, f, i) => s + wts[i] * (f[j] - mu[j]) ** 2, 0) / n,
+        ) || 1;
       if (j >= nEye) sd[j] = Math.max(sd[j], HEAD_SD_FLOOR[j - nEye]);
     }
     const Z = F.map((f) => f.map((v, j) => (j ? (v - mu[j]) / sd[j] : 1)));
@@ -185,15 +198,23 @@ const GazeCore = (() => {
     return { quad, mu, sd, wx: fitOne("sx"), wy: fitOne("sy") };
   }
 
-  function predict(m, s) {
-    const nEye = nEyeTerms(m.quad);
-    const z = feats(s, m.quad).map((v, j) => {
-      if (!j) return 1;
-      const t = (v - m.mu[j]) / m.sd[j];
-      return j >= nEye ? Math.max(-HEAD_CLAMP, Math.min(HEAD_CLAMP, t)) : t;
-    });
-    const d = (w) => z.reduce((s, v, j) => s + v * w[j], 0);
-    return { x: d(m.wx), y: d(m.wy) };
+  function predict(m, s, headGain = 1) {
+    const predictAxis = (axisModel, weights) => {
+      const nEye = nEyeTerms(axisModel.quad);
+      const z = feats(s, axisModel.quad).map((v, j) => {
+        if (!j) return 1;
+        const t = (v - axisModel.mu[j]) / axisModel.sd[j];
+        return j >= nEye
+          ? Math.max(-HEAD_CLAMP, Math.min(HEAD_CLAMP, t)) * headGain
+          : t;
+      });
+      return z.reduce((sum, v, j) => sum + v * weights[j], 0);
+    };
+    const yModel = m.yModel || m;
+    return {
+      x: predictAxis(m, m.wx),
+      y: predictAxis(yModel, yModel.wy),
+    };
   }
 
   // ---------- validation helpers ----------
@@ -201,17 +222,26 @@ const GazeCore = (() => {
     const p = predict(m, r);
     return Math.hypot((p.x - r.sx) * innerWidth, (p.y - r.sy) * innerHeight);
   };
-  const trainErr = (rows, m) => rows.reduce((s, r) => s + pxErr(r, m), 0) / rows.length;
+  const trainErr = (rows, m) =>
+    rows.reduce((s, r) => s + pxErr(r, m), 0) / rows.length;
 
   // leave-one-screen-position-out (still + head-move samples of a position leave together)
   function looErr(rows, quad) {
-    let sum = 0, n = 0;
+    let sum = 0,
+      n = 0;
     for (const s of new Set(rows.map((r) => r.spot))) {
-      const m = fit(rows.filter((r) => r.spot !== s), quad);
+      const m = fit(
+        rows.filter((r) => r.spot !== s),
+        quad,
+      );
       const test = rows.filter((r) => r.spot === s);
       const preds = test.map((r) => predict(m, r));
-      const x = med(preds.map((p) => p.x)), y = med(preds.map((p) => p.y));
-      sum += Math.hypot((x - test[0].sx) * innerWidth, (y - test[0].sy) * innerHeight);
+      const x = med(preds.map((p) => p.x)),
+        y = med(preds.map((p) => p.y));
+      sum += Math.hypot(
+        (x - test[0].sx) * innerWidth,
+        (y - test[0].sy) * innerHeight,
+      );
       n++;
     }
     return sum / n;
@@ -239,7 +269,8 @@ const GazeCore = (() => {
   // take the stable fixation window just before the click, and refit with the calibration rows.
   // Returns null if the saved calibration has no rows (old calibration).
   function createOnline(calData, opts = {}) {
-    if (!calData || !Array.isArray(calData.rows) || !calData.rows.length) return null;
+    if (!calData || !Array.isArray(calData.rows) || !calData.rows.length)
+      return null;
     const o = {
       winFromMs: 600, // use frames from 600ms ... 150ms before the click
       winToMs: 150,
@@ -248,22 +279,25 @@ const GazeCore = (() => {
       gatePx: Math.max(350, 3 * (calData.accuracy || 0)), // reject clicks far from what the model sees
       clickWeight: 4, // a clean averaged click ≈ 4 raw calibration frames
       maxClicks: 40, // keep the most recent N
-      minClicks: 5,
-      refitEvery: 5,
+      minClicks: 3,
+      refitEvery: 3,
+      xOnly: false,
       ...opts,
     };
     const quad = calData.best !== "lin";
     let model = quad ? calData.modelQuad : calData.modelLin;
     if (!model) return null;
+    const calibrationModel = model;
     const featureKeys = [...KEYS, ...HEAD_KEYS];
-    const base = calData.rows
-      .filter((r) =>
-        r &&
-        featureKeys.every((k) => Number.isFinite(r[k])) &&
-        Number.isFinite(r.sx) &&
-        Number.isFinite(r.sy),
-      )
-      .map((r) => ({ ...r, w: 10 })); // Calibration dots have weight 10 (was 1). Prevents clicks from overpowering edges after ~5 answers.
+    const baseRows = calData.rows
+      .filter(
+        (r) =>
+          r &&
+          featureKeys.every((k) => Number.isFinite(r[k])) &&
+          Number.isFinite(r.sx) &&
+          Number.isFinite(r.sy),
+      );
+    const base = baseRows.map((r) => ({ ...r, w: 90 / baseRows.length })); // Keep total calibration weight at 90 as row counts vary.
     if (!base.length) return null;
     const baseTrain = trainErr(base, model);
     let clicks = [];
@@ -277,13 +311,21 @@ const GazeCore = (() => {
 
     function refit(nextClicks = clicks) {
       const m = fit([...base, ...nextClicks], quad);
+      if (o.xOnly) {
+        m.yModel = {
+          quad: calibrationModel.quad,
+          mu: calibrationModel.mu,
+          sd: calibrationModel.sd,
+          wy: calibrationModel.wy,
+        };
+      }
       // safety: the new model must still explain the calibration dots reasonably
       if (trainErr(base, m) > 1.6 * baseTrain + 40) return false;
       model = m;
       return true;
     }
 
-    function addClick(x, y, now) {
+    function addClick(x, y, now, forceRefit = false) {
       if (
         !Number.isFinite(x) ||
         !Number.isFinite(y) ||
@@ -294,27 +336,45 @@ const GazeCore = (() => {
         x > innerWidth ||
         y < 0 ||
         y > innerHeight
-      ) return "invalid-click";
-      const frames = buf.filter((b) => now - b.t >= o.winToMs && now - b.t <= o.winFromMs);
+      )
+        return "invalid-click";
+      const frames = buf.filter(
+        (b) => now - b.t >= o.winToMs && now - b.t <= o.winFromMs,
+      );
       if (frames.length < o.minFrames) return "too-few-frames";
       const preds = frames.map((b) => predict(model, b.f));
       const px = preds.map((p) => p.x * innerWidth);
       const py = preds.map((p) => p.y * innerHeight);
-      if (range(px) > o.maxSpreadPx || range(py) > o.maxSpreadPx) return "unstable";
-      if (Math.hypot(med(px) - x, med(py) - y) > o.gatePx) return "outlier";
+      if (range(px) > o.maxSpreadPx || range(py) > o.maxSpreadPx)
+        return "unstable";
+      if (
+        o.xOnly
+          ? Math.abs(med(px) - x) > o.gatePx
+          : Math.hypot(med(px) - x, med(py) - y) > o.gatePx
+      )
+        return "outlier";
       const feat = {};
       KEYS.forEach((k) => (feat[k] = med(frames.map((b) => b.f[k]))));
       HEAD_KEYS.forEach((k) => (feat[k] = med(frames.map((b) => b.f[k]))));
+      const predictedY = predict(calibrationModel, feat).y;
       const nextClicks = [
         ...clicks,
-        { ...feat, sx: x / innerWidth, sy: y / innerHeight, spot: -1, w: o.clickWeight },
+        {
+          ...feat,
+          sx: x / innerWidth,
+          sy: o.xOnly ? predictedY : y / innerHeight,
+          spot: -1,
+          w: o.clickWeight,
+        },
       ].slice(-o.maxClicks);
       const nextAccepted = accepted + 1;
       if (
-        nextAccepted >= o.minClicks &&
-        nextAccepted % o.refitEvery === 0 &&
+        (forceRefit ||
+          (nextAccepted >= o.minClicks &&
+            nextAccepted % o.refitEvery === 0)) &&
         !refit(nextClicks)
-      ) return "refit-rejected";
+      )
+        return "refit-rejected";
       clicks = nextClicks;
       accepted = nextAccepted;
       return "ok";
@@ -328,20 +388,23 @@ const GazeCore = (() => {
       importClicks: (arr) => {
         const safeClicks = Array.isArray(arr)
           ? arr
-              .filter((r) =>
-                r &&
-                featureKeys.every((k) => Number.isFinite(r[k])) &&
-                Number.isFinite(r.sx) &&
-                Number.isFinite(r.sy) &&
-                r.sx >= 0 &&
-                r.sx <= 1 &&
-                r.sy >= 0 &&
-                r.sy <= 1,
+              .filter(
+                (r) =>
+                  r &&
+                  featureKeys.every((k) => Number.isFinite(r[k])) &&
+                  Number.isFinite(r.sx) &&
+                  Number.isFinite(r.sy) &&
+                  r.sx >= 0 &&
+                  r.sx <= 1 &&
+                  r.sy >= 0 &&
+                  r.sy <= 1,
               )
               .map((r) => ({
                 ...snapshot(r),
                 sx: r.sx,
-                sy: r.sy,
+                sy: o.xOnly
+                  ? predict(calibrationModel, r).y
+                  : r.sy,
                 spot: -1,
                 w: o.clickWeight,
               }))
@@ -361,7 +424,15 @@ const GazeCore = (() => {
   }
 
   return {
-    VERSION, extract, makeSmoother, fit, predict,
-    trainErr, looErr, loadCalibration, med, createOnline,
+    VERSION,
+    extract,
+    makeSmoother,
+    fit,
+    predict,
+    trainErr,
+    looErr,
+    loadCalibration,
+    med,
+    createOnline,
   };
 })();

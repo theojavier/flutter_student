@@ -146,12 +146,13 @@
       const CHEAT_GROUP_WINDOW_MS = 3000;
       const CHEAT_CLIP_MAX_BYTES = 2 * 1024 * 1024;
       const PENDING_STILL_KEY = "pendingCheatStill";
-      const webmParserPromise = import(
-        "https://cdn.jsdelivr.net/npm/@fix-webm-duration/parser@1.0.1/+esm"
-      ).catch((err) => {
-        console.error("Could not load WebM duration parser:", err);
-        return null;
-      });
+      const webmParserPromise =
+        import("https://cdn.jsdelivr.net/npm/@fix-webm-duration/parser@1.0.1/+esm").catch(
+          (err) => {
+            console.error("Could not load WebM duration parser:", err);
+            return null;
+          },
+        );
       let studentId;
       let answers = {};
       // Flag to track if DOMContentLoaded ran
@@ -254,9 +255,7 @@
           );
           if (ok) return;
           if (attempt < 3) {
-            await new Promise((resolve) =>
-              setTimeout(resolve, 1000 * attempt),
-            );
+            await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
           }
         }
 
@@ -367,7 +366,12 @@
       }
 
       async function sendExamHeartbeat() {
-        if (!window.examData?.examId || !window.authUid || window.examFinished || window.submitting)
+        if (
+          !window.examData?.examId ||
+          !window.authUid ||
+          window.examFinished ||
+          window.submitting
+        )
           return;
 
         try {
@@ -416,7 +420,9 @@
         try {
           await listenForExamDeviceMode(examId);
         } catch {
-          console.error("Exam startup stopped because device mode is unavailable.");
+          console.error(
+            "Exam startup stopped because device mode is unavailable.",
+          );
           return;
         }
 
@@ -426,14 +432,9 @@
 
           const resultRef = getStudentDocRef(examId);
           const resultSnap = await getDoc(resultRef);
-          const status = resultSnap.exists()
-            ? resultSnap.data().status
-            : null;
+          const status = resultSnap.exists() ? resultSnap.data().status : null;
           if (status === "completed" || status === "incomplete") {
-            window.parent.postMessage(
-              { action: "finishExam", examId },
-              "*",
-            );
+            window.parent.postMessage({ action: "finishExam", examId }, "*");
             return;
           }
           await setDoc(resultRef, { status: "in-progress" }, { merge: true });
@@ -656,9 +657,13 @@
             const ok = window.receiveScreenStream(parentStream);
             if (ok) {
               window.__inheritedParentScreen = true;
-              try {
-                window.parent.__examScreenStream = null;
-              } catch (_) {}
+              if (ok) {
+                window.__inheritedParentScreen = true;
+                // DELETE this line:
+                // try { window.parent.__examScreenStream = null; } catch (_) {}
+                console.log("Inherited screen-share stream from parent app.");
+                return true;
+              }
               console.log("Inherited screen-share stream from parent app.");
               return true;
             }
@@ -1233,8 +1238,17 @@
 
       window.reportProctorEvent = function (type, durationMs = 0) {
         const examId = window.examData?.examId;
-        if (!examId || !window.authUid || window.examFinished || window.submitting) return;
-        httpsCallable(functions, "reportProctorEvent")({
+        if (
+          !examId ||
+          !window.authUid ||
+          window.examFinished ||
+          window.submitting
+        )
+          return;
+        httpsCallable(
+          functions,
+          "reportProctorEvent",
+        )({
           examId,
           eventId: crypto.randomUUID(),
           type,
@@ -1246,7 +1260,8 @@
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
         return async function registerStrikeOnce() {
-          if (window.examFinished || window.hasSubmitted || window.submitting) return;
+          if (window.examFinished || window.hasSubmitted || window.submitting)
+            return;
           const now = Date.now();
           if (now - lastAway < 1200) return;
           lastAway = now;
@@ -1361,7 +1376,9 @@
         const confirmButton = document.getElementById("confirmYes");
         const t0 = performance.now();
         const lap = (label) =>
-          console.log(`[submit] ${label}: ${Math.round(performance.now() - t0)}ms`);
+          console.log(
+            `[submit] ${label}: ${Math.round(performance.now() - t0)}ms`,
+          );
 
         try {
           const examId = window.examData?.examId;
@@ -1388,7 +1405,7 @@
           window.submitting = true;
           window.allowStrikes = false;
           window.disableGazeDetection = true;
-          
+
           // CRITICAL: Stop camera and MediaPipe immediately to free up resources
           try {
             if (window.camera?.stop) {
@@ -1398,12 +1415,12 @@
           } catch (e) {
             console.warn("[submit] camera stop failed:", e);
           }
-          
+
           // Stop all video tracks
           try {
             const videoEl = document.getElementById("input_video");
             if (videoEl?.srcObject) {
-              videoEl.srcObject.getTracks().forEach(t => {
+              videoEl.srcObject.getTracks().forEach((t) => {
                 t.stop();
                 console.log("[submit] stopped track:", t.kind);
               });
@@ -1412,25 +1429,29 @@
           } catch (e) {
             console.warn("[submit] video track stop failed:", e);
           }
-          
+
           // Stop capture streams
-          [window.cameraCaptureStream, window.cheatCaptureStream].forEach((stream, idx) => {
-            try {
-              if (stream?.getTracks) {
-                stream.getTracks().forEach(t => t.stop());
-                console.log(`[submit] stopped capture stream ${idx}`);
+          [window.cameraCaptureStream, window.cheatCaptureStream].forEach(
+            (stream, idx) => {
+              try {
+                if (stream?.getTracks) {
+                  stream.getTracks().forEach((t) => t.stop());
+                  console.log(`[submit] stopped capture stream ${idx}`);
+                }
+              } catch (e) {
+                console.warn(`[submit] capture stream ${idx} stop failed:`, e);
               }
-            } catch (e) {
-              console.warn(`[submit] capture stream ${idx} stop failed:`, e);
-            }
-          });
+            },
+          );
           window.cameraCaptureStream = null;
           window.cheatCaptureStream = null;
-          
+
           stopExamHeartbeat();
           lap("proctoring paused, camera stopped");
 
-          const submitFn = httpsCallable(functions, "submitExam", { timeout: 20000 });
+          const submitFn = httpsCallable(functions, "submitExam", {
+            timeout: 20000,
+          });
           const RETRY = [
             "functions/deadline-exceeded",
             "functions/unavailable",
@@ -1444,7 +1465,9 @@
               lap(`callable ok (attempt ${attempt})`);
             } catch (err) {
               lastErr = err;
-              lap(`callable attempt ${attempt} failed: ${err.code || err.message}`);
+              lap(
+                `callable attempt ${attempt} failed: ${err.code || err.message}`,
+              );
               if (!RETRY.includes(err.code)) break;
             }
           }
@@ -1503,23 +1526,23 @@
 
         // Notify parent window or redirect
         console.log("📤 Sending finishExam message to parent window");
-        
+
         // Send message immediately AND after a short delay to ensure Flutter receives it
         const message = {
           action: "finishExam",
           examId: examId,
         };
-        
+
         if (window.parent && window.parent !== window) {
           window.parent.postMessage(message, "*");
           console.log("📤 First message sent");
-          
+
           // Send again after 100ms to ensure Flutter listener is ready
           setTimeout(() => {
             window.parent.postMessage(message, "*");
             console.log("📤 Retry message sent");
           }, 100);
-          
+
           // Send again after 500ms as final backup
           setTimeout(() => {
             window.parent.postMessage(message, "*");
@@ -1722,13 +1745,15 @@
 
       let currentQuestionIndex = 0;
       let submitWarmed = false;
-      
+
       function warmUpSubmit() {
         if (submitWarmed) return;
         submitWarmed = true;
-        httpsCallable(functions, "submitExam", { timeout: 15000 })({}).catch(() => {});
+        httpsCallable(functions, "submitExam", { timeout: 15000 })({}).catch(
+          () => {},
+        );
       }
-      
+
       function isQuestionAnswered(q) {
         const type = q.type?.toLowerCase();
 
@@ -2435,20 +2460,37 @@
 
       .gaze-bubble {
         position: fixed;
-        width: 18px;
-        height: 18px;
+        width: 56px; /* JS sets the live size */
+        height: 56px;
         border-radius: 50%;
-        background: rgba(30, 144, 255, 0.95);
-        box-shadow: 0 6px 14px rgba(30, 144, 255, 0.2);
+        background: rgba(30, 144, 255, 0.16);
+        border: 2px solid rgba(30, 144, 255, 0.55);
         pointer-events: none;
         transform: translate(-50%, -50%);
         z-index: 9999;
-        transition: box-shadow 0.12s;
+        transition:
+          background 0.12s,
+          border-color 0.12s;
+      }
+      /* small solid dot = the actual estimate, the big circle = how sure the model is */
+      .gaze-bubble::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 8px;
+        height: 8px;
+        margin: -4px 0 0 -4px;
+        border-radius: 50%;
+        background: rgba(30, 144, 255, 0.9);
       }
 
       .gaze-bubble.alert {
-        background: rgba(255, 107, 107, 0.95);
-        box-shadow: 0 8px 20px rgba(255, 107, 107, 0.25);
+        background: rgba(255, 107, 107, 0.16);
+        border-color: rgba(255, 107, 107, 0.65);
+      }
+      .gaze-bubble.alert::after {
+        background: rgba(255, 107, 107, 0.9);
       }
 
       .strike-indicator {
@@ -2500,7 +2542,7 @@
           <div id="examContentGate">
             <h2 style="text-align: center">Face verification required</h2>
             <p style="text-align: center">
-              Please look at the screen to start your exam.
+              Please look at the logo to start your exam.
             </p>
 
             <div
@@ -2675,6 +2717,8 @@
         bubbleY = window.innerHeight / 2;
       let targetX = bubbleX,
         targetY = bubbleY;
+      let bubbleR = 30,
+        targetR = 30;
       let lastBubbleT = performance.now();
       const BUBBLE_TAU_MS = 200; // raise to 150 if still jumpy
       const SENSITIVITY = 10.4;
@@ -2686,14 +2730,13 @@
           "Camera unavailable — try localhost or allow camera access.";
         faceIcon.textContent = "⚠";
       }
-
-      </script>
-      <script src="gaze-core.js"></script>
-      <script src="yolo-eye.js"></script>
-      <script src="exam-gaze-block.js"></script>
-      <script>
+    </script>
+    <script src="gaze-core.js"></script>
+    <script src="yolo-eye.js"></script>
+    <script src="exam-gaze-block.js"></script>
+    <script>
       const GATE_DELAY_MS = 5000;
-      const GATE_DEFAULT_TEXT = "Please look at the screen to start your exam.";
+      const GATE_DEFAULT_TEXT = "Please look at the logo to start your exam.";
       let gateTimer = null;
       let gateDeadline = 0;
 
@@ -2726,7 +2769,7 @@
           if (message) {
             message.textContent =
               secondsLeft > 0
-                ? `Face verified. Exam starts in ${secondsLeft}s. Keep looking at the screen.`
+                ? `Face verified. Exam starts in ${secondsLeft}s. Keep looking at the logo.`
                 : GATE_DEFAULT_TEXT;
           }
           if (secondsLeft === 0) openExamFromGate();
@@ -2782,6 +2825,12 @@
         const a = 1 - Math.exp(-dt / BUBBLE_TAU_MS);
         bubbleX += (targetX - bubbleX) * a;
         bubbleY += (targetY - bubbleY) * a;
+        // grows fast when the model gets unsure, shrinks slowly so it doesn't pulse every frame
+        const ar = 1 - Math.exp(-dt / (targetR > bubbleR ? 120 : 450));
+        bubbleR += (targetR - bubbleR) * ar;
+        const d = `${bubbleR * 2}px`;
+        gazeBubble.style.width = d;
+        gazeBubble.style.height = d;
         gazeBubble.style.left = `${bubbleX}px`;
         gazeBubble.style.top = `${bubbleY}px`;
       }
@@ -2800,10 +2849,10 @@
           // Wait for YOLO to initialize first - THIS IS CRITICAL!
           await YoloEye.init();
           console.log("YOLO eye model ready, starting camera...");
-          
+
           // Load calibration to get camera resolution
           const calData = GazeCore.loadCalibration();
-          
+
           camera = new Camera(videoElement, {
             onFrame: async () => {
               if (window.submitting) return;
