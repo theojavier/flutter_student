@@ -133,11 +133,23 @@ const GazeCore = (() => {
 
   // ---------- model: quadratic (or linear) in the eye, linear in the head ----------
   const nEyeTerms = (quad) => (quad ? 6 : 3);
-  function feats(s, quad) {
-    const eye = quad
-      ? [1, s.ox, s.oy, s.ox * s.ox, s.oy * s.oy, s.ox * s.oy]
-      : [1, s.ox, s.oy];
-    return eye.concat(HEAD_KEYS.map((k) => s[k]));
+  function feats(s, quad, rng) {
+    const head = HEAD_KEYS.map((k) => s[k]);
+    if (!quad) return [1, s.ox, s.oy].concat(head);
+
+    let xx = s.ox * s.ox,
+      yy = s.oy * s.oy,
+      xy = s.ox * s.oy;
+    if (rng) {
+      const cx = Math.max(rng.ox[0], Math.min(rng.ox[1], s.ox));
+      const cy = Math.max(rng.oy[0], Math.min(rng.oy[1], s.oy));
+      const dx = s.ox - cx,
+        dy = s.oy - cy;
+      xx = cx * cx + 2 * cx * dx;
+      yy = cy * cy + 2 * cy * dy;
+      xy = cx * cy + cy * dx + cx * dy;
+    }
+    return [1, s.ox, s.oy, xx, yy, xy].concat(head);
   }
 
   function solve(A, b) {
@@ -195,13 +207,26 @@ const GazeCore = (() => {
       for (let p = 1; p < k; p++) A[p][p] += lambda(p);
       return solve(A, b);
     };
-    return { quad, mu, sd, wx: fitOne("sx"), wy: fitOne("sy") };
+    const rngOf = (key) => {
+      const values = rows.map((r) => r[key]).filter(Number.isFinite);
+      return values.length
+        ? [Math.min(...values), Math.max(...values)]
+        : [0, 0];
+    };
+    return {
+      quad,
+      mu,
+      sd,
+      wx: fitOne("sx"),
+      wy: fitOne("sy"),
+      rng: { ox: rngOf("ox"), oy: rngOf("oy") },
+    };
   }
 
   function predict(m, s, headGain = 1) {
     const predictAxis = (axisModel, weights) => {
       const nEye = nEyeTerms(axisModel.quad);
-      const z = feats(s, axisModel.quad).map((v, j) => {
+      const z = feats(s, axisModel.quad, axisModel.rng).map((v, j) => {
         if (!j) return 1;
         const t = (v - axisModel.mu[j]) / axisModel.sd[j];
         return j >= nEye
@@ -317,6 +342,7 @@ const GazeCore = (() => {
           mu: calibrationModel.mu,
           sd: calibrationModel.sd,
           wy: calibrationModel.wy,
+          rng: calibrationModel.rng,
         };
       }
       // safety: the new model must still explain the calibration dots reasonably

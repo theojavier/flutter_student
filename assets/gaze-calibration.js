@@ -251,6 +251,7 @@ function compactRows(rows, perSpot = 10) {
   return out;
 }
 
+
 function finishCalibration() {
   const rows = cal.rows;
   const still = rows.filter((r) => r.stage === "still");
@@ -266,7 +267,12 @@ function finishCalibration() {
     lin: { train: GazeCore.trainErr(rows, modelLin), loo: GazeCore.looErr(rows, false) },
     quad: { train: GazeCore.trainErr(rows, modelQuad), loo: GazeCore.looErr(rows, true) },
   };
-  const best = errs.quad.loo <= errs.lin.loo ? "quad" : "lin";
+  const best =
+    IS_MOBILE && errs.lin.loo <= errs.quad.loo * 1.15
+      ? "lin"
+      : errs.quad.loo <= errs.lin.loo
+        ? "quad"
+        : "lin";
   console.log(
     `train lin ${errs.lin.train.toFixed(0)} / quad ${errs.quad.train.toFixed(0)}px | loo lin ${errs.lin.loo.toFixed(0)} / quad ${errs.quad.loo.toFixed(0)}px`,
   );

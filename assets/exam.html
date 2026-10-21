@@ -570,13 +570,9 @@
           return true;
         }
 
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        if (!navigator.mediaDevices?.getUserMedia && !window.cameraCaptureStream?.active) {
           console.warn("Camera capture is not supported in this browser.");
           return false;
-        }
-
-        if (window.cameraCaptureStream && window.cameraCaptureStream.active) {
-          return true;
         }
 
         try {

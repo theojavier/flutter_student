@@ -31,6 +31,30 @@ faceMesh.setOptions({
 });
 
 const calData = GazeCore.loadCalibration(); // null if missing or from an older version
+const featureRange = (key) => {
+  const values = (calData?.rows || [])
+    .map((row) => row[key])
+    .filter(Number.isFinite);
+  return values.length ? [Math.min(...values), Math.max(...values)] : null;
+};
+const eyeRange = { ox: featureRange("ox"), oy: featureRange("oy") };
+const OUT_MARGIN = 0.5;
+const limitToCalibratedRange = (value, range) => {
+  if (!range) return value;
+  const margin = (range[1] - range[0]) * OUT_MARGIN;
+  return Math.max(range[0] - margin, Math.min(range[1] + margin, value));
+};
+const outsideCalibratedRange = (value, range) => {
+  if (!range) return false;
+  const margin = (range[1] - range[0]) * OUT_MARGIN;
+  return value < range[0] - margin || value > range[1] + margin;
+};
+if (calData) {
+  for (const savedModel of [calData.modelLin, calData.modelQuad]) {
+    if (savedModel && !savedModel.rng && eyeRange.ox && eyeRange.oy)
+      savedModel.rng = eyeRange;
+  }
+}
 let model = calData ? (calData.best === "lin" ? calData.modelLin : calData.modelQuad) : null;
 const headBase = calData?.headBase || { yaw: 0, pitch: 0, roll: 0 };
 
@@ -51,7 +75,6 @@ YoloEye.cfg.disagree = 0.2;      // was 0.10 - average both eyes more often (les
 const smoothGaze = YoloEye.makeSmoother(250, 2);
 const yoloReady = () => (typeof YoloEye.isReady === "function" ? YoloEye.isReady() : !!YoloEye.ready);
 let yoloBusy = false; // the YOLO step is slower than a camera frame: don't let frames pile up
-let camWarned = false;
 // ---------------------------------------------------------------------------- PART 1
 const HEAD_GAIN = 0.05;        // 0 = head pose never moves the dot, 1 = the full calibrated head terms
 const GAZE_BIAS_X = -0.03;     // negative shifts predicted gaze left by 3% of viewport width
@@ -691,14 +714,6 @@ async function onResults(results) {
   const W = videoElement.videoWidth, H = videoElement.videoHeight;
   if (!W || !H) return;
 
-  if (!camWarned && calData?.camera && (calData.camera.w !== W || calData.camera.h !== H)) {
-    camWarned = true;
-    console.warn(
-      `Exam camera is ${W}x${H} but calibration used ${calData.camera.w}x${calData.camera.h}. ` +
-        "Use the same camera size in exam.html and gaze-calibration.js, then recalibrate.",
-    );
-  }
-
   // (3) Blink handling with a time limit.
   // Uses MediaPipe's eye-aspect-ratio, NOT the YOLO result: YoloEye.extract returns null when the
   // eyes are closed, which would silently skip this check and give a free pass for closed eyes.
@@ -753,7 +768,15 @@ async function onResults(results) {
   if (online) online.push(f, tNow); // feed the click-learning buffer
  
   // Screen estimate. HEAD_GAIN < 1 keeps the head terms from dragging the dot around.
-  const p = GazeCore.predict(model, f, HEAD_GAIN);
+  const p = GazeCore.predict(
+    model,
+    {
+      ...f,
+      ox: limitToCalibratedRange(f.ox, eyeRange.ox),
+      oy: limitToCalibratedRange(f.oy, eyeRange.oy),
+    },
+    HEAD_GAIN,
+  );
   const estimateX = p.x * window.innerWidth + biasX;
   const rawEstimateY = p.y * window.innerHeight + biasY;
   const estimateY = filterYBlips(rawEstimateY, tNow);
@@ -798,7 +821,11 @@ async function onResults(results) {
   const headOk =
     Math.abs(f.yaw - headBase.yaw) < HEAD_LIMIT_RAD &&
     Math.abs(f.pitch - headBase.pitch) < HEAD_LIMIT_RAD;
-  const gazeOk = bubbleOk && headOk;
+  const gazeOk =
+    bubbleOk &&
+    headOk &&
+    !outsideCalibratedRange(f.ox, eyeRange.ox) &&
+    !outsideCalibratedRange(f.oy, eyeRange.oy);
   gazeWasOk = gazeOk;
 
   if (!window.examStarted) {
