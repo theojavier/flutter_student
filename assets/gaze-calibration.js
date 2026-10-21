@@ -250,10 +250,98 @@ function compactRows(rows, perSpot = 10) {
   }
   return out;
 }
+// ---------------- geometry sanity check ----------------
+// Starting guesses for an "average PC". Tune them from the console log (see below).
+const GEOM_ENFORCE = true;
+const GEOM_DEBUG = true;                 // false = log only, never block
+const EYE_PER_RAD_X = IS_MOBILE ? 0.16 : 0.4;   // phones: tiny iris movement
+const EYE_PER_RAD_Y = IS_MOBILE ? 0.08 : 0.3;
+const FACE_W_CM = 14.5;
+const LONG_SIDE_FOV_DEG = IS_MOBILE ? 70 : 65;  // FOV along the camera frame's LONG side
+const NOISE_X = IS_MOBILE ? 0.012 : 0.003;      // keypoint noise floor (eye-widths)
+const NOISE_Y = IS_MOBILE ? 0.012 : 0.003;
+const CSS_PX_PER_CM = IS_MOBILE ? 55 : 40; 
+const OVER = IS_MOBILE ? 1.8 : 1.5;        // block if span > OVER × expected  (looked outside screen)
+const TOL_X = IS_MOBILE ? 1.0 : 0.8;
+const TOL_Y = IS_MOBILE ? 1.0 : 1.3;
+const UNDER = IS_MOBILE ? 0.25 : 0.3;     // allowed deviation of each dot from its ideal position
+const DOT_NAMES = ["center", "top-left", "top-right", "bottom-right", "bottom-left",
+                   "top", "right", "bottom", "left"];
 
+function validateGeometry(rows) {
+  const by = [];
+  for (let s = 0; s < ORDER.length; s++) {
+    const r = rows.filter((x) => x.spot === s);
+    if (!r.length) return { valid: false, reason: "Missing data for a calibration dot. Please try again." };
+    by[s] = { ox: med(r.map((x) => x.ox)), oy: med(r.map((x) => x.oy)) };
+  }
+  const mean = (idx, k) => idx.reduce((a, s) => a + by[s][k], 0) / idx.length;
+  // signed half-spans of the eye offset across the screen (sign depends on camera mirroring)
+  const hx = (mean([2, 3, 6], "ox") - mean([1, 4, 8], "ox")) / 2; // right - left
+  const hy = (mean([3, 4, 7], "oy") - mean([1, 2, 5], "oy")) / 2; // bottom - top
+
+  // ---- expected span from an average PC ----
+  const scale = med(rows.map((r) => r.scale));
+const aspect = Math.min(1, video.videoWidth / video.videoHeight); // portrait frame => narrower width FOV
+const tanHalf = Math.tan((LONG_SIDE_FOV_DEG * Math.PI) / 360) * aspect;
+const distCm = FACE_W_CM / (2 * scale * tanHalf);
+  const edge = G[2] - G[1]; // centre dot -> edge dot, as a fraction of the screen
+  const expX = EYE_PER_RAD_X * Math.atan((edge * innerWidth / CSS_PX_PER_CM) / distCm);
+  const expY = EYE_PER_RAD_Y * Math.atan((edge * innerHeight / CSS_PX_PER_CM) / distCm);
+
+  // ---- template: where each dot should sit relative to the centre dot ----
+  const dbg = [];
+  const bad = [];
+   if (Math.abs(hx) > 1e-3 && Math.abs(hy) > 1e-3) {
+    const scaleX = Math.max(Math.abs(hx), expX), scaleY = Math.max(Math.abs(hy), expY);
+    for (let s = 1; s < ORDER.length; s++) {
+      const ix = (ORDER[s][0] - G[1]) / edge, iy = (ORDER[s][1] - G[1]) / edge; // -1, 0 or +1
+      const dX = by[s].ox - by[0].ox, dY = by[s].oy - by[0].oy;
+      const devX = Math.abs(dX - ix * hx), devY = Math.abs(dY - iy * hy);     // absolute deviation
+      const nx = dX / hx, ny = dY / hy;
+      dbg.push(`${DOT_NAMES[s]}: nx ${nx.toFixed(2)} (ideal ${ix.toFixed(0)}), ny ${ny.toFixed(2)} (ideal ${iy.toFixed(0)})`);
+      if (devX > TOL_X * scaleX + NOISE_X || devY > TOL_Y * scaleY + NOISE_Y) {
+        const reach = Math.hypot(nx, ny), ideal = Math.hypot(ix, iy) || 0.5;
+        bad.push({ s, why: reach > ideal ? "too far (past the screen?)" : "not far enough / wrong direction" });
+      }
+    }
+  }
+    console.log("dots:\n" + dbg.join("\n"));
+  console.log(
+    `geometry: dist≈${distCm.toFixed(0)}cm | hx ${hx.toFixed(3)} (expected ${expX.toFixed(3)}) | ` +
+    `hy ${hy.toFixed(3)} (expected ${expY.toFixed(3)}) | bad dots: ${bad.map((b) => DOT_NAMES[b.s]).join(", ") || "none"}`);
+  if (!GEOM_ENFORCE) return { valid: true };
+
+  const rx = Math.abs(hx) / expX, ry = Math.abs(hy) / expY; // measured ÷ expected
+  const info = GEOM_DEBUG
+    ? `\n\n[geometry: dist≈${distCm.toFixed(0)}cm | ` +
+      `hx ${hx.toFixed(3)} (expected ${expX.toFixed(3)}, ${rx.toFixed(2)}×) | ` +
+      `hy ${hy.toFixed(3)} (expected ${expY.toFixed(3)}, ${ry.toFixed(2)}×) | ` +
+      `allowed ${UNDER}×–${OVER}× | ` +
+      `bad dots: ${bad.map((b) => DOT_NAMES[b.s]).join(", ") || "none"}]\n` +
+      dbg.join("\n")
+    : "";
+
+  if (Math.abs(hx) < 1e-3 || Math.abs(hy) < 1e-3)
+    return { valid: false, reason: "Your eyes barely moved between dots.\nKeep your head still and look AT each dot." + info };
+  if (rx > OVER || ry > OVER)
+    return { valid: false, reason: `You looked past the edges of the screen (${rx > OVER ? "left/right" : "up/down"}).\nLook directly AT each dot, not beyond it.` + info };
+  if (rx < UNDER || ry < UNDER)
+    return { valid: false, reason: `Your eyes didn't move enough (${rx < UNDER ? "left/right" : "up/down"}).\nKeep your head still and move only your eyes to each dot.` + info };
+  if (bad.length)
+    return { valid: false, reason: "These dots were not looked at correctly:\n" +
+      bad.map((b) => `• ${DOT_NAMES[b.s]} dot: ${b.why}`).join("\n") + info };
+  return { valid: true };
+}
 
 function finishCalibration() {
   const rows = cal.rows;
+  const geo = validateGeometry(rows);            // NEW
+  if (!geo.valid) {
+    console.warn("❌ Geometry rejected:", geo.reason);
+    failAttempt(geo.reason, true);               // restart all dots
+    return;
+  }
   const still = rows.filter((r) => r.stage === "still");
   const headBase = {
     yaw: med(still.map((r) => r.yaw)),
@@ -290,6 +378,7 @@ function finishCalibration() {
     JSON.stringify({
       version: GazeCore.VERSION,
       source: "yolo",
+      geometryOk: true, 
       yoloCfg: YoloEye.exportCfg(), // the exam re-applies these so it computes features the same way
       camera: { w: video.videoWidth, h: video.videoHeight },
       headBase, modelQuad, modelLin, best,

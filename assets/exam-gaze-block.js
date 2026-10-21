@@ -758,7 +758,10 @@ async function onResults(results) {
   // CRITICAL: Check again after async operation completes
   if (window.submitting || window.examFinished) return;
   
-  if (!raw) return; // no valid eye result this frame: keep the last bubble position
+  if (!raw) {
+    if (!window.examStarted) faceText.textContent = "Starting eye tracker…";
+    return;
+  }
   if (window.disableGazeDetection) return; // exam may have been submitted while we awaited
  
 // ---------------------------------------------------------------------------- PART 2

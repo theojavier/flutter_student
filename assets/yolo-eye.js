@@ -56,6 +56,10 @@ const YoloEye = (() => {
     fuseGate: 0.12, // eye-widths: YOLO samples further than this from the running bias are rejected
     fuseMinQ: 0.25, // skip bias updates when YOLO eye quality is below this
     fuseMinEar: 0.16, // skip bias updates when the lid partly covers the iris (both sources unreliable)
+    fuseSkipFirst: 3, // ignore initial YOLO results while the GPU and exposure settle
+    fuseSeedN: 5, // seed the bias from the median of this many samples
+    fuseSeedSpread: 0.05, // maximum seed-sample spread in eye-widths
+    fuseWarmMaxMs: 3000, // wait this long for both eyes before allowing one
   };
 
   const NK = 13, CONF = 0.05, KCONF = 0.30, DISAGREE = 0.10;
@@ -304,21 +308,30 @@ const YoloEye = (() => {
   }
 
   // Slowly-varying bias per eye: (YOLO iris - MediaPipe iris), both vs MediaPipe corners.
-  const newFz = () => ({ bx: 0, by: 0, n: 0, t: 0, rej: 0 });
+  const newFz = () => ({ bx: 0, by: 0, n: 0, t: 0, rej: 0, skip: 0, seed: [] });
   const fz = { L: newFz(), R: newFz() };
+  let warmed = false, warmSince = 0;
 
   function fuseUpdate(lab, dx, dy, now, q, ear) {
-    if (q < cfg.fuseMinQ || ear < cfg.fuseMinEar) return; // unreliable sample: hold the bias
+    if (q < cfg.fuseMinQ || ear < cfg.fuseMinEar) return;
     const f = fz[lab];
-    if (f.n === 0) { f.bx = dx; f.by = dy; f.n = 1; f.t = now; f.rej = 0; return; }
+    if (f.skip < cfg.fuseSkipFirst) { f.skip++; return; }
+    if (f.n === 0) {
+      f.seed.push([dx, dy]);
+      if (f.seed.length > cfg.fuseSeedN) f.seed.shift();
+      if (f.seed.length < cfg.fuseSeedN) return;
+      const mx = med(f.seed.map((s) => s[0])), my = med(f.seed.map((s) => s[1]));
+      const spread = Math.max(...f.seed.map((s) => Math.hypot(s[0] - mx, s[1] - my)));
+      if (spread > cfg.fuseSeedSpread) return;
+      f.bx = mx; f.by = my; f.n = cfg.fuseSeedN; f.t = now; f.rej = 0; f.seed = [];
+      return;
+    }
     if (Math.hypot(dx - f.bx, dy - f.by) > cfg.fuseGate) {
-      // Outlier. If it keeps happening (~10 YOLO frames) the bias really moved: re-seed instead of locking up.
       if (++f.rej < 10) return;
       f.bx = dx; f.by = dy; f.n = 1; f.t = now; f.rej = 0;
       return;
     }
     f.rej = 0;
-    // plain running mean while the estimate is young, then the exponential low-pass
     const k = Math.max(1 - Math.exp(-(now - f.t) / cfg.fuseTau), 1 / (f.n + 1));
     f.bx += k * (dx - f.bx);
     f.by += k * (dy - f.by);
@@ -328,10 +341,17 @@ const YoloEye = (() => {
 
   // Every camera frame: MediaPipe iris + YOLO's bias, both eyes weighted by how open they are.
   function fusedFrame(lm, W, H) {
+    const ready = Object.keys(EYES).filter((lab) => fz[lab].n > 0);
+    if (!ready.length) return null;
+    if (!warmed) {
+      const now = performance.now();
+      if (!warmSince) warmSince = now;
+      if (ready.length < 2 && now - warmSince < cfg.fuseWarmMaxMs) return null;
+      warmed = true;
+    }
     let sx = 0, sy = 0, sp = 0, sw = 0;
-    for (const lab of Object.keys(EYES)) {
+    for (const lab of ready) {
       const f = fz[lab];
-      if (!f.n) continue; // no YOLO bias for this eye yet
       const g = mpGeom(lab, lm, W, H);
       const wt = clamp((earOf(lab, lm, W, H) - cfg.blinkEar) / 0.10, 0.05, 1);
       sx += wt * (g.ox + f.bx);
@@ -485,6 +505,8 @@ const YoloEye = (() => {
   function reset() {
     fz.L = newFz();
     fz.R = newFz();
+    warmed = false;
+    warmSince = 0;
     for (const k of Object.keys(trk)) delete trk[k];
     lastResult = null;
   }

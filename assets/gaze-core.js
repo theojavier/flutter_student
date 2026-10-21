@@ -275,7 +275,7 @@ const GazeCore = (() => {
   function loadCalibration() {
     try {
       const d = JSON.parse(localStorage.getItem("gazeCalibrationData"));
-      return d && d.version === VERSION ? d : null;
+      return d && d.version === VERSION && d.geometryOk === true ? d : null;
     } catch (_) {
       return null;
     }
