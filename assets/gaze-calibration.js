@@ -5,6 +5,15 @@
 // MediaPipe = face + head pose.  YOLO eye model = eyelid/iris keypoints (the ox/oy features).
 console.log("🎯 Gaze calibration (head-aware, YOLO eyes) loaded");
 
+// Bridge function for cross-platform communication
+window.sendToHost = window.sendToHost || function (data) {
+  if (window.flutter_inappwebview?.callHandler) {
+    window.flutter_inappwebview.callHandler("flutterMessage", data); // mobile
+  } else if (window.parent && window.parent !== window) {
+    window.parent.postMessage(data, "*"); // web iframe
+  }
+};
+
 const $ = (id) => document.getElementById(id);
 const video = $("video"), canvas = $("canvas"), ctx = canvas.getContext("2d");
 const dot = $("dot"), calMessage = $("calMessage"), feedbackMessage = $("feedbackMessage");
@@ -173,8 +182,7 @@ function showCalibrationError(message) {
             • Keep your face visible while looking at each dot
           </div>
         </div>`;
-      if (window.parent && window.parent !== window)
-        window.parent.postMessage({ action: "calibrationFailed" }, "*");
+      window.sendToHost({ action: "calibrationFailed" });
     } else {
       if (cal.restartAll) { cal.i = 0; cal.rows = []; }
       cal.active = true;
@@ -390,8 +398,7 @@ function finishCalibration() {
   );
   console.log(`✓ Saved ${best} model; leave-one-position-out error ${errs[best].loo.toFixed(0)}px`);
 
-  if (window.parent && window.parent !== window)
-    window.parent.postMessage({ action: "calibrationComplete" }, "*");
+  window.sendToHost({ action: "calibrationComplete" });
 
   calMessage.textContent = `✓ Calibration Complete! Accuracy: ${errs[best].loo.toFixed(0)}px`;
   dot.style.display = "none";
@@ -457,8 +464,7 @@ function setLoadError(e) {
 
 mainScreen.addEventListener("click", (e) => {
   if (e.target !== mainScreen || cal.active) return;
-  if (window.parent && window.parent !== window)
-    window.parent.postMessage({ action: "calibrationCancelled" }, "*");
+  window.sendToHost({ action: "calibrationCancelled" });
 });
 startBtn.onclick = () => { if (modelReady) startCalibration(); };
 

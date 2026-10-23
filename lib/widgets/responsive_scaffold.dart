@@ -9,8 +9,8 @@ import 'package:go_router/go_router.dart';
 import '../helpers/notifications_helper.dart';
 import '../pages/notifications/notification_item.dart';
 import 'dart:async';
-import '../../helpers/SecureStorageHelper.dart';
-import '../../helpers/ExamLockState.dart';
+import '../helpers/SecureStorageHelper.dart';
+import '../helpers/ExamLockState.dart';
 import 'notification_bubble.dart';
 import 'profile_menu.dart';
 //  Platform + Web detection

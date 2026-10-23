@@ -62,32 +62,33 @@ class _NotificationsPageState extends State<NotificationsPage> {
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen(
-      (snap) {
-        final loaded = <NotificationItem>[];
-        for (final doc in snap.docs) {
-          final data = doc.data() as Map<String, dynamic>;
-          final timestamp = data['createdAt'];
-          loaded.add(
-            NotificationItem(
-              examId: doc.id,
-              title: data['subject'] ?? 'New Exam',
-              createdAt:
-                  timestamp is Timestamp ? timestamp.toDate() : DateTime.now(),
-              viewed: data['viewed'] ?? false,
-            ),
-          );
-        }
-        if (mounted) {
-          setState(() {
-            _notifications = loaded;
-            _loading = false;
-          });
-        }
-      },
-      onError: (_) {
-        if (mounted) setState(() => _loading = false);
-      },
-    );
+          (snap) {
+            final loaded = <NotificationItem>[];
+            for (final doc in snap.docs) {
+              final data = doc.data() as Map<String, dynamic>;
+              final timestamp = data['createdAt'];
+              loaded.add(
+                NotificationItem(
+                  examId: doc.id,
+                  title: data['subject'] ?? 'New Exam',
+                  createdAt: timestamp is Timestamp
+                      ? timestamp.toDate()
+                      : DateTime.now(),
+                  viewed: data['viewed'] ?? false,
+                ),
+              );
+            }
+            if (mounted) {
+              setState(() {
+                _notifications = loaded;
+                _loading = false;
+              });
+            }
+          },
+          onError: (_) {
+            if (mounted) setState(() => _loading = false);
+          },
+        );
   }
 
   void _onNotificationClick(NotificationItem item) {
@@ -203,7 +204,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
           end: Alignment.bottomRight,
           colors: active
               ? [_accentColor.withOpacity(0.9), _accentColor.withOpacity(0.25)]
-              : [Colors.white.withOpacity(0.18), Colors.white.withOpacity(0.05)],
+              : [
+                  Colors.white.withOpacity(0.18),
+                  Colors.white.withOpacity(0.05),
+                ],
         ),
         boxShadow: active
             ? [
@@ -385,8 +389,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 15,
-                            fontWeight:
-                                unread ? FontWeight.bold : FontWeight.w500,
+                            fontWeight: unread
+                                ? FontWeight.bold
+                                : FontWeight.w500,
                             color: unread
                                 ? _textColor
                                 : _textColor.withOpacity(0.75),

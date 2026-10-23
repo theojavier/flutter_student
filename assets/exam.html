@@ -46,6 +46,7 @@
         setPersistence,
         browserLocalPersistence,
         getIdToken,
+        signInWithCustomToken,
       } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
 
       const firebaseConfig = {
@@ -67,6 +68,13 @@
       const db = getFirestore(app);
       const rtdb = getDatabase(app);
       const auth = getAuth(app);
+      
+      // Sign in with custom token for mobile WebView
+      if (window.__customToken) {
+        signInWithCustomToken(auth, window.__customToken)
+          .catch((e) => console.error("Custom token sign-in failed:", e));
+      }
+      
       let authReady = false;
       const functions = getFunctions(app, "asia-southeast1");
       window.functions = functions;
@@ -434,7 +442,7 @@
           const resultSnap = await getDoc(resultRef);
           const status = resultSnap.exists() ? resultSnap.data().status : null;
           if (status === "completed" || status === "incomplete") {
-            window.parent.postMessage({ action: "finishExam", examId }, "*");
+            window.sendToHost({ action: "finishExam", examId });
             return;
           }
           await setDoc(resultRef, { status: "in-progress" }, { merge: true });
@@ -478,6 +486,15 @@
 
       const urlParams = new URLSearchParams(window.location.search);
       const examId = urlParams.get("examId");
+      const urlStudentId = urlParams.get("studentId");
+
+      // Mobile WebView: no parent window to post the ids, so read them from the URL
+      if (examId && urlStudentId && !window.examData) {
+        window.examData = { examId, studentId: urlStudentId, answers: {} };
+        sessionStorage.setItem("examId", examId);
+        sessionStorage.setItem("studentId", urlStudentId);
+      }
+
       history.replaceState(
         {},
         "",
@@ -526,7 +543,7 @@
             const status = snap.data().status;
             if (status === "completed" || status === "incomplete") {
               // Already finished — redirect to result page
-              window.parent.postMessage(
+              window.sendToHost(
                 {
                   action: "finishExam",
                   examId: examId,
@@ -1264,6 +1281,9 @@
 
           if (window.strikesLoadedPromise) await window.strikesLoadedPromise;
 
+          // Re-check after await: a strike that was waiting can't land after submit/time-up
+          if (window.examFinished || window.hasSubmitted || window.submitting) return;
+
           // Local counter (use cheatingCount consistently)
           window.cheatingCount = (window.cheatingCount || 0) + 1;
           localStorage.setItem("cheatingCount", window.cheatingCount);
@@ -1530,18 +1550,18 @@
         };
 
         if (window.parent && window.parent !== window) {
-          window.parent.postMessage(message, "*");
+          window.sendToHost(message);
           console.log("📤 First message sent");
 
           // Send again after 100ms to ensure Flutter listener is ready
           setTimeout(() => {
-            window.parent.postMessage(message, "*");
+            window.sendToHost(message);
             console.log("📤 Retry message sent");
           }, 100);
 
           // Send again after 500ms as final backup
           setTimeout(() => {
-            window.parent.postMessage(message, "*");
+            window.sendToHost(message);
             console.log("📤 Final backup message sent");
           }, 500);
         } else {
@@ -1555,7 +1575,7 @@
           window.cheatingCount = 0;
           window.lastClippedCount = 0;
           window.strikes = 0;
-          window.parent.postMessage(message, "*");
+          window.sendToHost(message);
         }
       }
 
@@ -1595,17 +1615,15 @@
           if (remainingMs <= 0) {
             clearInterval(timer);
             countdownEl.textContent = "Time's up!";
+            window.examFinished = true;     // prevent late strikes
+            window.allowStrikes = false;    // prevent late strikes
             clearExamStorage();
 
             window.markIncompleteIfNeeded2cloudfunction();
-            window.parent.postMessage(
-              {
-                action: "finishExam",
-                examId: examId,
-                //studentId: studentId
-              },
-              "*",
-            );
+            window.sendToHost({
+              action: "finishExam",
+              examId: examId,
+            });
             return;
           }
           countdownEl.textContent =
@@ -2661,6 +2679,20 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+    <script>
+      // Bridge function for cross-platform communication
+      window.sendToHost = function(data) {
+        // Try mobile bridge first (InAppWebView)
+        if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+          window.flutter_inappwebview.callHandler('flutterMessage', data);
+        }
+        // Fallback to web postMessage
+        else if (window.parent && window.parent !== window) {
+          window.parent.postMessage(data, '*');
+        }
+      };
+    </script>
 
     <script>
       //ARDUINO SERIAL CONNECTION

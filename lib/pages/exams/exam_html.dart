@@ -1,16 +1,11 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-// ignore: avoid_web_libraries_in_flutter
 import 'package:go_router/go_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:html' as html;
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:html' show IFrameElement;
-// ignore: undefined_prefixed_name
-import 'dart:ui_web' as ui;
-import '../../helpers/SecureStorageHelper.dart';
 import '../../helpers/ExamLockState.dart';
+import '../../helpers/platform_utils.dart';
+import 'exam_view.dart';
 
 class ExamHtmlPage extends StatefulWidget {
   final String examId;
@@ -29,16 +24,7 @@ class ExamHtmlPage extends StatefulWidget {
 class _ExamHtmlPageState extends State<ExamHtmlPage> {
   String? _resolvedStudentId;
   String? _authUid;
-  StreamSubscription<html.MessageEvent>? _msgSub;
   bool _finishHandled = false;
-
-  bool _isPageReload() {
-    if (!kIsWeb) return false;
-
-    final nav = html.window.performance.getEntriesByType('navigation');
-    return nav.isNotEmpty &&
-        (nav.first as html.PerformanceNavigationTiming).type == 'reload';
-  }
 
   @override
   void initState() {
@@ -55,69 +41,30 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     }
     checkExamStatusAndNavigate();
 
-    if (kIsWeb) {
-      fetchStudentAndCheckEligibility().then((allowed) {
-        if (!allowed) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              context.go('/home');
-            }
-          });
-          return;
-        }
-
-        // Student is allowed - proceed with iframe
-        if (_resolvedStudentId != null) {
-          final nav = html.window.performance.getEntriesByType("navigation");
-          final isReload =
-              nav.isNotEmpty &&
-              (nav.first as html.PerformanceNavigationTiming).type == "reload";
-
-          if (isReload) {
-            html.window.sessionStorage['isReloading'] = 'true';
-          } else {
-            html.window.sessionStorage.remove('isReloading');
+    fetchStudentAndCheckEligibility().then((allowed) {
+      if (!allowed) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            context.go('/home');
           }
+        });
+        return;
+      }
 
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            html.window.sessionStorage.remove('isReloading');
-          });
+      // Student is allowed - proceed with exam view
+      if (!mounted || _resolvedStudentId == null) return;
 
-          if (!mounted) return;
-          _msgSub?.cancel();
-          _msgSub = html.window.onMessage.listen((event) {
-            if (!mounted) return;
-            final data = event.data;
-            if (data is! Map) return;
+      final isReload = isPageReload();
+      if (isReload) {
+        setReloadingFlag(true);
+      } else {
+        setReloadingFlag(false);
+      }
 
-            final action = data['action'];
-            if (action == 'finishExam') {
-              if (_finishHandled) return;
-              _finishHandled = true;
-              final examId = '${data['examId'] ?? widget.examId}';
-              debugPrint(
-                '✅ finishExam message received, navigating to /exam-result/$examId',
-              );
-
-              // Navigate immediately without postFrameCallback to avoid delays
-              if (mounted) {
-                context.go('/exam-result/$examId');
-              }
-            } else if (action == 'navigate') {
-              final path = data['path'];
-              if (path is String && path.isNotEmpty) {
-                debugPrint('✅ navigate message received: $path');
-                if (mounted) {
-                  context.go(path);
-                }
-              }
-            }
-          });
-
-          _registerIframe(widget.examId, _resolvedStudentId!);
-        }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        clearReloadingFlag();
       });
-    }
+    });
   }
 
   Future<bool> fetchStudentAndCheckEligibility() async {
@@ -207,10 +154,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
         }
 
         if (status == 'incomplete') {
-          final nav = html.window.performance.getEntriesByType('navigation');
-          final isReload =
-              nav.isNotEmpty &&
-              (nav.first as html.PerformanceNavigationTiming).type == 'reload';
+          final isReload = isPageReload();
 
           if (isReload) {
             debugPrint(
@@ -239,32 +183,6 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     return;
   }
 
-  bool _iframeRegistered = false;
-
-  void _registerIframe(String examId, String studentId) {
-    if (_iframeRegistered) return;
-    _iframeRegistered = true;
-    final viewType = 'exam-html-view-$examId-$studentId';
-    ui.platformViewRegistry.registerViewFactory(viewType, (int viewId) {
-      final iframe = IFrameElement()
-        ..src = '${html.window.location.origin}/assets/exam.html?examId=$examId'
-        ..style.border = 'none'
-        ..style.width = '100%'
-        ..style.height = '100%'
-        ..allow =
-            'fullscreen; microphone; camera; clipboard-read; clipboard-write';
-
-      iframe.onLoad.listen((_) {
-        iframe.contentWindow?.postMessage({
-          'examId': examId,
-          'studentId': studentId,
-        }, '*');
-      });
-
-      return iframe;
-    });
-  }
-
   @override
   void didUpdateWidget(covariant ExamHtmlPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -281,28 +199,11 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     }
   }
 
-  Future<bool> validateStudentId(String urlStudentId) async {
-    final storedId = await SecureStorageHelper.read("studentId");
-
-    if (storedId == null) {
-      debugPrint("No studentId stored");
-      return false;
-    }
-
-    if (storedId != urlStudentId) {
-      debugPrint("Mismatch! URL studentId=$urlStudentId, stored=$storedId");
-      return false;
-    }
-
-    return true;
-  }
-
   @override
   void dispose() {
-    _msgSub?.cancel();
-    final isReload = _isPageReload();
+    final isReload = isPageReload();
 
-    if (kIsWeb && !isReload && _authUid != null && _resolvedStudentId != null) {
+    if (!isReload && _authUid != null && _resolvedStudentId != null) {
       final resultRef = FirebaseFirestore.instance
           .collection('examResults')
           .doc(widget.examId)
@@ -310,7 +211,6 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
           .doc(_authUid!);
 
       resultRef.get().then((doc) async {
-        if (!mounted) return;
         if (doc.exists && doc.data()?['status'] == 'completed') return;
 
         await resultRef.set({
@@ -326,27 +226,33 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     super.dispose();
   }
 
+  void _handleFinish(String examId) {
+    if (_finishHandled || !mounted) return;
+    _finishHandled = true;
+    debugPrint('✅ finishExam received, navigating to /exam-result/$examId');
+    context.go('/exam-result/$examId');
+  }
+
+  void _handleNavigate(String path) {
+    if (!mounted) return;
+    debugPrint('✅ navigate received: $path');
+    context.go(path);
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (!kIsWeb) {
-      return const Scaffold(
-        body: Center(child: Text("Exam only available on Web.")),
-      );
-    }
-
     if (_resolvedStudentId == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
-      body: SizedBox(
-        width: double.infinity,
-        height: double.infinity,
-        child: HtmlElementView(
-          key: ValueKey(
-            'exam-html-view-${widget.examId}-${_resolvedStudentId!}',
-          ),
-          viewType: 'exam-html-view-${widget.examId}-${_resolvedStudentId!}',
+      body: SafeArea(
+        child: ExamView(
+          key: ValueKey('exam-view-${widget.examId}-$_resolvedStudentId'),
+          examId: widget.examId,
+          studentId: _resolvedStudentId!,
+          onFinish: _handleFinish,
+          onNavigate: _handleNavigate,
         ),
       ),
     );

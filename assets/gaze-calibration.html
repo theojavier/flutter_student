@@ -277,8 +277,31 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script>
+      // Clear calibration storage on fresh start
+      if (new URLSearchParams(location.search).get('fresh') === '1') {
+        localStorage.removeItem('gazeCalibrationData');
+        sessionStorage.removeItem('gazeBias');
+        sessionStorage.removeItem('gazeOnlineClicks');
+        sessionStorage.removeItem('examStarted');
+        sessionStorage.removeItem('is_unloading');
+        console.log('🧹 Cleared calibration storage for fresh start');
+      }
+
+      // Bridge function for cross-platform communication
+      window.sendToHost = function(data) {
+        // Try mobile bridge first (InAppWebView)
+        if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+          window.flutter_inappwebview.callHandler('flutterMessage', data);
+        }
+        // Fallback to web postMessage
+        else if (window.parent && window.parent !== window) {
+          window.parent.postMessage(data, '*');
+        }
+      };
+    </script>
     <script src="gaze-core.js"></script>
     <script src="yolo-eye.js"></script>
-    <script src="gaze-calibration.js"></script>
+    <script src="gaze-calibration.js?v=3"></script>
   </body>
 </html>

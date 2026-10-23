@@ -126,10 +126,9 @@ class _ExamListPageState extends State<ExamListPage> {
 
                     // Hides the scrollbar (scrolling still works)
                     return ScrollConfiguration(
-                      behavior: ScrollConfiguration.of(context).copyWith(
-                        scrollbars: false,
-                        overscroll: false,
-                      ),
+                      behavior: ScrollConfiguration.of(
+                        context,
+                      ).copyWith(scrollbars: false, overscroll: false),
                       child: ListView.separated(
                         padding: const EdgeInsets.only(bottom: 24),
                         itemCount: exams.length,
@@ -197,8 +196,11 @@ class _ExamListPageState extends State<ExamListPage> {
                 color: _cardColor,
                 borderRadius: BorderRadius.circular(12.5),
               ),
-              child: const Icon(Icons.edit_note_outlined,
-                  color: Colors.white, size: 22),
+              child: const Icon(
+                Icons.edit_note_outlined,
+                color: Colors.white,
+                size: 22,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -216,8 +218,7 @@ class _ExamListPageState extends State<ExamListPage> {
               ),
               const SizedBox(height: 5),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: Colors.black.withOpacity(0.25),
                   borderRadius: BorderRadius.circular(6),
@@ -251,10 +252,7 @@ class _ExamListPageState extends State<ExamListPage> {
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [
-              _cardColor.withOpacity(0.9),
-              _cardColor.withOpacity(0.55),
-            ],
+            colors: [_cardColor.withOpacity(0.9), _cardColor.withOpacity(0.55)],
           ),
           border: Border.all(color: Colors.white.withOpacity(0.06)),
         ),

@@ -1,10 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
-import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'helpers/url_strategy.dart';
 import 'firebase_options.dart';
 import 'widgets/responsive_scaffold.dart';
 import 'pages/home/home_page.dart';
@@ -23,8 +24,12 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  usePathUrlStrategy();
-  await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+  configureUrlStrategy();
+
+  // Only supported on web; Android/iOS already keep the login automatically
+  if (kIsWeb) {
+    await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+  }
 
   // wait for Firebase to restore the saved login (max 5 seconds)
   await FirebaseAuth.instance.authStateChanges().first.timeout(
@@ -66,9 +71,12 @@ final GoRouter router = GoRouter(
     if (user == null && !loggingIn) {
       if (inExam) return null;
 
-      for (var i = 0; i < 20 && user == null; i++) {
-        await Future.delayed(const Duration(seconds: 1));
-        user = FirebaseAuth.instance.currentUser;
+      // Only wait on web; mobile login is already restored by authStateChanges()
+      if (kIsWeb) {
+        for (var i = 0; i < 20 && user == null; i++) {
+          await Future.delayed(const Duration(seconds: 1));
+          user = FirebaseAuth.instance.currentUser;
+        }
       }
     }
 

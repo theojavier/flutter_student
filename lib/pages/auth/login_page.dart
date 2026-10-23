@@ -43,7 +43,9 @@ class _LoginPageState extends State<LoginPage> {
     final password = passwordController.text.trim();
 
     if (studentId.isEmpty || password.isEmpty) {
-      setState(() => _loginError = "Please enter your Student ID and password.");
+      setState(
+        () => _loginError = "Please enter your Student ID and password.",
+      );
       return;
     }
 
@@ -57,9 +59,9 @@ class _LoginPageState extends State<LoginPage> {
         region: 'asia-southeast1',
       );
 
-      final result = await functions
-          .httpsCallable('loginWithStudentId')
-          .call({'studentId': studentId});
+      final result = await functions.httpsCallable('loginWithStudentId').call({
+        'studentId': studentId,
+      });
 
       final data = result.data;
       final email = data['email'];
@@ -116,25 +118,25 @@ class _LoginPageState extends State<LoginPage> {
         .where('yearBlock', isEqualTo: yearBlock)
         .snapshots()
         .listen((snapshot) async {
-      final userRef = db.collection('users').doc(userId);
+          final userRef = db.collection('users').doc(userId);
 
-      for (var examDoc in snapshot.docs) {
-        final examId = examDoc.id;
-        final notifRef = userRef.collection('notifications').doc(examId);
+          for (var examDoc in snapshot.docs) {
+            final examId = examDoc.id;
+            final notifRef = userRef.collection('notifications').doc(examId);
 
-        final notifSnap = await notifRef.get();
-        if (!notifSnap.exists) {
-          await notifRef.set({
-            'viewed': false,
-            'subject': examDoc['subject'],
-            'createdAt': examDoc.data().containsKey('createdAt')
-                ? examDoc['createdAt']
-                : Timestamp.now(),
-          });
-          debugPrint("Created notif for $userId -> exam $examId");
-        }
-      }
-    });
+            final notifSnap = await notifRef.get();
+            if (!notifSnap.exists) {
+              await notifRef.set({
+                'viewed': false,
+                'subject': examDoc['subject'],
+                'createdAt': examDoc.data().containsKey('createdAt')
+                    ? examDoc['createdAt']
+                    : Timestamp.now(),
+              });
+              debugPrint("Created notif for $userId -> exam $examId");
+            }
+          }
+        });
   }
 
   void _showError(String message) {
@@ -184,10 +186,9 @@ class _LoginPageState extends State<LoginPage> {
               // Hides the side scrollbar (and the overscroll glow) but keeps
               // scrolling working for small screens / when the keyboard opens.
               child: ScrollConfiguration(
-                behavior: ScrollConfiguration.of(context).copyWith(
-                  scrollbars: false,
-                  overscroll: false,
-                ),
+                behavior: ScrollConfiguration.of(
+                  context,
+                ).copyWith(scrollbars: false, overscroll: false),
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                   child: ConstrainedBox(
@@ -209,10 +210,7 @@ class _LoginPageState extends State<LoginPage> {
                         borderRadius: BorderRadius.circular(24),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildHeaderZone(),
-                            _buildFormZone(),
-                          ],
+                          children: [_buildHeaderZone(), _buildFormZone()],
                         ),
                       ),
                     ),
@@ -323,8 +321,11 @@ class _LoginPageState extends State<LoginPage> {
                   color: _accentColor.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(Icons.lock_outline,
-                    size: 16, color: _accentColor),
+                child: const Icon(
+                  Icons.lock_outline,
+                  size: 16,
+                  color: _accentColor,
+                ),
               ),
               const SizedBox(width: 10),
               const Text(
@@ -483,7 +484,10 @@ class _LoginPageState extends State<LoginPage> {
                 const SizedBox(height: 2),
                 Text(
                   _loginError,
-                  style: const TextStyle(color: _mutedTextColor, fontSize: 12.5),
+                  style: const TextStyle(
+                    color: _mutedTextColor,
+                    fontSize: 12.5,
+                  ),
                 ),
               ],
             ),

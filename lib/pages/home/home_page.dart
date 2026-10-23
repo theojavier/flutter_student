@@ -198,10 +198,9 @@ class _HomePageState extends State<HomePage> {
 
               // Hides scrollbars everywhere on this page (scrolling still works)
               return ScrollConfiguration(
-                behavior: ScrollConfiguration.of(context).copyWith(
-                  scrollbars: false,
-                  overscroll: false,
-                ),
+                behavior: ScrollConfiguration.of(
+                  context,
+                ).copyWith(scrollbars: false, overscroll: false),
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                   child: Column(
@@ -313,12 +312,12 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildSkeletonUI() {
     Widget block(double height, {double radius = 18}) => Container(
-          height: height,
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(radius),
-          ),
-        );
+      height: height,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(radius),
+      ),
+    );
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -542,8 +541,7 @@ class _HomePageState extends State<HomePage> {
                     color: Colors.black.withOpacity(0.22),
                   ),
                   children: [
-                    for (final h in headers)
-                      _cell(h, weight: FontWeight.bold),
+                    for (final h in headers) _cell(h, weight: FontWeight.bold),
                   ],
                 ),
                 for (int i = 0; i < rows.length; i++)

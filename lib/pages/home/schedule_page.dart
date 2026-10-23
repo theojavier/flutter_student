@@ -70,29 +70,27 @@ class _SchedulePageState extends State<SchedulePage> {
     return Scaffold(
       backgroundColor: _bgColor,
       body: loadingUser
-          ? const Center(
-              child: CircularProgressIndicator(color: _accentColor),
-            )
+          ? const Center(child: CircularProgressIndicator(color: _accentColor))
           : (program == null || yearBlock == null)
-              ? const Center(
-                  child: Text(
-                    "No program/yearBlock found",
-                    style: TextStyle(color: _textColor),
-                  ),
-                )
-              : SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildTitleBar(),
-                        const SizedBox(height: 16),
-                        Expanded(child: _buildScheduleCard()),
-                      ],
-                    ),
-                  ),
+          ? const Center(
+              child: Text(
+                "No program/yearBlock found",
+                style: TextStyle(color: _textColor),
+              ),
+            )
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildTitleBar(),
+                    const SizedBox(height: 16),
+                    Expanded(child: _buildScheduleCard()),
+                  ],
                 ),
+              ),
+            ),
     );
   }
 
@@ -117,36 +115,41 @@ class _SchedulePageState extends State<SchedulePage> {
       ),
       child: Row(
         children: [
-         Container(
-  padding: const EdgeInsets.all(3), // border thickness
-  decoration: BoxDecoration(
-    borderRadius: BorderRadius.circular(15),
-    gradient: LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [
-        const Color(0xFF3D8BFF).withOpacity(0.9),
-        const Color(0xFF3D8BFF).withOpacity(0.25),
-      ],
-    ),
-    boxShadow: [
-      BoxShadow(
-        color: const Color(0xFF3D8BFF).withOpacity(0.35),
-        blurRadius: 14,
-        spreadRadius: 1,
-      ),
-    ],
-  ),
-  child: ClipRRect(
-    borderRadius: BorderRadius.circular(12), // outer radius minus padding
-    child: Container(
-      color: const Color(0xFF0F3B61),
-      padding: const EdgeInsets.all(10),
-      child: const Icon(Icons.calendar_month_outlined,
-          color: Colors.white, size: 22),
-    ),
-  ),
-),
+          Container(
+            padding: const EdgeInsets.all(3), // border thickness
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(15),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  const Color(0xFF3D8BFF).withOpacity(0.9),
+                  const Color(0xFF3D8BFF).withOpacity(0.25),
+                ],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF3D8BFF).withOpacity(0.35),
+                  blurRadius: 14,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(
+                12,
+              ), // outer radius minus padding
+              child: Container(
+                color: const Color(0xFF0F3B61),
+                padding: const EdgeInsets.all(10),
+                child: const Icon(
+                  Icons.calendar_month_outlined,
+                  color: Colors.white,
+                  size: 22,
+                ),
+              ),
+            ),
+          ),
           const SizedBox(width: 12),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -162,8 +165,7 @@ class _SchedulePageState extends State<SchedulePage> {
               ),
               const SizedBox(height: 5),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: Colors.black.withOpacity(0.25),
                   borderRadius: BorderRadius.circular(6),
@@ -243,8 +245,9 @@ class _SchedulePageState extends State<SchedulePage> {
 
             return ScrollbarTheme(
               data: ScrollbarThemeData(
-                thumbColor:
-                    WidgetStateProperty.all(_accentColor.withOpacity(0.7)),
+                thumbColor: WidgetStateProperty.all(
+                  _accentColor.withOpacity(0.7),
+                ),
                 radius: const Radius.circular(8),
               ),
               child: Scrollbar(
@@ -289,11 +292,13 @@ class _SchedulePageState extends State<SchedulePage> {
                                     _bgColor,
                                   )
                                 : _bgColor,
-                            backgroundRulesColor:
-                                Colors.white.withOpacity(0.06),
+                            backgroundRulesColor: Colors.white.withOpacity(
+                              0.06,
+                            ),
                             currentTimeRuleColor: Colors.grey.withOpacity(0.0),
-                            currentTimeCircleColor:
-                                Colors.grey.withOpacity(0.0),
+                            currentTimeCircleColor: Colors.grey.withOpacity(
+                              0.0,
+                            ),
                           ),
 
                           // Day header bar
@@ -339,8 +344,9 @@ class _SchedulePageState extends State<SchedulePage> {
                               ),
                             ),
                             timeFormatter: (time) {
-                              final hour =
-                                  time.hour > 12 ? time.hour - 12 : time.hour;
+                              final hour = time.hour > 12
+                                  ? time.hour - 12
+                                  : time.hour;
                               final period = time.hour >= 12 ? 'PM' : 'AM';
                               return '$hour $period'; // "7 AM", "8 AM", etc.
                             },

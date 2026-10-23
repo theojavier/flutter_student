@@ -1,18 +1,16 @@
 import 'dart:async';
-import 'dart:js_interop';
-import 'dart:js_interop_unsafe';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:my_flutter_app/theme/colors.dart';
 import 'package:go_router/go_router.dart';
-import 'package:web/web.dart' as web;
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../helpers/SecureStorageHelper.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/gaze_calibration_overlay.dart';
+import '../../helpers/screen_share.dart';
+import '../../helpers/platform_utils.dart';
 
 class TakeExamPage extends StatefulWidget {
   final String examId;
@@ -63,23 +61,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   bool _dialogOpen = false; // an error popup is showing
   String? _cameraError; // last camera test error (for the popup details)
 
-  void _clearStaleExamStorage() {
-    const sessionKeys = ['examStarted', 'is_unloading', 'gazeOnlineClicks'];
-    const localKeys = ['cheatingCount', 'cheatClipIndex', 'pendingCheatStill'];
-
-    for (final key in sessionKeys) {
-      web.window.sessionStorage.removeItem(key);
-    }
-    for (final key in localKeys) {
-      web.window.localStorage.removeItem(key);
-    }
-  }
-
-  // Kept alive (NOT stopped) once the permission checks pass, so the
-  // exam iframe can reuse the same streams instead of requesting them again.
-  JSObject? _screenStream;
-  JSObject? _cameraStream;
-  bool _screenStreamHandedOff = false;
+  final _screen = ScreenShare();
 
   // Realtime: streams are created ONCE. Creating them inside build() would
   // resubscribe (and flash "Loading...") every time the page rebuilds.
@@ -121,12 +103,9 @@ class _TakeExamPageState extends State<TakeExamPage>
   void dispose() {
     _ticker?.cancel();
     WidgetsBinding.instance.removeObserver(this);
-    if (!_screenStreamHandedOff) {
-      _stopJsStream(_screenStream);
-      _stopJsStream(_cameraStream);
+    if (!_screen.handedOff) {
+      _screen.stop();
     }
-    _screenStream = null;
-    _cameraStream = null;
     super.dispose();
   }
 
@@ -366,68 +345,11 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   // ---------- Screen share (whole screen only) ----------
 
-  /// Stops every track on a raw JS MediaStream obtained via js_interop.
-  void _stopJsStream(JSObject? stream) {
-    if (stream == null) return;
-    try {
-      final tracks = stream.callMethod<JSArray>('getTracks'.toJS);
-      final len = (tracks.getProperty('length'.toJS) as JSNumber).toDartInt;
-      for (var i = 0; i < len; i++) {
-        final track = tracks.getProperty(i.toJS);
-        (track as JSObject).callMethod('stop'.toJS);
-      }
-    } catch (e) {
-      debugPrint('Failed to stop a media stream: $e');
-    }
-  }
-
-  /// Calls navigator.mediaDevices.getDisplayMedia directly via js_interop
-  /// instead of dart:html's MediaDevices class, which doesn't expose that
-  /// method. This still returns the browser's real, native MediaStream —
-  /// which is exactly what lets us hand it to the exam.html iframe later
-  /// instead of exam.html calling getDisplayMedia() again (that second call
-  /// is what was causing the screen-share prompt to appear twice).
   Future<bool> _requestFullScreenShare() async {
     try {
-      final mediaDevices = web.window.navigator.mediaDevices;
-      // ignore: unnecessary_null_comparison
-      if (mediaDevices == null) {
-        throw Exception("Screen sharing isn't supported in this browser.");
-      }
-
-      final options = {
-        'video': {'displaySurface': 'monitor'},
-        'audio': false,
-      }.jsify();
-
-      final promise = (mediaDevices as JSObject)
-          .callMethod<JSPromise<JSObject>>('getDisplayMedia'.toJS, options);
-      final stream = await promise.toDart;
-
-      final videoTracks = stream.callMethod<JSArray>('getVideoTracks'.toJS);
-      final trackCount =
-          (videoTracks.getProperty('length'.toJS) as JSNumber).toDartInt;
-
-      String displaySurface = '';
-      if (trackCount > 0) {
-        final track = videoTracks.getProperty(0.toJS) as JSObject;
-        final settings = track.callMethod<JSObject>('getSettings'.toJS);
-        final surface = settings.getProperty('displaySurface'.toJS);
-        displaySurface = (surface as JSString?)?.toDart ?? '';
-      }
-
-      if (trackCount == 0 ||
-          (displaySurface.isNotEmpty && displaySurface != 'monitor')) {
-        _stopJsStream(stream);
-        throw Exception(
-          'Please choose "Entire Screen" when prompted — sharing a window or browser tab is not allowed.',
-        );
-      }
-
-      _screenStream = stream; // kept alive on purpose, see doc comment above
+      await _screen.request();
       return true;
     } catch (e) {
-      debugPrint("Screen share failed: $e");
       if (mounted) {
         await _showErrorDialog(
           title: "Full screen sharing required",
@@ -768,7 +690,8 @@ class _TakeExamPageState extends State<TakeExamPage>
 
               final examData = examDoc.data() ?? {};
               final monitoringEnabled = examData["monitoringEnabled"] == true;
-              final isPc = examData["isPc"] != false; // default to true
+              // Force isPc off where screen sharing can't exist
+              final isPc = examData["isPc"] != false && ScreenShare.supported;
 
               // Backup check (the button is already gray if this is false)
               if (!monitoringEnabled) {
@@ -904,8 +827,7 @@ class _TakeExamPageState extends State<TakeExamPage>
               if (!mounted) return;
               if (!cameraOk) {
                 if (isPc) {
-                  _stopJsStream(_screenStream);
-                  _screenStream = null;
+                  _screen.stop();
                 }
                 await _showErrorDialog(
                   title: "Camera not available",
@@ -949,8 +871,7 @@ class _TakeExamPageState extends State<TakeExamPage>
               if (!mounted || calibrationOk != true) {
                 // Release the screen share so it doesn't keep running
                 if (isPc) {
-                  _stopJsStream(_screenStream);
-                  _screenStream = null;
+                  _screen.stop();
                 }
                 if (mounted) {
                   await _showErrorDialog(
@@ -966,20 +887,11 @@ class _TakeExamPageState extends State<TakeExamPage>
 
               // Start with clean per-attempt state while preserving exam/student
               // identifiers, gaze calibration, and authentication storage.
-              _clearStaleExamStorage();
+              clearStaleExamStorage();
 
               // Make streams reachable by exam.html
-              if (isPc && _screenStream != null) {
-                (web.window as JSObject).setProperty(
-                  '__examScreenStream'.toJS,
-                  _screenStream,
-                );
-              }
-              if (_cameraStream != null) {
-                (web.window as JSObject).setProperty(
-                  '__examCameraStream'.toJS,
-                  _cameraStream,
-                );
+              if (isPc) {
+                _screen.exposeToExam();
               }
 
               final now = DateTime.now();
@@ -1023,7 +935,7 @@ class _TakeExamPageState extends State<TakeExamPage>
                   }, SetOptions(merge: true));
 
               if (!mounted) return;
-              _screenStreamHandedOff = true;
+              _screen.handedOff = true;
 
               // Navigate to exam.html via shell route
               context.goNamed(
@@ -1031,9 +943,8 @@ class _TakeExamPageState extends State<TakeExamPage>
                 pathParameters: {"examId": widget.examId},
               );
             } catch (e) {
-              _screenStreamHandedOff = false;
-              _stopJsStream(_screenStream);
-              _screenStream = null;
+              _screen.handedOff = false;
+              _screen.stop();
               if (mounted) {
                 await _showErrorDialog(
                   title: "Couldn't start the exam",
