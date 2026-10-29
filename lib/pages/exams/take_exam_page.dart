@@ -33,22 +33,22 @@ class TakeExamPage extends StatefulWidget {
 class _TakeExamPageState extends State<TakeExamPage>
     with WidgetsBindingObserver {
   // Shared theme palette (same as ProfilePage / HomePage / ExamListPage)
-  static const Color _bgColor = Color(0xFF0B1220);
-  static const Color _headerColor = Color(0xFF0F2B45);
-  static const Color _headerColorLight = Color(0xFF17456F);
-  static const Color _cardColor = Color(0xFF0F3B61);
-  static const Color _textColor = Color(0xFFE6F0F8);
-  static const Color _mutedTextColor = Color(0xFF9FB0C3);
-  static const Color _accentColor = Color(0xFF3D8BFF);
-  static const Color _successColor = Color(0xFF4ADE80);
-  static const Color _errorColor = Color(0xFFF87171);
-  static const Color _warnColor = Color(0xFFFBBF24);
+  static const Color _bgColor = Color(0xFFF7F8F6);
+  static const Color _headerColor = Color(0xFF111217);
+  static const Color _headerColorLight = Color(0xFF202127);
+  static const Color _cardColor = Color(0xFFFFFFFF);
+  static const Color _textColor = Color(0xFF17181D);
+  static const Color _mutedTextColor = Color(0xFF777B80);
+  static const Color _accentColor = Color(0xFF087B4F);
+  static const Color _successColor = Color(0xFF12815B);
+  static const Color _errorColor = Color(0xFFBD2942);
+  static const Color _warnColor = Color(0xFFB88826);
 
   // Button colors
-  static const Color _btnStart = Color(0xFF3D8BFF);
-  static const Color _btnResult = Color(0xFF16A34A);
-  static const Color _btnProgress = Color(0xFFD97706);
-  static const Color _btnIncomplete = Color(0xFFDC2626);
+  static const Color _btnStart = Color(0xFF087B4F);
+  static const Color _btnResult = Color(0xFF12815B);
+  static const Color _btnProgress = Color(0xFFB88826);
+  static const Color _btnIncomplete = Color(0xFFBD2942);
 
   final db = FirebaseFirestore.instance;
   String? studentId;
@@ -449,14 +449,15 @@ class _TakeExamPageState extends State<TakeExamPage>
             );
           }
           if (!snapshot.hasData) {
-            return const Center(
-              child: CircularProgressIndicator(color: _accentColor),
-            );
+            return _buildSkeleton();
           }
           if (!snapshot.data!.exists) {
             return StreamBuilder<DocumentSnapshot>(
               stream: _resultStream,
               builder: (context, resultSnap) {
+                if (resultSnap.connectionState == ConnectionState.waiting) {
+                  return _buildSkeleton();
+                }
                 if (!resultSnap.hasData || !resultSnap.data!.exists) {
                   return _buildEmptyState(
                     Icons.search_off_outlined,
@@ -489,25 +490,26 @@ class _TakeExamPageState extends State<TakeExamPage>
                 ];
 
                 return _pageBody(
-                  card: _detailsCard(
+  showSteps: status?.toString().toLowerCase() != "completed",
+  card: _detailsCard(
                     subject: (subject ?? "Exam").toString(),
                     status: status?.toString(),
                     rows: rows,
+                    action: status == "completed"
+                        ? _actionButton(
+                            label: "View Result",
+                            icon: Icons.assessment_outlined,
+                            color: _btnResult,
+                            hint: "Exam completed.",
+                            onPressed: () {
+                              context.goNamed(
+                                'examResult',
+                                pathParameters: {'examId': widget.examId},
+                              );
+                            },
+                          )
+                        : null,
                   ),
-                  action: status == "completed"
-                      ? _actionButton(
-                          label: "View Result",
-                          icon: Icons.assessment_outlined,
-                          color: _btnResult,
-                          hint: "Exam completed.",
-                          onPressed: () {
-                            context.goNamed(
-                              'examResult',
-                              pathParameters: {'examId': widget.examId},
-                            );
-                          },
-                        )
-                      : null,
                 );
               },
             );
@@ -545,9 +547,40 @@ class _TakeExamPageState extends State<TakeExamPage>
               ),
           ];
 
-          return _pageBody(
-            card: _detailsCard(subject: subject.toString(), rows: rows),
-            action: _buildExamAction(subject.toString(), uid),
+          return StreamBuilder<DocumentSnapshot>(
+            stream: _resultStream,
+            builder: (context, resSnap) {
+              if (!resSnap.hasData && !resSnap.hasError) {
+                return _buildSkeleton();
+              }
+              final res = resSnap.data?.data() as Map<String, dynamic>?;
+              final resStatus = res?["status"]?.toString();
+              final submittedAt = res?["submittedAt"];
+              final done = resStatus?.toLowerCase() == "completed";
+              final fmt = DateFormat("MMM d, yyyy h:mm a");
+
+              return _pageBody(
+                showSteps: !done,
+                card: _detailsCard(
+                  subject: subject.toString(),
+                  status: resStatus,
+                  rows: [
+                    ...rows,
+                    if (done && submittedAt is Timestamp)
+                      _DetailRow(
+                        Icons.task_alt_outlined,
+                        "Submitted",
+                        fmt.format(submittedAt.toDate()),
+                      ),
+                  ],
+                  action: _buildExamAction(
+                    subject.toString(),
+                    uid,
+                    resSnap.data,
+                  ),
+                ),
+              );
+            },
           );
         },
       ),
@@ -555,8 +588,13 @@ class _TakeExamPageState extends State<TakeExamPage>
   }
 
   // Start / Resume / View Result button (real-time updates)
-  Widget _buildExamAction(String subject, String uid) {
+  Widget _buildExamAction(
+    String subject,
+    String uid, [
+    DocumentSnapshot? initial,
+  ]) {
     return StreamBuilder<DocumentSnapshot>(
+      initialData: initial,
       stream: db
           .collection("examResults")
           .doc(widget.examId)
@@ -962,125 +1000,229 @@ class _TakeExamPageState extends State<TakeExamPage>
     );
   }
 
-  // ---------- UI helpers (compact so everything fits the first screen) ----------
+  // ---------- UI helpers: match the clean Secure Exam HTML layout ----------
 
-  Widget _pageShell({required Widget child}) {
-    return Scaffold(
-      backgroundColor: _bgColor,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildTitleBar(),
-              const SizedBox(height: 10),
-              Expanded(child: child),
-            ],
+Widget _skelBox({double? width, required double height, double radius = 6}) {
+  return Container(
+    width: width,
+    height: height,
+    decoration: BoxDecoration(
+      color: const Color(0xFFE9ECE9),
+      borderRadius: BorderRadius.circular(radius),
+    ),
+  );
+}
+
+Widget _buildSkeleton() {
+  return _SkeletonPulse(
+    child: Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFDFE2DF)),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(26, 25, 26, 25),
+            color: const Color(0xFFF1F3F1),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _skelBox(width: 220, height: 24),
+                const SizedBox(height: 12),
+                _skelBox(width: 320, height: 12),
+              ],
+            ),
           ),
+          Padding(
+            padding: const EdgeInsets.all(22),
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final wide = c.maxWidth >= 690;
+                final left = Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _skelBox(height: 96),
+                    const SizedBox(height: 14),
+                    for (var i = 0; i < 3; i++)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        child: _skelBox(height: 14),
+                      ),
+                  ],
+                );
+                final right = _skelBox(height: 190, radius: 7);
+
+                if (wide) {
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 20),
+                          child: left,
+                        ),
+                      ),
+                      Expanded(flex: 2, child: right),
+                    ],
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [left, const SizedBox(height: 14), right],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+  Widget _pageShell({required Widget child}) {
+  return Scaffold(
+    backgroundColor: _bgColor,
+    body: SafeArea(
+      child: LayoutBuilder(
+        builder: (context, viewport) {
+          final horizontal = viewport.maxWidth < 600 ? 16.0 : 28.0;
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: viewport.maxHeight),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(horizontal, 22, horizontal, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildTitleBar(),
+                    const SizedBox(height: 24),
+                    child, // no Expanded here
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    ),
+  );
+}
+
+  Widget _pageBody({
+  required Widget card,
+  Widget? action,
+  bool showSteps = true,
+}) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (showSteps) ...[
+        _buildSecureFlowSteps(),
+        const SizedBox(height: 20),
+      ],
+      card,
+      if (action != null) ...[const SizedBox(height: 16), action],
+    ],
+  );
+}
+
+  Widget _buildSecureFlowSteps() {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xFFDADDD9)),
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            _flowStep('1', 'Enter exam', active: true),
+            Container(width: 26, height: 1, color: const Color(0xFFD8DBD8)),
+            _flowStep('2', 'Calibrate'),
+            Container(width: 26, height: 1, color: const Color(0xFFD8DBD8)),
+            _flowStep('3', 'Exam'),
+          ],
         ),
       ),
     );
   }
 
-  Widget _pageBody({required Widget card, Widget? action}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget _flowStep(String number, String label, {bool active = false}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Expanded(
-          child: ScrollConfiguration(
-            behavior: ScrollConfiguration.of(
-              context,
-            ).copyWith(scrollbars: false, overscroll: false),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  card,
-                  const SizedBox(height: 10),
-                  _buildInstructionsCard(),
-                ],
-              ),
+        Container(
+          width: 25,
+          height: 25,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? _accentColor : const Color(0xFFEFF0EE),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: active ? _accentColor : const Color(0xFFDCE0DC),
+            ),
+          ),
+          child: Text(
+            number,
+            style: TextStyle(
+              color: active ? Colors.white : const Color(0xFF777B80),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),
-        if (action != null) ...[const SizedBox(height: 10), action],
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: TextStyle(
+            color: active ? _textColor : const Color(0xFF828589),
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
       ],
     );
   }
 
   Widget _buildTitleBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_headerColorLight, _headerColor],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'FOTS SECURE SESSION',
+          style: TextStyle(
+            color: Color(0xFF27694F),
+            fontSize: 10,
+            letterSpacing: 1.3,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
+        const SizedBox(height: 9),
+        const Text(
+          'Secure Exam',
+          style: TextStyle(
+            color: Color(0xFF17181D),
+            fontSize: 34,
+            height: 1.05,
+            letterSpacing: -1.1,
+            fontWeight: FontWeight.w700,
           ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(2),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  _accentColor.withOpacity(0.9),
-                  _accentColor.withOpacity(0.25),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: _accentColor.withOpacity(0.35),
-                  blurRadius: 12,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-            child: Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                color: _cardColor,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.fact_check_outlined,
-                color: Colors.white,
-                size: 18,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                "Exam Details",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 3),
-              _tag("EXAM INFORMATION"),
-            ],
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Enter → calibrate → take the exam. The timer starts only after calibration succeeds.',
+          style: TextStyle(color: _mutedTextColor, fontSize: 13, height: 1.5),
+        ),
+      ],
     );
   }
 
@@ -1117,11 +1259,11 @@ class _TakeExamPageState extends State<TakeExamPage>
         : status[0].toUpperCase() + status.substring(1);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withOpacity(0.10),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.35)),
+        border: Border.all(color: color.withOpacity(0.28)),
       ),
       child: Text(
         label,
@@ -1148,7 +1290,7 @@ class _TakeExamPageState extends State<TakeExamPage>
         boxShadow: shadow
             ? [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.25),
+                  color: Colors.black.withOpacity(0.10),
                   blurRadius: 14,
                   offset: const Offset(0, 6),
                 ),
@@ -1163,100 +1305,191 @@ class _TakeExamPageState extends State<TakeExamPage>
     required String subject,
     String? status,
     required List<_DetailRow> rows,
+    Widget? action,
   }) {
-    const double r = 20;
+    final completed = status?.toLowerCase() == 'completed';
 
-    return _doubleBorder(
-      color: _accentColor.withOpacity(0.55),
-      innerRadius: r,
-      shadow: true,
-      child: Container(
-        foregroundDecoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(r),
-          border: Border.all(color: Colors.white.withOpacity(0.12)),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(r),
-          child: Column(
-            children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [_headerColorLight, _headerColor],
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        _tag("SUBJECT"),
-                        const Spacer(),
-                        if (status != null) _statusChip(status),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      subject,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: _textColor,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (rows.isNotEmpty)
-                Container(
-                  width: double.infinity,
-                  color: _cardColor,
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFDFE2DF)),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(26, 25, 26, 25),
+            color: _headerColor,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (int i = 0; i < rows.length; i++)
-                        _buildDetail(rows[i], shaded: i.isOdd),
+                      Text(
+                        subject,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 25,
+                          height: 1.15,
+                          letterSpacing: -0.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 9),
+                      Text(
+                        completed
+                            ? 'You have completed this exam. Your result is ready to view.'
+                            : 'Secure gaze session. Camera access begins only after you choose Start Exam.',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.72),
+                          fontSize: 12,
+                          height: 1.45,
+                        ),
+                      ),
                     ],
                   ),
                 ),
-            ],
+                if (status != null) ...[
+                  const SizedBox(width: 12),
+                  _statusChip(status),
+                ],
+              ],
+            ),
           ),
-        ),
+          Padding(
+            padding: const EdgeInsets.all(22),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final wide = constraints.maxWidth >= 690;
+                final detailList = Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!completed) ...[
+                      _buildInstructionsCard(),
+                      const SizedBox(height: 14),
+                    ],
+                    for (int i = 0; i < rows.length; i++)
+                      _buildDetail(rows[i], shaded: false),
+                  ],
+                );
+                final actionPanel = Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0F8F3),
+                    border: Border.all(color: const Color(0xFFDCEDE2)),
+                    borderRadius: BorderRadius.circular(7),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 54,
+                        height: 54,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE1F3E9),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0xFFCDE8D9)),
+                        ),
+                        child: Icon(
+                          completed
+                              ? Icons.task_alt_outlined
+                              : Icons.track_changes_outlined,
+                          color: const Color(0xFF267A58),
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(height: 13),
+                      Text(
+                        completed ? 'Exam completed' : 'Ready to begin?',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFF17181D),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 7),
+                      Text(
+                        completed
+                            ? 'You have already finished this exam. Open your result to review your score.'
+                            : 'You will calibrate first. Looking naturally downward at the screen is expected; you do not need to stare into the camera.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFF777B80),
+                          fontSize: 11,
+                          height: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 17),
+                      if (action != null) action,
+                    ],
+                  ),
+                );
+
+                if (wide) {
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 20),
+                          child: detailList,
+                        ),
+                      ),
+                      Expanded(flex: 2, child: actionPanel),
+                    ],
+                  );
+                }
+                return Column(
+                  children: [
+                    detailList,
+                    const SizedBox(height: 14),
+                    actionPanel,
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildDetail(_DetailRow row, {required bool shaded}) {
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 1),
-      padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 8),
-      decoration: BoxDecoration(
-        color: shaded ? Colors.white.withOpacity(0.03) : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 2),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFFE4E6E4))),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(row.icon, size: 15, color: _accentColor.withOpacity(0.8)),
-          const SizedBox(width: 8),
-          Text(
-            row.label,
-            style: const TextStyle(fontSize: 12.5, color: _mutedTextColor),
-          ),
-          const SizedBox(width: 10),
           Expanded(
             child: Text(
+              row.label,
+              style: const TextStyle(color: Color(0xFF777B80), fontSize: 12),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
               row.value,
-              textAlign: TextAlign.end,
+              textAlign: TextAlign.right,
               style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: _textColor,
+                color: Color(0xFF24262A),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                height: 1.4,
               ),
             ),
           ),
@@ -1269,80 +1502,69 @@ class _TakeExamPageState extends State<TakeExamPage>
     const items = [
       "Don't switch tabs",
       "Don't leave the app",
-      "Look at the screen it may trigger as cheating.",
+      "Look at the screen; looking away for too long may trigger monitoring.",
     ];
-    const double r = 16;
 
-    return _doubleBorder(
-      color: _errorColor.withOpacity(0.55),
-      innerRadius: r,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-        decoration: BoxDecoration(
-          color: _errorColor.withOpacity(0.10),
-          borderRadius: BorderRadius.circular(r),
-          border: Border.all(color: _errorColor.withOpacity(0.35)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.warning_amber_rounded,
-                  color: _errorColor,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
-                Text.rich(
-                  TextSpan(
-                    children: const [
-                      TextSpan(
-                        text: "IMPORTANT",
-                        style: TextStyle(
-                          color: _textColor,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.0,
-                        ),
-                      ),
-                      TextSpan(
-                        text: "  Instructions:",
-                        style: TextStyle(color: _mutedTextColor),
-                      ),
-                    ],
-                  ),
-                  style: const TextStyle(fontSize: 12.5),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            for (final item in items)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(top: 6),
-                      child: Icon(Icons.circle, size: 5, color: _errorColor),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        item,
-                        style: const TextStyle(
-                          color: _textColor,
-                          fontSize: 13,
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                  ],
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.72),
+        border: Border.all(color: const Color(0xFFDCEDE2)),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.info_outline_rounded,
+                color: Color(0xFF087B4F),
+                size: 16,
+              ),
+              SizedBox(width: 7),
+              Text(
+                'BEFORE YOU BEGIN',
+                style: TextStyle(
+                  color: Color(0xFF17181D),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .5,
                 ),
               ),
-          ],
-        ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 3),
+                    child: Icon(
+                      Icons.check_circle_outline,
+                      size: 13,
+                      color: Color(0xFF087B4F),
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      item,
+                      style: const TextStyle(
+                        color: Color(0xFF686D72),
+                        fontSize: 10,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1356,60 +1578,57 @@ class _TakeExamPageState extends State<TakeExamPage>
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final double w = (constraints.maxWidth * 0.25)
-            .clamp(120.0, 260.0)
-            .toDouble();
-
-        return Row(
-          children: [
-            SizedBox(
-              width: w,
-              height: 44,
-              child: ElevatedButton(
-                onPressed: onPressed,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: color,
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: Colors.white.withOpacity(0.08),
-                  disabledForegroundColor: _mutedTextColor,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  textStyle: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (icon != null) ...[
-                        Icon(icon, size: 18),
-                        const SizedBox(width: 6),
-                      ],
-                      Text(label),
-                    ],
-                  ),
-                ),
+        final compact = constraints.maxWidth < 560;
+        final button = SizedBox(
+          width: compact ? double.infinity : 230,
+          height: 45,
+          child: ElevatedButton(
+            onPressed: onPressed,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: color,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: const Color(0xFFE7E9E7),
+              disabledForegroundColor: const Color(0xFF85898D),
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(5),
+              ),
+              textStyle: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
               ),
             ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 18),
+                  const SizedBox(width: 9),
+                ],
+                Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
+              ],
+            ),
+          ),
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
             if (hint != null) ...[
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  hint,
-                  style: const TextStyle(
-                    color: _mutedTextColor,
-                    fontSize: 12,
-                    height: 1.3,
-                  ),
+              Text(
+                hint,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF777B80),
+                  fontSize: 11,
+                  height: 1.45,
                 ),
               ),
+              const SizedBox(height: 10),
             ],
+            Center(child: button),
           ],
         );
       },
@@ -1421,43 +1640,31 @@ class _TakeExamPageState extends State<TakeExamPage>
       alignment: Alignment.topCenter,
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 26),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [_cardColor.withOpacity(0.9), _cardColor.withOpacity(0.55)],
-          ),
-          border: Border.all(color: Colors.white.withOpacity(0.06)),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFDFE2DF)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(15),
               decoration: BoxDecoration(
-                color: _accentColor.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _accentColor.withOpacity(0.35)),
-                boxShadow: [
-                  BoxShadow(
-                    color: _accentColor.withOpacity(0.35),
-                    blurRadius: 14,
-                    spreadRadius: 1,
-                  ),
-                ],
+                color: const Color(0xFFE8F5EE),
+                borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(icon, size: 28, color: _accentColor),
+              child: Icon(icon, size: 29, color: _accentColor),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 15),
             Text(
               message,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                color: _mutedTextColor,
+                color: Color(0xFF17181D),
                 fontSize: 15,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ],
@@ -1473,4 +1680,35 @@ class _DetailRow {
   final String value;
 
   const _DetailRow(this.icon, this.label, this.value);
+}
+class _SkeletonPulse extends StatefulWidget {
+  final Widget child;
+  const _SkeletonPulse({required this.child});
+
+  @override
+  State<_SkeletonPulse> createState() => _SkeletonPulseState();
+}
+
+class _SkeletonPulseState extends State<_SkeletonPulse>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: .55, end: 1).animate(
+        CurvedAnimation(parent: _c, curve: Curves.easeInOut),
+      ),
+      child: widget.child,
+    );
+  }
 }

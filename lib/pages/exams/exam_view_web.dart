@@ -23,6 +23,7 @@ class ExamView extends StatefulWidget {
 
 class _ExamViewState extends State<ExamView> {
   static final Set<String> _registered = {};
+  static final Map<String, html.IFrameElement> _iframes = {};
   StreamSubscription<html.MessageEvent>? _sub;
   late final String _viewType =
       'exam-html-view-${widget.examId}-${widget.studentId}';
@@ -51,16 +52,21 @@ class _ExamViewState extends State<ExamView> {
       final studentId = widget.studentId;
       ui.platformViewRegistry.registerViewFactory(_viewType, (int viewId) {
         final iframe = html.IFrameElement()
-          ..src = '${html.window.location.origin}/assets/exam.html?examId=$examId'
+          ..src =
+              '${html.window.location.origin}/assets/exam.html?examId=$examId'
           ..style.border = 'none'
           ..style.width = '100%'
           ..style.height = '100%'
-          ..allow = 'fullscreen; microphone; camera; clipboard-read; clipboard-write';
+          ..allow =
+              'fullscreen; microphone; camera; clipboard-read; clipboard-write';
 
         iframe.onLoad.listen((_) {
-          iframe.contentWindow?.postMessage(
-              {'examId': examId, 'studentId': studentId}, '*');
+          iframe.contentWindow?.postMessage({
+            'examId': examId,
+            'studentId': studentId,
+          }, '*');
         });
+        _iframes[_viewType] = iframe;
         return iframe;
       });
     }
@@ -69,6 +75,11 @@ class _ExamViewState extends State<ExamView> {
   @override
   void dispose() {
     _sub?.cancel();
+    final iframe = _iframes.remove(_viewType);
+    if (iframe != null) {
+      iframe.contentWindow?.postMessage({'action': 'dispose'}, '*');
+      iframe.src = 'about:blank';
+    }
     super.dispose();
   }
 

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Exam Portal — Full FaceMesh with Eye Bubble</title>
+    <title>FOTS — Secure Examination</title>
 
     <!-- Firebase + App Initialization FIRST -->
     <script type="module">
@@ -68,13 +68,14 @@
       const db = getFirestore(app);
       const rtdb = getDatabase(app);
       const auth = getAuth(app);
-      
+
       // Sign in with custom token for mobile WebView
       if (window.__customToken) {
-        signInWithCustomToken(auth, window.__customToken)
-          .catch((e) => console.error("Custom token sign-in failed:", e));
+        signInWithCustomToken(auth, window.__customToken).catch((e) =>
+          console.error("Custom token sign-in failed:", e),
+        );
       }
-      
+
       let authReady = false;
       const functions = getFunctions(app, "asia-southeast1");
       window.functions = functions;
@@ -587,7 +588,10 @@
           return true;
         }
 
-        if (!navigator.mediaDevices?.getUserMedia && !window.cameraCaptureStream?.active) {
+        if (
+          !navigator.mediaDevices?.getUserMedia &&
+          !window.cameraCaptureStream?.active
+        ) {
           console.warn("Camera capture is not supported in this browser.");
           return false;
         }
@@ -1282,7 +1286,8 @@
           if (window.strikesLoadedPromise) await window.strikesLoadedPromise;
 
           // Re-check after await: a strike that was waiting can't land after submit/time-up
-          if (window.examFinished || window.hasSubmitted || window.submitting) return;
+          if (window.examFinished || window.hasSubmitted || window.submitting)
+            return;
 
           // Local counter (use cheatingCount consistently)
           window.cheatingCount = (window.cheatingCount || 0) + 1;
@@ -1539,6 +1544,7 @@
         }
         window.cameraCaptureStream = null;
         window.cheatCaptureStream = null;
+        window.disposeExamTracking?.();
 
         // Notify parent window or redirect
         console.log("📤 Sending finishExam message to parent window");
@@ -1615,8 +1621,8 @@
           if (remainingMs <= 0) {
             clearInterval(timer);
             countdownEl.textContent = "Time's up!";
-            window.examFinished = true;     // prevent late strikes
-            window.allowStrikes = false;    // prevent late strikes
+            window.examFinished = true; // prevent late strikes
+            window.allowStrikes = false; // prevent late strikes
             clearExamStorage();
 
             window.markIncompleteIfNeeded2cloudfunction();
@@ -1849,6 +1855,7 @@
         });
 
         renderNextOrSubmitButton();
+        window.fitExamContent?.();
       }
       function renderNextOrSubmitButton() {
         const btn = document.getElementById("nextQuestion");
@@ -2123,6 +2130,10 @@
         document.getElementById("answermodelneeded").style.display = "none";
       };
     </script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap"
       rel="stylesheet"
@@ -2532,83 +2543,1487 @@
           min-height: 380px;
         }
       }
+
+      /* ================================================================
+         FOTS EXAM UI REDESIGN
+         Presentation only: all existing exam scripts and IDs are retained.
+         ================================================================ */
+      :root {
+        --navy: #111217;
+        --card: #ffffff;
+        --accent: #087b4f;
+        --bg: #f7f8f6;
+        --ok: #12815b;
+        --warn: #bd2942;
+        --muted: #7e8287;
+      }
+
+      html {
+        color-scheme: light;
+        scroll-behavior: smooth;
+      }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        color: #17181d;
+        background-color: #f7f8f6;
+        background-image: radial-gradient(#11121712 0.55px, transparent 0.55px);
+        background-size: 6px 6px;
+        font-family: Inter, Arial, sans-serif;
+        letter-spacing: -0.012em;
+        -webkit-font-smoothing: antialiased;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid #087b4f;
+        outline-offset: 3px;
+      }
+
+      .topbar {
+        min-height: 78px;
+        height: auto;
+        position: relative;
+        z-index: 5;
+        padding: 14px clamp(18px, 4vw, 54px);
+        background: #111217;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 22px;
+        box-shadow: 0 8px 25px rgba(17, 18, 23, 0.12);
+      }
+      .topbar .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font:
+          700 21px/1 "Space Grotesk",
+          Inter,
+          sans-serif;
+        letter-spacing: -0.7px;
+      }
+      .brand-mark {
+        width: 42px;
+        height: 42px;
+        display: grid;
+        place-items: center;
+        flex: 0 0 42px;
+        border-radius: 9px;
+        background: #087b4f;
+        color: #fff;
+        font:
+          700 23px/1 "Space Grotesk",
+          sans-serif;
+        letter-spacing: -1px;
+      }
+      .brand-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .brand-copy strong {
+        font:
+          700 21px/1 "Space Grotesk",
+          sans-serif;
+      }
+      .brand-copy small {
+        color: #a7a9b1;
+        font:
+          500 8px/1.4 "DM Mono",
+          monospace;
+        letter-spacing: 1.1px;
+      }
+      .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+      .topbar-session {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #d1d2d6;
+        font:
+          500 9px/1.4 "DM Mono",
+          monospace;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+      }
+      .topbar-session .status-dot,
+      .live-dot {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 7px;
+        border-radius: 50%;
+        background: #58d49b;
+        box-shadow: 0 0 0 4px rgba(88, 212, 155, 0.12);
+      }
+      .timer-box {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        align-items: flex-end;
+        min-width: 145px;
+        padding: 9px 12px;
+        background: #202127;
+        border: 1px solid #363840;
+        border-radius: 7px;
+      }
+      .timer-caption {
+        color: #9699a2;
+        font:
+          500 8px/1.2 "DM Mono",
+          monospace;
+        letter-spacing: 0.9px;
+      }
+      .topbar .timer {
+        position: static;
+        left: auto;
+        color: #a5e9c5;
+        font:
+          700 12px/1.2 "DM Mono",
+          monospace;
+        white-space: nowrap;
+      }
+
+      .wrap {
+        width: min(1480px, 100%);
+        max-width: 1480px;
+        margin: 0 auto;
+        padding: 30px clamp(16px, 3vw, 38px) 46px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 345px;
+        gap: 20px;
+        align-items: start;
+      }
+      .exam-main {
+        min-width: 0;
+      }
+      .page-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 18px;
+        margin: 0 0 18px;
+      }
+      .eyebrow {
+        margin-bottom: 8px;
+        color: #087b4f;
+        font:
+          500 9px/1.4 "DM Mono",
+          monospace;
+        letter-spacing: 1.15px;
+        text-transform: uppercase;
+      }
+      .page-heading h1 {
+        margin: 0;
+        color: #15161b;
+        font:
+          700 clamp(27px, 3vw, 34px)/1.05 "Space Grotesk",
+          Inter,
+          sans-serif;
+        letter-spacing: -1.2px;
+      }
+      .page-heading p {
+        margin: 9px 0 0;
+        max-width: 610px;
+        color: #777b81;
+        font-size: 12px;
+        line-height: 1.65;
+      }
+      .secure-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex: 0 0 auto;
+        padding: 9px 11px;
+        border: 1px solid #d2eadc;
+        background: #eaf6ef;
+        color: #087b4f;
+        border-radius: 5px;
+        font:
+          500 9px/1.3 "DM Mono",
+          monospace;
+        text-transform: uppercase;
+        letter-spacing: 0.35px;
+      }
+      .secure-pill .secure-dot {
+        height: 6px;
+        width: 6px;
+        border-radius: 50%;
+        background: #087b4f;
+      }
+
+      .exam-zone {
+        position: relative;
+        min-width: 0;
+        overflow: hidden;
+        background: #fff;
+        border: 1px solid #dfe2df;
+        border-radius: 10px;
+        box-shadow: 0 9px 28px rgba(28, 33, 29, 0.035);
+        color: #17181d;
+      }
+      .exam-zone::before {
+        content: "SECURE SESSION";
+        position: absolute;
+        z-index: 2;
+        top: 11px;
+        right: 13px;
+        padding: 5px 7px;
+        border: 1px solid #c8e7d5;
+        border-radius: 3px;
+        background: #e1f2e8;
+        color: #087b4f;
+        font:
+          500 8px/1.2 "DM Mono",
+          monospace;
+        letter-spacing: 0.5px;
+      }
+      .exam-hero {
+        min-height: 112px;
+        padding: 27px 30px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+        position: relative;
+        overflow: hidden;
+        background: #111217;
+        color: #fff;
+      }
+      .exam-hero::after {
+        content: "";
+        position: absolute;
+        width: 210px;
+        height: 210px;
+        right: 3%;
+        top: -125px;
+        border: 1px solid rgba(116, 230, 172, 0.28);
+        border-radius: 50%;
+        pointer-events: none;
+      }
+      .hero-overline {
+        display: block;
+        color: #74d7a0;
+        margin-bottom: 8px;
+        font:
+          500 8px/1.4 "DM Mono",
+          monospace;
+        letter-spacing: 1.25px;
+      }
+      .exam-hero h2 {
+        position: relative;
+        z-index: 1;
+        margin: 0;
+        color: #fff;
+        font:
+          700 27px/1.08 "Space Grotesk",
+          sans-serif;
+        letter-spacing: -0.9px;
+      }
+      .exam-hero p {
+        position: relative;
+        z-index: 1;
+        margin: 8px 0 0;
+        color: #adb0ba;
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      .hero-status {
+        position: relative;
+        z-index: 1;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+        padding: 8px 10px;
+        background: #25262d;
+        border: 1px solid #42444c;
+        border-radius: 4px;
+        color: #e0e1e5;
+        font:
+          500 9px/1.4 "DM Mono",
+          monospace;
+      }
+      .hero-status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #58d49b;
+      }
+      .exam-panel-body {
+        padding: 22px;
+      }
+      #examGate,
+      #examCard {
+        min-height: 0;
+        margin: 0;
+        width: auto;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: #fff;
+        color: #17181d;
+        box-shadow: none;
+        overflow: visible;
+      }
+      #examCard {
+        box-sizing: border-box;
+        padding: clamp(16px, 2.4vw, 28px);
+        border: 1px solid #dfe3df;
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 6px 20px rgba(20, 24, 21, 0.06);
+      }
+      #examContentGate {
+        padding: 26px 12px 30px;
+        text-align: center;
+      }
+      #examContentGate h2 {
+        margin: 0 0 10px !important;
+        color: #15161b !important;
+        font:
+          700 24px/1.15 "Space Grotesk",
+          sans-serif;
+        letter-spacing: -0.6px;
+      }
+      #examContentGate p {
+        margin: 0 auto 18px;
+        max-width: 440px;
+        color: #777b81;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      #examContentGate .record-icon--gate {
+        width: 64px;
+        height: 64px;
+        flex-basis: 64px;
+        border-width: 3px;
+        color: #c5334e;
+        background: #fff1f3;
+        box-shadow: 0 8px 25px rgba(197, 51, 78, 0.12);
+      }
+      #examContentGate .record-icon--gate::before {
+        width: 24px;
+        height: 24px;
+      }
+      #examContent {
+        min-height: 0;
+        color: #17181d;
+      }
+      #examContent > h2 {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 0 0 14px;
+        color: #17181d;
+        font:
+          700 15px/1.35 "Space Grotesk",
+          sans-serif;
+        letter-spacing: -0.2px;
+      }
+      #examContent > h2::before {
+        content: "";
+        display: inline-block;
+        width: 4px;
+        height: 19px;
+        border-radius: 2px;
+        background: #087b4f;
+      }
+      #examContent .question {
+        margin: 0;
+        padding: 20px;
+        background: #f7f8f6;
+        border: 1px solid #e5e8e4;
+        border-radius: 7px;
+        color: #17181d;
+      }
+      #examContent .question > p {
+        margin: 0 0 18px;
+        color: #17181d;
+        font-size: 15px;
+        font-weight: 600;
+        line-height: 1.65;
+        overflow-wrap: anywhere;
+      }
+      #examContent .options {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 9px;
+      }
+      #examContent .options label {
+        display: flex;
+        align-items: flex-start;
+        gap: 11px;
+        margin: 0;
+        padding: 13px 14px;
+        min-width: 0;
+        border: 1px solid #dfe3df;
+        border-radius: 6px;
+        background: #fff;
+        color: #363940;
+        font-size: 12px;
+        line-height: 1.55;
+        overflow-wrap: anywhere;
+        transition:
+          background 0.15s ease,
+          border-color 0.15s ease,
+          color 0.15s ease;
+      }
+      #examContent .options label:hover {
+        border-color: #abd9c0;
+        background: #f0f8f3;
+      }
+      #examContent .options label:has(input:checked) {
+        border-color: #087b4f;
+        background: #e8f6ed;
+        color: #075536;
+        box-shadow: inset 0 0 0 1px rgba(8, 123, 79, 0.06);
+      }
+      #examContent .options input {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 16px;
+        margin: 2px 0 0;
+        accent-color: #087b4f;
+        cursor: pointer;
+      }
+      #examContent select {
+        width: 100%;
+        min-height: 46px;
+        margin: 4px 0 0;
+        padding: 10px 13px;
+        background: #fff;
+        color: #30333a;
+        border: 1px solid #dfe3df;
+        border-radius: 6px;
+        box-shadow: none;
+        font-size: 13px;
+      }
+      #examContent select:focus {
+        border-color: #087b4f;
+        outline: 2px solid #d2eadc;
+      }
+
+      .exam-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        margin-top: 20px;
+        padding-top: 17px;
+        border-top: 1px solid #e6e9e6;
+      }
+      .footer-status-wrap {
+        min-width: 0;
+      }
+      .footer-label {
+        margin-bottom: 7px;
+        color: #85898d;
+        font:
+          500 8px/1.4 "DM Mono",
+          monospace;
+        letter-spacing: 0.9px;
+        text-transform: uppercase;
+      }
+      #strikeBox.strike-pill {
+        position: static !important;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin: 0;
+        padding: 6px 9px;
+        border: 1px solid #e7bfc8;
+        border-radius: 4px;
+        background: #fff1f3;
+        color: #c5334e;
+        font:
+          700 10px/1.35 "DM Mono",
+          monospace;
+      }
+      .footer-note {
+        margin: 7px 0 0;
+        max-width: 420px;
+        color: #85898d;
+        font-size: 10px;
+        line-height: 1.55;
+      }
+      .btn {
+        min-height: 44px;
+        padding: 0 19px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+        border: 1px solid #087b4f;
+        border-radius: 6px;
+        background: #087b4f;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+        box-shadow: none;
+        transition:
+          background 0.15s ease,
+          border-color 0.15s ease,
+          transform 0.15s ease;
+      }
+      .btn:hover:not(:disabled) {
+        background: #066b44;
+        border-color: #066b44;
+        transform: translateY(-1px);
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .camera-panel {
+        min-width: 0;
+        display: grid;
+        align-items: start;
+        gap: 15px;
+        padding: 0;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+      .side-card {
+        overflow: hidden;
+        min-width: 0;
+        background: #fff;
+        border: 1px solid #dfe2df;
+        border-radius: 9px;
+        color: #17181d;
+        box-shadow: 0 8px 25px rgba(28, 33, 29, 0.03);
+      }
+      .side-card-title {
+        min-height: 58px;
+        padding: 14px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        border-bottom: 1px solid #e5e7e5;
+        color: #181a1e;
+        font:
+          700 13px/1.4 "Space Grotesk",
+          sans-serif;
+      }
+      .side-card-title h3 {
+        margin: 0;
+        font: inherit;
+      }
+      .side-card-title p {
+        margin: 4px 0 0;
+        color: #8a8d92;
+        font:
+          400 9px/1.4 Inter,
+          sans-serif;
+      }
+      .live-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border: 1px solid #d2eadc;
+        background: #eaf6ef;
+        color: #087b4f;
+        padding: 6px 8px;
+        border-radius: 4px;
+        font:
+          500 8px/1.2 "DM Mono",
+          monospace;
+      }
+      .live-pill .live-dot {
+        width: 6px;
+        height: 6px;
+        flex-basis: 6px;
+        box-shadow: none;
+      }
+      .cam-viewport {
+        position: relative;
+        width: auto;
+        aspect-ratio: 4 / 3;
+        margin: 14px;
+        background: #08090c;
+        border: 1px solid #282a30;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      video#input_video,
+      canvas#overlay {
+        width: 100%;
+        height: 100%;
+      }
+      .camera-corner {
+        position: absolute;
+        left: 9px;
+        bottom: 9px;
+        padding: 6px 8px;
+        border: 1px solid #66c192;
+        border-radius: 3px;
+        background: rgba(17, 18, 23, 0.9);
+        color: #dff2e7;
+        font:
+          500 8px/1.35 "DM Mono",
+          monospace;
+        letter-spacing: 0.2px;
+      }
+      .status-row {
+        display: flex;
+        align-items: stretch;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 0 14px 14px;
+        margin: 0;
+      }
+      .face-status {
+        flex: 1 1 190px;
+        min-width: 0;
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        padding: 11px;
+        border: 1px solid #e2e5e2;
+        border-radius: 6px;
+        background: #f7f8f6;
+        color: #3d4147;
+      }
+      .face-status.ok {
+        background: #eaf6ef;
+        border-color: #cfe8d9;
+      }
+      .face-status.bad {
+        background: #fff5f5;
+        border-color: #f1d8dc;
+      }
+      #faceIcon {
+        font-size: 15px;
+        line-height: 1.2;
+      }
+      .verified-line {
+        color: #25272d;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.45;
+      }
+      .status-description {
+        margin-top: 4px;
+        color: #81858b;
+        font-size: 9px;
+        line-height: 1.5;
+      }
+      .recording-wrap {
+        display: flex;
+        align-items: flex-start;
+      }
+      .recording {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        padding: 7px 8px;
+        border: 1px solid #e7bfc8;
+        border-radius: 4px;
+        background: #fff1f3;
+        color: #c5334e;
+        font:
+          500 8px/1.35 "DM Mono",
+          monospace;
+      }
+      .record-icon {
+        display: inline-grid;
+        place-items: center;
+        width: 10px;
+        height: 10px;
+        flex: 0 0 10px;
+        border-radius: 50%;
+        border: 1px solid currentColor;
+      }
+      .record-icon::before {
+        content: "";
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .monitor-list {
+        padding: 4px 16px 13px;
+      }
+      .monitor-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 11px;
+        padding: 13px 0;
+        border-bottom: 1px solid #e9ebe9;
+      }
+      .monitor-item:last-child {
+        border-bottom: 0;
+      }
+      .monitor-index {
+        display: grid;
+        place-items: center;
+        flex: 0 0 25px;
+        height: 25px;
+        border-radius: 5px;
+        background: #e8f6ed;
+        color: #087b4f;
+        font:
+          500 9px/1 "DM Mono",
+          monospace;
+      }
+      .monitor-item strong {
+        display: block;
+        color: #22242a;
+        font-size: 10px;
+        line-height: 1.45;
+      }
+      .monitor-item p {
+        margin: 3px 0 0;
+        color: #82868b;
+        font-size: 9px;
+        line-height: 1.55;
+      }
+
+      /* Dialogs keep their original IDs and behavior, restyled to match the new theme. */
+      .modal {
+        background: rgba(9, 11, 18, 0.65);
+        backdrop-filter: blur(4px);
+      }
+      .modal-content {
+        width: min(410px, calc(100vw - 32px));
+        margin: 14vh auto;
+        padding: 25px;
+        background: #fff;
+        color: #17181d;
+        border: 1px solid #dfe2df;
+        border-radius: 10px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
+      }
+      .modal-content p {
+        color: #555961;
+        font-size: 13px;
+        line-height: 1.65;
+      }
+      .modal-content hr {
+        border-color: #e4e7e4 !important;
+      }
+      .stop-card h3 {
+        color: #17181d;
+        font:
+          700 24px "Space Grotesk",
+          sans-serif;
+      }
+      .stop-card .stop-icon {
+        background: #fff1f3;
+        border-color: #f1d8dc;
+        color: #bd2942;
+      }
+
+      @media (max-width: 1040px) {
+        .wrap {
+          grid-template-columns: minmax(0, 1fr) 310px;
+          gap: 15px;
+          padding-left: 18px;
+          padding-right: 18px;
+        }
+        .exam-panel-body {
+          padding: 17px;
+        }
+        .exam-hero {
+          padding: 24px 22px;
+        }
+      }
+      @media (max-width: 860px) {
+        .wrap {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 18px;
+        }
+        .camera-panel {
+          order: 2;
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .exam-main {
+          order: 1;
+        }
+        .camera-card .cam-viewport {
+          aspect-ratio: 16 / 9;
+        }
+      }
+      @media (max-width: 600px) {
+        .topbar {
+          min-height: 70px;
+          padding: 12px 15px;
+          gap: 10px;
+        }
+        .topbar .brand {
+          gap: 9px;
+        }
+        .brand-mark {
+          width: 37px;
+          height: 37px;
+          flex-basis: 37px;
+          border-radius: 8px;
+        }
+        .brand-copy strong {
+          font-size: 18px;
+        }
+        .brand-copy small {
+          font-size: 7px;
+          letter-spacing: 0.65px;
+        }
+        .topbar-right {
+          gap: 0;
+        }
+        .topbar-session {
+          display: none;
+        }
+        .timer-box {
+          min-width: 0;
+          padding: 8px 9px;
+          border-radius: 6px;
+        }
+        .timer-caption {
+          font-size: 7px;
+        }
+        .topbar .timer {
+          font-size: 10px;
+        }
+        .wrap {
+          padding: 22px 13px 30px;
+          gap: 15px;
+        }
+        .page-heading {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+        .page-heading h1 {
+          font-size: 30px;
+        }
+        .page-heading p {
+          font-size: 12px;
+          margin-top: 8px;
+        }
+        .secure-pill {
+          padding: 8px 10px;
+        }
+        .exam-hero {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 13px;
+          padding: 25px 19px 20px;
+        }
+        .exam-hero h2 {
+          font-size: 25px;
+        }
+        .exam-hero p {
+          font-size: 11px;
+        }
+        .exam-zone::before {
+          top: 9px;
+          right: 9px;
+          font-size: 7px;
+          padding: 4px 5px;
+        }
+        .exam-panel-body {
+          padding: 14px;
+        }
+        #examContentGate {
+          padding: 24px 4px 19px;
+        }
+        #examContentGate h2 {
+          font-size: 22px;
+        }
+        #examContent > h2 {
+          font-size: 15px;
+        }
+        #examContent .question {
+          padding: 16px 13px;
+        }
+        #examContent .question > p {
+          font-size: 16px;
+          line-height: 1.55;
+          margin-bottom: 16px;
+        }
+        #examContent .options {
+          gap: 9px;
+        }
+        #examContent .options label {
+          min-height: 49px;
+          padding: 13px 11px;
+          gap: 10px;
+          font-size: 13px;
+          border-radius: 7px;
+        }
+        #examContent .options input {
+          width: 19px;
+          height: 19px;
+          flex-basis: 19px;
+        }
+        .exam-footer {
+          align-items: stretch;
+          flex-direction: column;
+          gap: 14px;
+        }
+        .footer-note {
+          font-size: 10px;
+        }
+        #nextQuestion {
+          width: 100%;
+          min-height: 52px;
+          font-size: 14px;
+        }
+        .side-card-title {
+          min-height: 55px;
+          padding: 13px;
+        }
+        .cam-viewport {
+          margin: 12px;
+        }
+        .status-row {
+          padding: 0 12px 12px;
+        }
+        .face-status {
+          flex-basis: 100%;
+        }
+        .recording-wrap {
+          width: 100%;
+        }
+        .modal-content {
+          margin: 20vh auto;
+          padding: 22px 18px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+
+      .gaze-bubble {
+        border-color: #087b4f !important;
+        background: rgba(8, 123, 79, 0.12) !important;
+        box-shadow: 0 0 0 5px rgba(8, 123, 79, 0.08);
+      }
+      .gaze-bubble::after {
+        background: rgba(8, 123, 79, 0.95) !important;
+      }
+      .gaze-bubble.alert {
+        background: rgba(189, 41, 66, 0.13) !important;
+        border-color: rgba(189, 41, 66, 0.7) !important;
+      }
+      .gaze-bubble.alert::after {
+        background: rgba(189, 41, 66, 0.95) !important;
+      }
+
+      /* Viewport-fit exam layout */
+      html,
+      body {
+        min-height: 100%;
+      }
+      body {
+        min-height: 100dvh;
+        overflow-x: hidden;
+      }
+      .wrap {
+        width: min(1600px, 100%);
+        height: calc(100dvh - 1px);
+        min-height: 0;
+        margin: 0 auto;
+        padding: clamp(12px, 2vh, 24px) clamp(14px, 2vw, 32px);
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 30%);
+        gap: clamp(12px, 1.4vw, 22px);
+        align-items: stretch;
+      }
+      .exam-main {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .page-heading {
+        flex: 0 0 auto;
+        margin-bottom: clamp(10px, 1.5vh, 18px);
+      }
+      .page-heading h1 {
+        font-size: clamp(25px, 2.2vw, 34px);
+      }
+      .page-heading p {
+        margin-top: 5px;
+      }
+      .timer-box {
+        min-width: 145px;
+        padding: 9px 12px;
+        background: #eaf6ef;
+        border: 1px solid #cfe8d9;
+        border-radius: 5px;
+        align-items: flex-start;
+      }
+      .timer-caption {
+        color: #087b4f;
+      }
+      .topbar .timer,
+      .timer-box .timer {
+        color: #087b4f;
+      }
+      .exam-zone {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .exam-hero {
+        flex: 0 0 auto;
+        padding: clamp(16px, 2.2vh, 27px) clamp(18px, 2vw, 30px);
+      }
+      .exam-panel-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        padding: clamp(14px, 1.8vw, 22px);
+        overflow-y: auto;
+      }
+      #examGate,
+      #examCard {
+        min-height: 0;
+      }
+      #examCard {
+        display: flex;
+        flex-direction: column;
+      }
+      #examContent {
+        min-height: 0;
+      }
+      .exam-footer {
+        margin-top: 16px;
+        padding-top: 14px;
+      }
+      .exam-footer .footer-status-wrap {
+        display: none;
+      }
+      .camera-panel {
+        height: 100%;
+        min-height: 0;
+        grid-template-rows: minmax(0, 1fr) auto;
+        gap: 12px;
+      }
+      .camera-card {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .camera-card .cam-viewport {
+        flex: 1 1 auto;
+        min-height: 130px;
+        aspect-ratio: auto;
+      }
+      .camera-card .status-row {
+        flex: 0 0 auto;
+      }
+      .camera-panel > .side-card:not(.camera-card) {
+        flex: 0 0 auto;
+      }
+      .monitor-list {
+        padding-top: 0;
+        padding-bottom: 4px;
+      }
+      .monitor-item {
+        padding: 8px 0;
+      }
+      @media (min-width: 861px) {
+        .exam-zone {
+          height: 100%;
+        }
+      }
+      @media (max-width: 860px) {
+        .wrap {
+          height: auto;
+          min-height: calc(100dvh - 1px);
+          grid-template-columns: minmax(0, 1fr);
+          padding: 18px 14px 24px;
+        }
+        .exam-zone {
+          flex: initial;
+        }
+        .exam-panel-body {
+          overflow: visible;
+        }
+        .camera-panel {
+          height: auto;
+          grid-template-rows: auto auto;
+        }
+        .camera-card .cam-viewport {
+          flex: initial;
+          aspect-ratio: 16 / 9;
+          min-height: 0;
+        }
+        .page-heading {
+          align-items: center;
+        }
+      }
+      @media (max-width: 600px) {
+        .page-heading {
+          align-items: flex-start;
+          flex-direction: row;
+        }
+        .page-heading h1 {
+          font-size: 26px;
+        }
+        .page-heading p {
+          display: none;
+        }
+        .timer-box {
+          min-width: 0;
+          padding: 7px 9px;
+        }
+        .timer-box .timer {
+          font-size: 10px;
+        }
+        .exam-hero {
+          padding: 22px 16px 18px;
+        }
+        .exam-hero h2 {
+          font-size: 22px;
+        }
+      }
+
+      /* Keep camera status and recording badge visible without colliding with guidelines. */
+      .camera-card {
+        min-height: 0;
+      }
+      .camera-card .status-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+      }
+      .camera-card .face-status {
+        min-width: 0;
+        width: 100%;
+        flex: initial;
+      }
+      .camera-card .recording-wrap {
+        width: 100%;
+        min-width: 0;
+        justify-self: start;
+      }
+
+      .camera-card .recording {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      .camera-card .recording {
+        position: static;
+        z-index: 1;
+        flex-shrink: 0;
+        white-space: nowrap;
+      }
+      .camera-panel > .side-card:not(.camera-card) {
+        position: relative;
+        z-index: 0;
+      }
+      @media (max-width: 420px) {
+        .camera-card .status-row {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .camera-card .recording-wrap {
+          justify-self: start;
+        }
+      }
+      /* Keep Recording Active visible above the guidelines */
+      .guidelines-title {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .guidelines-right {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      .guidelines-important {
+        color: #8a8d92;
+        font:
+          500 8px "DM Mono",
+          monospace;
+      }
+
+      .guidelines-title .recording {
+        position: static;
+        display: inline-flex;
+        flex-shrink: 0;
+        white-space: nowrap;
+        max-width: 100%;
+      }
+
+      @media (max-width: 420px) {
+        .guidelines-title {
+          align-items: flex-start;
+        }
+
+        .guidelines-right {
+          width: 100%;
+        }
+      }
+
+      /* ===== FIT THE EXAM CARD TO ONE SCREEN (desktop / tablet) ===== */
+      :root {
+        --fit: 1;
+      }
+
+      @media (min-width: 861px) {
+        html,
+        body {
+          height: 100%;
+          overflow: hidden;
+        }
+
+        body:has(#examCard:not([style*="none"])) .exam-hero {
+          min-height: 0;
+          padding: 12px clamp(18px, 2vw, 30px);
+        }
+
+        body:has(#examCard:not([style*="none"])) .exam-hero p {
+          display: none;
+        }
+
+        body:has(#examCard:not([style*="none"])) .exam-hero h2 {
+          font-size: 18px;
+        }
+
+        .page-heading p {
+          display: none;
+        }
+
+        .exam-panel-body {
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          padding: clamp(10px, 1.6vh, 20px);
+        }
+
+        #examCard:not([style*="none"]) {
+          display: flex !important;
+          flex-direction: column;
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow: hidden;
+          padding: clamp(12px, 2vh, 26px);
+        }
+
+        #examContent {
+          display: flex;
+          flex: 1 1 auto;
+          flex-direction: column;
+          min-height: 0;
+        }
+
+        #examContent .question {
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+        }
+
+        .exam-footer {
+          flex: 0 0 auto;
+          margin-top: calc(14px * var(--fit));
+          padding-top: calc(12px * var(--fit));
+        }
+
+        #examContent > h2 {
+          margin-bottom: calc(12px * var(--fit));
+          font-size: calc(15px * var(--fit));
+        }
+
+        #examContent .question {
+          padding: calc(20px * var(--fit));
+        }
+
+        #examContent .question > p {
+          margin-bottom: calc(16px * var(--fit));
+          font-size: calc(16px * var(--fit));
+        }
+
+        #examContent .options {
+          gap: calc(9px * var(--fit));
+        }
+
+        #examContent .options label {
+          padding: calc(12px * var(--fit)) calc(14px * var(--fit));
+          font-size: calc(13px * var(--fit));
+        }
+      }
+      @media (min-width: 861px) {
+        body:has(#examCard:not([style*="none"])) .exam-hero {
+          padding-right: 112px;
+        }
+      }
     </style>
   </head>
 
   <body>
-    <div class="topbar">
-      <div class="brand">EXAM PORTAL</div>
-      <div class="timer" id="countdown">Time Left: 00:00</div>
-    </div>
-
     <div class="wrap">
-      <!-- shared strike indicator (single id) -->
-      <div style="position: relative">
-        <div
-          class="strike-indicator"
-          id="strikeBox"
-          style="position: absolute; right: 14px; top: -8px; z-index: 20"
-        >
-          Strikes: 0
-        </div>
-
-        <!-- GATE CARD (visible first) -->
-        <div class="card" id="examGate">
-          <div id="examContentGate">
-            <h2 style="text-align: center">Face verification required</h2>
-            <p style="text-align: center">
-              Please look at the logo to start your exam.
+      <main class="exam-main">
+        <div class="page-heading">
+          <div>
+            <h1>Examination</h1>
+            <p>
+              Answer each question carefully. Your responses are saved as you
+              continue through the exam.
             </p>
-
-            <div
-              style="display: flex; justify-content: center; margin-top: 12px"
-            >
-              <img
-                src="image/Fots.png"
-                style="width: 180px; border-radius: 8px"
-              />
-            </div>
+          </div>
+          <div class="timer-box">
+            <span class="timer-caption">TIME LEFT</span>
+            <div class="timer" id="countdown">Time Left: 00:00</div>
           </div>
         </div>
 
-        <!-- EXAM CARD (hidden first) -->
-        <div class="card" id="examCard" style="display: none">
-          <div id="examContent">
-            <h2>Question 1</h2>
-            <div class="question">
-              <p>Loading questions...</p>
-            </div>
-          </div>
-
-          <div style="margin-top: 12px; text-align: right">
-            <button class="btn" id="nextQuestion">Next</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- RIGHT SIDE — CAMERA PANEL (NOW SEPARATE) -->
-      <div class="camera-panel">
-        <div class="cam-viewport">
-          <video id="input_video" autoplay playsinline muted></video>
-          <canvas id="overlay"></canvas>
-        </div>
-
-        <div class="status-row">
-          <div id="faceStatus" class="face-status bad">
-            <span id="faceIcon">⛔</span>
+        <section class="exam-zone" id="examZone" aria-label="Exam questions">
+          <div class="exam-hero">
             <div>
-              <div class="verified-line" id="faceText">Face not verified</div>
-              <div style="font-size: 12px; color: var(--muted)">
-                Please center your face in the box and keep eyes on the screen
+              <span class="hero-overline">ASSESSMENT WORKSPACE</span>
+              <h2>Answer Sheet</h2>
+              <p>Choose the best answer for each question.</p>
+            </div>
+            <div class="hero-status">
+              <span class="hero-status-dot"></span> Proctored session
+            </div>
+          </div>
+
+          <div class="exam-panel-body">
+            <!-- Gate card stays connected to the original face-verification flow. -->
+            <div id="examGate" class="card exam-stage">
+              <div id="examContentGate">
+                <h2>Face verification required</h2>
+                <p>Please look at the recording icon to start your exam.</p>
+                <div
+                  style="
+                    display: flex;
+                    justify-content: center;
+                    margin-top: 12px;
+                  "
+                >
+                  <span
+                    class="record-icon record-icon--gate"
+                    role="img"
+                    aria-label="Recording"
+                  ></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- The dynamic question renderer and Next/Submit button IDs are unchanged. -->
+            <div class="card exam-stage" id="examCard" style="display: none">
+              <div id="examContent">
+                <h2>Question 1</h2>
+                <div class="question"><p>Loading questions...</p></div>
+              </div>
+
+              <div class="exam-footer">
+                <div class="footer-status-wrap" aria-hidden="true">
+                  <div id="strikeBox" style="display: none">Strikes: 0</div>
+                </div>
+                <button class="btn" id="nextQuestion" type="button">
+                  Next
+                </button>
               </div>
             </div>
           </div>
+        </section>
+      </main>
 
-          <div style="text-align: right">
-            <div class="recording" id="recLabel">Recording. Active</div>
+      <aside class="camera-panel" aria-label="Exam proctoring and guidelines">
+        <section class="side-card camera-card">
+          <div class="side-card-title">
+            <div>
+              <h3>Proctoring Camera</h3>
+              <p>Live face verification</p>
+            </div>
+            <span class="live-pill"><span class="live-dot"></span> LIVE</span>
           </div>
-        </div>
-      </div>
+          <div class="cam-viewport">
+            <video id="input_video" autoplay playsinline muted></video>
+            <canvas id="overlay"></canvas>
+            <div class="camera-corner">FOTS SECURE MONITORING</div>
+          </div>
+          <div class="status-row">
+            <div id="faceStatus" class="face-status bad">
+              <span id="faceIcon" aria-hidden="true">⛔</span>
+              <div>
+                <div class="verified-line" id="faceText">Face not verified</div>
+                <div class="status-description">
+                  Please center your face in the box and keep your eyes on the
+                  screen.
+                </div>
+              </div>
+            </div>
+            <div class="recording-wrap">
+              <div class="recording" id="recLabel">
+                <span class="record-icon" aria-hidden="true"></span>
+                Recording. Active
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="side-card">
+          <div class="side-card-title guidelines-title">
+            <span>Exam Guidelines</span>
+
+            <div class="guidelines-right">
+              <span class="guidelines-important">IMPORTANT</span>
+            </div>
+          </div>
+          <div class="monitor-list">
+            <div class="monitor-item">
+              <span class="monitor-index">01</span>
+              <div>
+                <strong>Stay centered</strong>
+                <p>
+                  Keep your face visible to the proctoring camera while
+                  answering.
+                </p>
+              </div>
+            </div>
+            <div class="monitor-item">
+              <span class="monitor-index">02</span>
+              <div>
+                <strong>Read each question</strong>
+                <p>Choose or enter your answer before using Next.</p>
+              </div>
+            </div>
+            <div class="monitor-item">
+              <span class="monitor-index">03</span>
+              <div>
+                <strong>Submit when finished</strong>
+                <p>
+                  Review your final answer and confirm submission when prompted.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </aside>
     </div>
     <!-- Confirmation Modal -->
     <div id="confirmModal" class="modal">
@@ -2682,14 +4097,17 @@
 
     <script>
       // Bridge function for cross-platform communication
-      window.sendToHost = function(data) {
+      window.sendToHost = function (data) {
         // Try mobile bridge first (InAppWebView)
-        if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
-          window.flutter_inappwebview.callHandler('flutterMessage', data);
+        if (
+          window.flutter_inappwebview &&
+          window.flutter_inappwebview.callHandler
+        ) {
+          window.flutter_inappwebview.callHandler("flutterMessage", data);
         }
         // Fallback to web postMessage
         else if (window.parent && window.parent !== window) {
-          window.parent.postMessage(data, '*');
+          window.parent.postMessage(data, "*");
         }
       };
     </script>
@@ -2735,6 +4153,52 @@
         minDetectionConfidence: 0.55,
         minTrackingConfidence: 0.55,
       });
+      let camera = null;
+      let trackingDisposed = false;
+      let animationFrameId = null;
+
+      function disposeExamTracking() {
+        if (trackingDisposed) return;
+        trackingDisposed = true;
+        window.__examTrackingDisposed = true;
+        if (animationFrameId !== null) {
+          cancelAnimationFrame(animationFrameId);
+          animationFrameId = null;
+        }
+        try {
+          camera?.stop();
+        } catch (err) {
+          console.warn("Could not stop the exam camera:", err);
+        }
+        camera = null;
+        window.camera = null;
+        for (const track of videoElement.srcObject?.getTracks?.() ?? []) {
+          track.stop();
+        }
+        videoElement.srcObject = null;
+        for (const stream of [
+          window.cameraCaptureStream,
+          window.cheatCaptureStream,
+        ]) {
+          for (const track of stream?.getTracks?.() ?? []) track.stop();
+        }
+        window.cameraCaptureStream = null;
+        window.cheatCaptureStream = null;
+        try {
+          Promise.resolve(faceMesh.close()).catch((err) =>
+            console.warn("Could not close the exam face detector:", err),
+          );
+        } catch (err) {
+          console.warn("Could not close the exam face detector:", err);
+        }
+        YoloEye.dispose();
+      }
+
+      window.disposeExamTracking = disposeExamTracking;
+      window.addEventListener("pagehide", disposeExamTracking, { once: true });
+      window.addEventListener("message", (event) => {
+        if (event.data?.action === "dispose") disposeExamTracking();
+      });
 
       let verified = false;
       let lastVerifiedChange = Date.now();
@@ -2765,9 +4229,42 @@
     <script src="exam-gaze-block.js"></script>
     <script>
       const GATE_DELAY_MS = 5000;
-      const GATE_DEFAULT_TEXT = "Please look at the logo to start your exam.";
+      const GATE_DEFAULT_TEXT =
+        "Please look at the recording icon to start your exam.";
       let gateTimer = null;
       let gateDeadline = 0;
+
+      window.fitExamContent = function () {
+        const root = document.documentElement.style;
+        const card = document.getElementById("examCard");
+        const question = document.querySelector("#examContent .question");
+        if (
+          window.innerWidth <= 860 ||
+          !card ||
+          card.offsetParent === null ||
+          !question
+        ) {
+          root.setProperty("--fit", "1");
+          return;
+        }
+        let fit = 1;
+        root.setProperty("--fit", fit);
+        while (
+          question.scrollHeight > question.clientHeight + 1 &&
+          fit > 0.75
+        ) {
+          fit = Math.round((fit - 0.04) * 100) / 100;
+          root.setProperty("--fit", fit);
+        }
+      };
+      window.addEventListener("resize", () => window.fitExamContent());
+      document.fonts?.ready.then(() => window.fitExamContent());
+      const examPanelBody = document.querySelector(".exam-panel-body");
+      if (examPanelBody) {
+        new ResizeObserver(() => window.fitExamContent()).observe(
+          examPanelBody,
+        );
+      }
 
       function openExamFromGate() {
         if (gateTimer !== null) {
@@ -2782,6 +4279,7 @@
         document.getElementById("examGate").style.display = "none";
         document.getElementById("examCard").style.display = "block";
         strikeBox.textContent = `Strikes: ${window.cheatingCount || 0}`;
+        window.fitExamContent();
         console.log("Face verified for 5s → starting exam…");
       }
 
@@ -2798,7 +4296,7 @@
           if (message) {
             message.textContent =
               secondsLeft > 0
-                ? `Face verified. Exam starts in ${secondsLeft}s. Keep looking at the logo.`
+                ? `Face verified. Exam starts in ${secondsLeft}s. Keep looking at the recording icon.`
                 : GATE_DEFAULT_TEXT;
           }
           if (secondsLeft === 0) openExamFromGate();
@@ -2865,18 +4363,19 @@
       }
 
       function animLoop() {
+        if (trackingDisposed) return;
         updateBubble();
-        requestAnimationFrame(animLoop);
+        animationFrameId = requestAnimationFrame(animLoop);
       }
       animLoop();
 
       // Initialize camera AFTER YOLO is ready (critical for gaze tracking to work!)
-      let camera = null;
       (async () => {
         try {
           console.log("Waiting for YOLO eye model to initialize...");
           // Wait for YOLO to initialize first - THIS IS CRITICAL!
           await YoloEye.init();
+          if (trackingDisposed) return;
           console.log("YOLO eye model ready, starting camera...");
 
           // Load calibration to get camera resolution
@@ -2884,7 +4383,7 @@
 
           camera = new Camera(videoElement, {
             onFrame: async () => {
-              if (window.submitting) return;
+              if (trackingDisposed || window.submitting) return;
               await faceMesh.send({ image: videoElement });
             },
             facingMode: "user",
@@ -2895,10 +4394,17 @@
           window.camera = camera; // expose so handleSuccessfulSubmission can stop it
           faceMesh.onResults(onResults);
           await camera.start();
+          if (trackingDisposed) {
+            camera.stop();
+            camera = null;
+            return;
+          }
           console.log("Camera started successfully");
         } catch (err) {
-          console.error("Camera/YOLO initialization failed:", err);
-          showCameraUnavailable();
+          if (!trackingDisposed) {
+            console.error("Camera/YOLO initialization failed:", err);
+            showCameraUnavailable();
+          }
         }
       })();
       let matchingPool = [];

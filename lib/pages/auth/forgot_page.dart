@@ -1,56 +1,68 @@
+
+import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:go_router/go_router.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:go_router/go_router.dart';
 
 class ForgotPage extends StatefulWidget {
   const ForgotPage({super.key});
 
   @override
-  _ForgotPageState createState() => _ForgotPageState();
+  State<ForgotPage> createState() => _ForgotPageState();
 }
 
 class _ForgotPageState extends State<ForgotPage> {
-  // Shared theme palette (same as LoginPage / ProfilePage)
-  static const Color _bgColor = Color(0xFF0B1220);
-  static const Color _headerColor = Color(0xFF0F2B45);
-  static const Color _headerColorLight = Color(0xFF17456F);
-  static const Color _cardColor = Color(0xFF0F3B61);
-  static const Color _textColor = Color(0xFFE6F0F8);
-  static const Color _mutedTextColor = Color(0xFF9FB0C3);
-  static const Color _accentColor = Color(0xFF3D8BFF);
-  static const Color _errorColor = Color(0xFFF87171);
-  static const Color _successColor = Color(0xFF4ADE80);
+  // Match the FOTS LoginPage palette.
+  static const Color _paper = Color(0xFFF7F8F6);
+  static const Color _ink = Color(0xFF111217);
+  static const Color _green = Color(0xFF087B4F);
+  static const Color _greenHover = Color(0xFF066640);
+  static const Color _artBg = Color(0xFF101215);
+  static const Color _border = Color(0xFFD9DDDA);
+  static const Color _muted = Color(0xFF666C6C);
+  static const Color _footMuted = Color(0xFF828783);
+  static const Color _errorText = Color(0xFFA42237);
+  static const Color _successText = Color(0xFF087B4F);
 
-  final TextEditingController studentIdController = TextEditingController();
-  final TextEditingController emailController = TextEditingController();
+  static const double _breakpoint = 790;
+
+  final TextEditingController studentIdController =
+      TextEditingController();
+  final TextEditingController emailController =
+      TextEditingController();
+
   final FocusNode _emailFocus = FocusNode();
-  final FirebaseFirestore db = FirebaseFirestore.instance;
   final FirebaseAuth auth = FirebaseAuth.instance;
 
   bool isLoading = false;
   bool _emailSent = false;
-  String _errorMessage = "";
-  String _successMessage = "";
+
+  String _errorMessage = '';
+  String _successMessage = '';
+
+  // ---------------- PASSWORD RESET LOGIC ----------------
 
   Future<void> _sendResetEmail() async {
     final studentId = studentIdController.text.trim();
     final email = emailController.text.trim();
 
     if (studentId.isEmpty) {
-      _showError("Student ID required");
+      _showError('Please enter your Student ID.');
       return;
     }
+
     if (email.isEmpty) {
-      _showError("Email required");
+      _showError('Please enter your registered email address.');
       return;
     }
 
     setState(() {
       isLoading = true;
-      _errorMessage = "";
-      _successMessage = "";
+      _errorMessage = '';
+      _successMessage = '';
     });
 
     try {
@@ -58,35 +70,43 @@ class _ForgotPageState extends State<ForgotPage> {
         region: 'asia-southeast1',
       ).httpsCallable('resetPasswordById');
 
-      await callable.call({"id": studentId, "email": email});
+      await callable.call({
+        'id': studentId,
+        'email': email,
+      });
 
       await auth.sendPasswordResetEmail(email: email);
 
       if (!mounted) return;
+
       setState(() {
         _emailSent = true;
-        _successMessage = "Password reset email sent to $email";
-      });
-
-      Future.delayed(const Duration(milliseconds: 1500), () {
-        if (mounted) context.go('/login');
+        _successMessage =
+            'A password reset link has been sent to $email.';
       });
     } on FirebaseFunctionsException catch (e) {
-      _showError(e.message ?? "Verification failed");
+      _showError(e.message ?? 'Unable to verify your account.');
     } on FirebaseAuthException catch (e) {
-      _showError(e.message ?? "Error sending reset email");
-    } catch (e) {
-      _showError("Error: $e");
+      _showError(
+        e.message ?? 'Unable to send the password reset email.',
+      );
+    } catch (_) {
+      _showError(
+        'Something went wrong. Please try again later.',
+      );
     } finally {
-      if (mounted) setState(() => isLoading = false);
+      if (mounted) {
+        setState(() => isLoading = false);
+      }
     }
   }
 
-  void _showError(String msg) {
+  void _showError(String message) {
     if (!mounted) return;
+
     setState(() {
-      _errorMessage = msg;
-      _successMessage = "";
+      _errorMessage = message;
+      _successMessage = '';
     });
   }
 
@@ -98,68 +118,146 @@ class _ForgotPageState extends State<ForgotPage> {
     super.dispose();
   }
 
-  // ---------- UI ----------
+  // ---------------- PAGE LAYOUT ----------------
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bgColor,
-      body: Stack(
-        children: [
-          // Soft glow, same as the login page
-          Positioned(
-            top: -120,
-            left: -80,
-            child: IgnorePointer(
-              child: Container(
-                width: 320,
-                height: 320,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      _accentColor.withOpacity(0.18),
-                      _accentColor.withOpacity(0.0),
-                    ],
+      backgroundColor: _paper,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth > _breakpoint;
+
+          if (wide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  flex: 11,
+                  child: _buildArtPanel(wide: true),
+                ),
+                Expanded(
+                  flex: 10,
+                  child: _buildFormPanel(
+                    wide: true,
+                    constraints: constraints,
                   ),
                 ),
-              ),
+              ],
+            );
+          }
+
+          return SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildArtPanel(wide: false),
+                _buildFormPanel(
+                  wide: false,
+                  constraints: constraints,
+                ),
+              ],
             ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ---------------- BRAND / ART PANEL ----------------
+
+  Widget _buildArtPanel({required bool wide}) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final titleSize = wide
+            ? (MediaQuery.of(context).size.width * 0.08)
+                .clamp(56.0, 120.0)
+            : 48.0;
+
+        final glowSize = wide ? 500.0 : 300.0;
+
+        final content = Column(
+          mainAxisSize: wide ? MainAxisSize.max : MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildBrandRow(),
+            if (!wide) const SizedBox(height: 30),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'GET BACK\nINTO\nFOCUS.',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: titleSize,
+                    fontWeight: FontWeight.w900,
+                    height: 0.91,
+                    letterSpacing: -0.075 * titleSize,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                const Text(
+                  'YOUR ACCOUNT / YOUR ACCESS',
+                  style: TextStyle(
+                    color: Color(0xFFB9C3BD),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1.8,
+                  ),
+                ),
+              ],
+            ),
+            if (wide)
+              const Text(
+                'FOTS STUDENT PORTAL  /  ACCOUNT RECOVERY',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 10,
+                  letterSpacing: 1.5,
+                ),
+              ),
+          ],
+        );
+
+        return Container(
+          color: _artBg,
+          constraints: BoxConstraints(
+            minHeight: wide ? 0 : 190,
           ),
-          SafeArea(
+          child: ClipRect(
             child: Stack(
               children: [
-                Center(
-                  // Hides the side scrollbar but keeps scrolling working
-                  child: ScrollConfiguration(
-                    behavior: ScrollConfiguration.of(context).copyWith(
-                      scrollbars: false,
-                      overscroll: false,
-                    ),
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(16, 64, 16, 24),
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 420),
-                        child: Container(
-                          // Header zone + form zone fused into ONE rounded card
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(24),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.25),
-                                blurRadius: 16,
-                                offset: const Offset(0, 8),
+                Positioned(
+                  left: wide ? w * 0.06 : w * 0.38,
+                  top: wide
+                      ? MediaQuery.of(context).size.height * 0.16
+                      : -100,
+                  child: IgnorePointer(
+                    child: ImageFiltered(
+                      imageFilter: ImageFilter.blur(
+                        sigmaX: 24,
+                        sigmaY: 24,
+                      ),
+                      child: Opacity(
+                        opacity: 0.78,
+                        child: Transform.rotate(
+                          angle: -35 * math.pi / 180,
+                          child: Container(
+                            width: glowSize,
+                            height: glowSize,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: RadialGradient(
+                                colors: [
+                                  Color(0xFF2CD281),
+                                  Color(0xFF087B4F),
+                                  Color(0xFF064A33),
+                                  Color(0x00064A33),
+                                ],
+                                stops: [0.0, 0.43, 0.60, 0.73],
                               ),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                _buildHeaderZone(),
-                                _buildFormZone(),
-                              ],
                             ),
                           ),
                         ),
@@ -167,302 +265,408 @@ class _ForgotPageState extends State<ForgotPage> {
                     ),
                   ),
                 ),
-
-                // Back button (top-left)
-                Positioned(
-                  top: 8,
-                  left: 12,
-                  child: Material(
-                    color: Colors.white.withOpacity(0.08),
-                    shape: const CircleBorder(),
-                    child: IconButton(
-                      icon: const Icon(Icons.arrow_back,
-                          color: _textColor, size: 22),
-                      tooltip: "Back to login",
-                      onPressed: () => context.go('/login'),
-                    ),
-                  ),
+                Padding(
+                  padding: wide
+                      ? const EdgeInsets.all(30)
+                      : const EdgeInsets.fromLTRB(22, 19, 22, 22),
+                  child: content,
                 ),
               ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  // Top zone: framed icon (like the profile avatar), title, tag chip
-  Widget _buildHeaderZone() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 26),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_headerColorLight, _headerColor],
+  Widget _buildBrandRow() {
+    return Row(
+      children: [
+        Container(
+          width: 39,
+          height: 39,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Image.asset(
+            'assets/image/student_font-removebg-preview.png',
+            width: 32,
+            height: 32,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Icon(
+              Icons.school_outlined,
+              color: _green,
+              size: 25,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        const Text(
+          'FOTS',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -1,
+          ),
+        ),
+        const Spacer(),
+        const Text(
+          'STUDENT / 2026',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 1,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ---------------- FORM PANEL ----------------
+
+  Widget _buildFormPanel({
+    required bool wide,
+    required BoxConstraints constraints,
+  }) {
+    final form = ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: wide ? 440 : double.infinity,
+      ),
+      child: _buildForm(wide: wide),
+    );
+
+    if (!wide) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(22, 30, 22, 42),
+        child: form,
+      );
+    }
+
+    return SingleChildScrollView(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: constraints.maxHeight,
+        ),
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: constraints.maxWidth * 0.08,
+              vertical: 36,
+            ),
+            child: form,
+          ),
         ),
       ),
-      child: Column(
-        children: [
-          Container(
-            width: 88,
-            height: 88,
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(22),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  _accentColor.withOpacity(0.9),
-                  _accentColor.withOpacity(0.25),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: _accentColor.withOpacity(0.35),
-                  blurRadius: 14,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(19),
-              child: Container(
-                color: _cardColor,
-                child: const Icon(
-                  Icons.lock_reset,
-                  size: 42,
-                  color: _accentColor,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            "Forgot Password?",
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: _textColor,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.25),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: const Text(
-              "ACCOUNT RECOVERY",
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 1.0,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
-  // Bottom zone: section header, helper text, fields, button
-  Widget _buildFormZone() {
-    return Container(
-      width: double.infinity,
-      color: _cardColor,
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  color: _accentColor.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
+  Widget _buildForm({required bool wide}) {
+    final headingSize = wide
+        ? (MediaQuery.of(context).size.width * 0.04)
+            .clamp(32.0, 46.0)
+        : 37.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Back navigation
+        TextButton.icon(
+          onPressed: () => context.go('/login'),
+          style: TextButton.styleFrom(
+            foregroundColor: _muted,
+            padding: EdgeInsets.zero,
+          ),
+          icon: const Icon(Icons.arrow_back, size: 17),
+          label: const Text(
+            'Back to login',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 24),
+
+        const Text(
+          '02 / ACCOUNT RECOVERY',
+          style: TextStyle(
+            color: _green,
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 2,
+          ),
+        ),
+
+        const SizedBox(height: 14),
+
+        Text(
+          _emailSent ? 'Check your email.' : 'Forgot password?',
+          style: TextStyle(
+            color: _ink,
+            fontSize: headingSize,
+            fontWeight: FontWeight.w800,
+            height: 1.06,
+            letterSpacing: -0.052 * headingSize,
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        Text(
+          _emailSent
+              ? 'Check your inbox for the reset link. Follow the instructions in the email to choose a new password.'
+              : 'No worries. Verify your student account and we’ll send you a secure link to reset your password.',
+          style: const TextStyle(
+            color: _muted,
+            fontSize: 14,
+            height: 1.7,
+          ),
+        ),
+
+        const SizedBox(height: 28),
+
+        // Feedback message
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          alignment: Alignment.topCenter,
+          child: _errorMessage.isNotEmpty
+              ? _buildMessage(
+                  message: _errorMessage,
+                  isSuccess: false,
+                )
+              : _successMessage.isNotEmpty
+                  ? _buildMessage(
+                      message: _successMessage,
+                      isSuccess: true,
+                    )
+                  : const SizedBox.shrink(),
+        ),
+
+        // Student ID
+        _fieldLabel('Student ID'),
+
+        TextField(
+          controller: studentIdController,
+          enabled: !_emailSent && !isLoading,
+          style: const TextStyle(
+            color: _ink,
+            fontSize: 16,
+          ),
+          cursorColor: _green,
+          textInputAction: TextInputAction.next,
+          autofillHints: const [AutofillHints.username],
+          onSubmitted: (_) => _emailFocus.requestFocus(),
+          decoration: _fieldDecoration(
+            hint: 'Enter your Student ID',
+            icon: Icons.badge_outlined,
+          ),
+        ),
+
+        const SizedBox(height: 19),
+
+        // Registered email
+        _fieldLabel('Registered email'),
+
+        TextField(
+          controller: emailController,
+          focusNode: _emailFocus,
+          enabled: !_emailSent && !isLoading,
+          keyboardType: TextInputType.emailAddress,
+          textCapitalization: TextCapitalization.none,
+          autofillHints: const [AutofillHints.email],
+          style: const TextStyle(
+            color: _ink,
+            fontSize: 16,
+          ),
+          cursorColor: _green,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) {
+            if (!isLoading && !_emailSent) {
+              _sendResetEmail();
+            }
+          },
+          decoration: _fieldDecoration(
+            hint: 'Enter your registered email',
+            icon: Icons.alternate_email,
+          ),
+        ),
+
+        const SizedBox(height: 25),
+
+        // Submit button
+        SizedBox(
+          width: double.infinity,
+          height: 57,
+          child: ElevatedButton(
+            onPressed: (isLoading || _emailSent)
+                ? null
+                : _sendResetEmail,
+            style: ButtonStyle(
+              elevation: const WidgetStatePropertyAll(0),
+              shape: WidgetStatePropertyAll(
+                RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.mail_outline,
-                    size: 16, color: _accentColor),
               ),
-              const SizedBox(width: 10),
-              const Text(
-                "Reset Password",
-                style: TextStyle(
-                  color: _textColor,
+              foregroundColor:
+                  const WidgetStatePropertyAll(Colors.white),
+              backgroundColor:
+                  WidgetStateProperty.resolveWith((states) {
+                if (states.contains(WidgetState.disabled)) {
+                  return _green.withValues(alpha: 0.6);
+                }
+
+                if (states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.pressed)) {
+                  return _greenHover;
+                }
+
+                return _green;
+              }),
+              textStyle: const WidgetStatePropertyAll(
+                TextStyle(
                   fontSize: 15,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-              const SizedBox(width: 10),
+            ),
+            child: isLoading
+                ? const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 17,
+                        height: 17,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      ),
+                      SizedBox(width: 10),
+                      Text('Sending reset link...'),
+                    ],
+                  )
+                : Text(
+                    _emailSent
+                        ? 'Reset link sent'
+                        : 'Send password reset link',
+                  ),
+          ),
+        ),
+
+        const SizedBox(height: 24),
+
+        // Security note
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEAF3ED),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: const Color(0xFFD4E7D9),
+            ),
+          ),
+          child: const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.verified_user_outlined,
+                color: _green,
+                size: 19,
+              ),
+              SizedBox(width: 10),
               Expanded(
-                child: Container(
-                  height: 1,
-                  color: Colors.white.withOpacity(0.08),
+                child: Text(
+                  'For your security, use the email address linked to your student account.',
+                  style: TextStyle(
+                    color: Color(0xFF385447),
+                    fontSize: 12,
+                    height: 1.6,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          const Text(
-            "Enter your Student ID and the email linked to your account. "
-            "We'll send you a link to set a new password.",
-            style: TextStyle(color: _mutedTextColor, fontSize: 13, height: 1.4),
-          ),
-          const SizedBox(height: 16),
+        ),
 
-          // Error / success banner
-          AnimatedSize(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-            alignment: Alignment.topCenter,
-            child: _errorMessage.isNotEmpty
-                ? _buildBanner(
-                    title: "Something went wrong",
-                    message: _errorMessage,
-                    color: _errorColor,
-                    icon: Icons.error_outline,
-                  )
-                : _successMessage.isNotEmpty
-                    ? _buildBanner(
-                        title: "Email sent",
-                        message: _successMessage,
-                        color: _successColor,
-                        icon: Icons.check_circle_outline,
-                      )
-                    : const SizedBox(width: double.infinity),
-          ),
+        const SizedBox(height: 28),
 
-          // Student ID
-          TextField(
-            controller: studentIdController,
-            style: const TextStyle(color: _textColor),
-            cursorColor: _accentColor,
-            textInputAction: TextInputAction.next,
-            onSubmitted: (_) => _emailFocus.requestFocus(),
-            decoration: _fieldDecoration(
-              hint: "Student ID",
-              icon: Icons.badge_outlined,
-            ),
+        const Text(
+          'FOTS Student Edition · Secure account recovery',
+          style: TextStyle(
+            color: _footMuted,
+            fontSize: 11,
+            height: 1.6,
           ),
-          const SizedBox(height: 14),
+        ),
+      ],
+    );
+  }
 
-          // Email
-          TextField(
-            controller: emailController,
-            focusNode: _emailFocus,
-            keyboardType: TextInputType.emailAddress,
-            style: const TextStyle(color: _textColor),
-            cursorColor: _accentColor,
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) {
-              if (!isLoading && !_emailSent) _sendResetEmail();
-            },
-            decoration: _fieldDecoration(
-              hint: "Email",
-              icon: Icons.alternate_email,
-            ),
-          ),
-          const SizedBox(height: 22),
+  // ---------------- FORM HELPERS ----------------
 
-          // Send button
-          SizedBox(
-            height: 50,
-            child: ElevatedButton(
-              onPressed: (isLoading || _emailSent) ? null : _sendResetEmail,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _accentColor,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: _accentColor.withOpacity(0.6),
-                disabledForegroundColor: Colors.white,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                textStyle: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              child: isLoading
-                  ? const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        ),
-                        SizedBox(width: 10),
-                        Text("Sending..."),
-                      ],
-                    )
-                  : const Text("Send Reset Link"),
-            ),
-          ),
-          const SizedBox(height: 6),
-
-          // Back to login
-          TextButton(
-            onPressed: () => context.go('/login'),
-            child: const Text(
-              "Back to Login",
-              style: TextStyle(
-                color: _accentColor,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
+  Widget _fieldLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: _ink,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
 
-  Widget _buildBanner({
-    required String title,
+  Widget _buildMessage({
     required String message,
-    required Color color,
-    required IconData icon,
+    required bool isSuccess,
   }) {
+    final color = isSuccess ? _successText : _errorText;
+    final background = isSuccess
+        ? const Color(0xFFEAF3ED)
+        : const Color(0xFFFFEEF0);
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        border: Border.all(color: color.withOpacity(0.35)),
+        color: background,
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: color.withValues(alpha: 0.20),
+        ),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 22),
+          Icon(
+            isSuccess
+                ? Icons.check_circle_outline
+                : Icons.error_outline,
+            color: color,
+            size: 20,
+          ),
           const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: _textColor,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  message,
-                  style: const TextStyle(color: _mutedTextColor, fontSize: 12.5),
-                ),
-              ],
+            child: Text(
+              message,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                height: 1.6,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],
@@ -474,22 +678,41 @@ class _ForgotPageState extends State<ForgotPage> {
     required String hint,
     required IconData icon,
   }) {
-    OutlineInputBorder border(Color color, [double width = 1]) =>
-        OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: color, width: width),
-        );
+    OutlineInputBorder border(
+      Color color, [
+      double width = 1,
+    ]) {
+      return OutlineInputBorder(
+        borderRadius: BorderRadius.circular(13),
+        borderSide: BorderSide(
+          color: color,
+          width: width,
+        ),
+      );
+    }
 
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(color: _mutedTextColor, fontSize: 14),
+      hintStyle: const TextStyle(
+        color: Color(0xFF9AA09B),
+        fontSize: 14,
+      ),
+      prefixIcon: Icon(
+        icon,
+        color: _footMuted,
+        size: 20,
+      ),
       filled: true,
-      fillColor: Colors.black.withOpacity(0.22),
-      prefixIcon: Icon(icon, color: _accentColor.withOpacity(0.85), size: 20),
-      contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-      enabledBorder: border(Colors.white.withOpacity(0.08)),
-      focusedBorder: border(_accentColor, 1.5),
-      border: border(Colors.white.withOpacity(0.08)),
+      fillColor: Colors.white,
+      constraints: const BoxConstraints(minHeight: 56),
+      contentPadding: const EdgeInsets.symmetric(
+        vertical: 16,
+        horizontal: 15,
+      ),
+      enabledBorder: border(_border),
+      focusedBorder: border(_green, 2),
+      disabledBorder: border(_border),
+      border: border(_border),
     );
   }
 }

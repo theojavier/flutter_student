@@ -3,7 +3,7 @@
 //   face_mesh.js, camera_utils.js, gaze-core.js, yolo-eye.js
 // Same element ids as before.
 // MediaPipe = face + head pose.  YOLO eye model = eyelid/iris keypoints (the ox/oy features).
-console.log("🎯 Gaze calibration (head-aware, YOLO eyes) loaded");
+console.log("Gaze calibration (head-aware, YOLO eyes) loaded");
 
 // Bridge function for cross-platform communication
 window.sendToHost = window.sendToHost || function (data) {
@@ -41,11 +41,15 @@ const IS_MOBILE =
   matchMedia("(pointer: coarse)").matches ||
   /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-// Collect three-frame averaged readings per dot; move on after TARGET_SAMPLES or COLLECT_MAX.
-const SETTLE = 700;
-const COLLECT_MIN = 600, COLLECT_MAX = 6000;
+// Wait for each dot's glide before collecting, then keep collecting through the full ring.
+const GLIDE_MS = 550;
+const SETTLE = GLIDE_MS + 350;
+const RING_MS = IS_MOBILE ? 3000 : 2500;
+const EXTRA_MS = 2000;
+const COLLECT_MIN = RING_MS;
+const COLLECT_MAX = RING_MS + EXTRA_MS;
 const FRAMES_PER_AVG = 3;
-const TARGET_SAMPLES = 8, MIN_SAMPLES = 5;
+const TARGET_SAMPLES = IS_MOBILE ? 8 : 10, MIN_SAMPLES = 5;
 const SMOOTH_TAU_MS = 250, BLINK_EAR = IS_MOBILE ? 0.09 : 0.14;
 const MAX_GAZE_MOVEMENT = IS_MOBILE ? 0.40 : 0.35; // VERY RELAXED: validate the AVERAGE, not individual frames
 const MAX_HEAD_MOVEMENT = IS_MOBILE ? 0.35 : 0.28; // VERY RELAXED: validate the AVERAGE
@@ -209,11 +213,63 @@ function failAttempt(reason, restartAll = false) {
 }
 
 // ---------------- flow ----------------
+// Dot glide and progress ring are driven by requestAnimationFrame.
+const RING_R = 20.5, RING_C = 2 * Math.PI * RING_R;
+
+dot.insertAdjacentHTML("beforeend", `
+  <svg viewBox="0 0 44 44">
+    <circle cx="22" cy="22" r="${RING_R}" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="3"/>
+    <circle id="ringArc" cx="22" cy="22" r="${RING_R}" fill="none" stroke="#ffffff" stroke-width="3"
+            stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"
+            transform="rotate(-90 22 22)"/>
+  </svg>`);
+const ringArc = document.getElementById("ringArc");
+const setRing = (p) => ringArc.setAttribute("stroke-dashoffset", RING_C * (1 - p));
+
+const ease = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+let pos = null;
+let glide = null;
+
+function drawDot(x, y) {
+  pos = { x, y };
+  dot.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`;
+}
+
+function placeDot(animate = true) {
+  const x = cal.fx * innerWidth, y = cal.fy * innerHeight;
+  if (!animate || !pos) {
+    glide = null;
+    drawDot(x, y);
+    return;
+  }
+  glide = { x0: pos.x, y0: pos.y, x1: x, y1: y, t0: performance.now() };
+}
+
+addEventListener("resize", () => {
+  if (cal.active) placeDot(false);
+});
+
+function uiFrame(now) {
+  if (glide) {
+    const u = Math.min(1, (now - glide.t0) / GLIDE_MS);
+    const e = ease(u);
+    drawDot(
+      glide.x0 + (glide.x1 - glide.x0) * e,
+      glide.y0 + (glide.y1 - glide.y0) * e,
+    );
+    if (u >= 1) glide = null;
+  }
+  if (cal.active) {
+    setRing(cal.phase === "collect" ? Math.min(1, (now - cal.t0) / RING_MS) : 0);
+  }
+  requestAnimationFrame(uiFrame);
+}
+requestAnimationFrame(uiFrame);
+
 function beginDot() {
   const st = PLAN[cal.i];
   [cal.fx, cal.fy] = ORDER[st.spot];
-  dot.style.left = cal.fx * 100 + "%";
-  dot.style.top = cal.fy * 100 + "%";
+  placeDot();
   cal.t0 = performance.now();
   cal.phase = "settle";
   cal.samples = [];
@@ -234,8 +290,8 @@ function startCalibration() {
   beginDot();
 }
 
-// keep ~10 evenly spaced rows per dot so exam.html can refit with them (small localStorage footprint)
-function compactRows(rows, perSpot = 10) {
+// Keep up to 14 evenly spaced rows per dot so exam.html can refit with them.
+function compactRows(rows, perSpot = 14) {
   const rd = (v) => Math.round(v * 1e4) / 1e4;
   const groups = new Map();
   rows.forEach((r) => {
@@ -269,10 +325,11 @@ const LONG_SIDE_FOV_DEG = IS_MOBILE ? 70 : 65;  // FOV along the camera frame's 
 const NOISE_X = IS_MOBILE ? 0.012 : 0.003;      // keypoint noise floor (eye-widths)
 const NOISE_Y = IS_MOBILE ? 0.012 : 0.003;
 const CSS_PX_PER_CM = IS_MOBILE ? 55 : 40; 
-const OVER = IS_MOBILE ? 1.8 : 1.5;        // block if span > OVER × expected  (looked outside screen)
-const TOL_X = IS_MOBILE ? 1.0 : 0.8;
-const TOL_Y = IS_MOBILE ? 1.0 : 1.3;
-const UNDER = IS_MOBILE ? 0.25 : 0.3;     // allowed deviation of each dot from its ideal position
+// More forgiving gaze calibration
+const OVER = IS_MOBILE ? 2.5 : 2.2;
+const TOL_X = IS_MOBILE ? 1.5 : 1.3;
+const TOL_Y = IS_MOBILE ? 1.5 : 1.6;
+const UNDER = IS_MOBILE ? 0.12 : 0.15;    // allowed deviation of each dot from its ideal position
 const DOT_NAMES = ["center", "top-left", "top-right", "bottom-right", "bottom-left",
                    "top", "right", "bottom", "left"];
 
@@ -398,6 +455,7 @@ function finishCalibration() {
   );
   console.log(`✓ Saved ${best} model; leave-one-position-out error ${errs[best].loo.toFixed(0)}px`);
 
+  window.disposeGazeTracking?.();
   window.sendToHost({ action: "calibrationComplete" });
 
   calMessage.textContent = `✓ Calibration Complete! Accuracy: ${errs[best].loo.toFixed(0)}px`;
@@ -406,22 +464,20 @@ function finishCalibration() {
 }
 
 // calibration clock
-setInterval(() => {
+const calibrationTimer = setInterval(() => {
   if (!cal.active) return;
   const st = PLAN[cal.i];
   const t = performance.now() - cal.t0;
+
   if (cal.phase === "settle" && t > SETTLE) {
     cal.phase = "collect";
     cal.t0 = performance.now();
     cal.samples = [];
     cal.frameBuf = [];
-    dot.style.animationDuration = COLLECT_MAX + "ms";
-    dot.classList.add("collecting");
   } else if (cal.phase === "collect") {
-    const enoughSamples =
-      cal.samples.length >= TARGET_SAMPLES && t > COLLECT_MIN;
-    if (enoughSamples || t > COLLECT_MAX) {
-      dot.classList.remove("collecting");
+    const ringDone = t >= COLLECT_MIN;
+    const enough = cal.samples.length >= TARGET_SAMPLES;
+    if (ringDone && (enough || t >= COLLECT_MAX)) {
       const v = validateSamples(cal.samples);
       if (!v.valid) {
         console.warn("❌ Samples rejected:", v.reason);
@@ -439,6 +495,7 @@ setInterval(() => {
           sx: cal.fx,
           sy: cal.fy,
         });
+        console.log(`${DOT_NAMES[st.spot]}: ${cal.samples.length} samples, ${cleaned.length} kept`);
       }
       cal.invalidAttempts = 0;
       cal.i++;
@@ -464,6 +521,7 @@ function setLoadError(e) {
 
 mainScreen.addEventListener("click", (e) => {
   if (e.target !== mainScreen || cal.active) return;
+  window.disposeGazeTracking?.();
   window.sendToHost({ action: "calibrationCancelled" });
 });
 startBtn.onclick = () => { if (modelReady) startCalibration(); };
@@ -472,6 +530,38 @@ startBtn.onclick = () => { if (modelReady) startCalibration(); };
 const fm = new FaceMesh({
   locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`,
 });
+let calibrationCamera = null;
+let trackingDisposed = false;
+
+function disposeGazeTracking() {
+  if (trackingDisposed) return;
+  trackingDisposed = true;
+  cal.active = false;
+  clearInterval(calibrationTimer);
+  try {
+    calibrationCamera?.stop();
+  } catch (e) {
+    console.warn("Calibration camera stop failed:", e);
+  }
+  calibrationCamera = null;
+  for (const track of video.srcObject?.getTracks?.() ?? []) track.stop();
+  video.srcObject = null;
+  try {
+    Promise.resolve(fm.close()).catch((e) =>
+      console.warn("Calibration face detector close failed:", e),
+    );
+  } catch (e) {
+    console.warn("Calibration face detector close failed:", e);
+  }
+  YoloEye.dispose();
+}
+
+window.disposeGazeTracking = disposeGazeTracking;
+window.addEventListener("pagehide", disposeGazeTracking, { once: true });
+window.addEventListener("message", (event) => {
+  if (event.data?.action === "dispose") disposeGazeTracking();
+});
+
 fm.setOptions({
   maxNumFaces: 1,
   refineLandmarks: true, // GazeCore.extract still reads iris landmarks for the head features
@@ -481,7 +571,7 @@ fm.setOptions({
 
 let busy = false; // the YOLO step is async and slower than a camera frame: drop frames while it runs
 fm.onResults(async (res) => {
-  if (busy || !YoloEye.ready) return;
+  if (trackingDisposed || busy || !YoloEye.ready) return;
   busy = true;
   try {
     setReady();
@@ -523,16 +613,26 @@ fm.onResults(async (res) => {
     startLabel.textContent = "Loading eye model…";
     // Initialize YOLO first to avoid WebAssembly Module conflicts with MediaPipe
     await YoloEye.init();
+    if (trackingDisposed) return;
     startLabel.textContent = "Loading face detector…";
     await fm.initialize();
+    if (trackingDisposed) {
+      await fm.close();
+      return;
+    }
     startLabel.textContent = "Starting camera…";
-    await new Camera(video, {
+    calibrationCamera = new Camera(video, {
       onFrame: async () => { await fm.send({ image: video }); },
       facingMode: "user",
       width: CAM_W,
       height: CAM_H,
-    }).start();
+    });
+    await calibrationCamera.start();
+    if (trackingDisposed) {
+      calibrationCamera.stop();
+      calibrationCamera = null;
+    }
   } catch (e) {
-    setLoadError(e);
+    if (!trackingDisposed) setLoadError(e);
   }
 })();

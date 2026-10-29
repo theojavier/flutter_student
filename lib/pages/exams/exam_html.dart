@@ -79,10 +79,8 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
     final studentData = studentDoc.data()!;
     final studentId = studentData['studentId'] as String?;
-    final program = studentData['program'];
-    final yearBlock = studentData['yearBlock'];
 
-    if (studentId == null || program == null || yearBlock == null) return false;
+    if (studentId == null) return false;
 
     final examDoc = await FirebaseFirestore.instance
         .collection("exams")
@@ -93,14 +91,54 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     final examData = examDoc.data()!;
     if (examData['monitoringEnabled'] != true) return false;
 
-    final allowedProgram = examData['program'];
-    final allowedYearBlock = examData['yearBlock'];
+    final examClassId = examData['classId']?.toString().trim();
+    final rawClassIds = studentData['classIds'];
+    final studentClassIds = <String>{
+      if (rawClassIds is Iterable)
+        ...rawClassIds
+            .map((value) => value.toString().trim())
+            .where((value) => value.isNotEmpty),
+      if ((studentData['classId'] ?? '').toString().trim().isNotEmpty)
+        studentData['classId'].toString().trim(),
+    };
 
-    if (allowedProgram == null || allowedYearBlock == null) return false;
-
-    //Check if student matches exam's allowed program and yearBlock
-    final isAllowed =
-        (program == allowedProgram) && (yearBlock == allowedYearBlock);
+    final bool isAllowed;
+    if (examClassId != null && examClassId.isNotEmpty) {
+      isAllowed = studentClassIds.contains(examClassId);
+      if (!isAllowed) {
+        debugPrint(
+          'Student is not assigned to exam class $examClassId '
+          '(assigned classes: $studentClassIds)',
+        );
+      }
+    } else {
+      // Older exams are program/year-block based. `program` may be either a
+      // display name (e.g. BSCS) or the program code (e.g. 88888).
+      final allowedProgram = examData['program']?.toString().trim();
+      final allowedYearBlock = examData['yearBlock']?.toString().trim();
+      final studentPrograms = {
+        if ((studentData['program'] ?? '').toString().trim().isNotEmpty)
+          studentData['program'].toString().trim().toLowerCase(),
+        if ((studentData['programCode'] ?? '').toString().trim().isNotEmpty)
+          studentData['programCode'].toString().trim().toLowerCase(),
+      };
+      final studentYearBlock = studentData['yearBlock']?.toString().trim();
+      isAllowed =
+          allowedProgram != null &&
+          allowedProgram.isNotEmpty &&
+          allowedYearBlock != null &&
+          allowedYearBlock.isNotEmpty &&
+          studentPrograms.contains(allowedProgram.toLowerCase()) &&
+          studentYearBlock == allowedYearBlock;
+      if (!isAllowed) {
+        debugPrint(
+          'Student does not match exam program/year block: '
+          'exam=$allowedProgram/$allowedYearBlock, '
+          'student=${studentData['program']}/${studentData['programCode']}/'
+          '$studentYearBlock',
+        );
+      }
+    }
 
     if (!isAllowed) return false;
 
@@ -143,10 +181,10 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
       if (resultDoc.exists) {
         final status = resultDoc.data()?['status'];
-        debugPrint('📊 Exam status check: $status');
+        debugPrint('Exam status check: $status');
 
         if (status == 'completed') {
-          debugPrint('✅ Status is completed, navigating to result page');
+          debugPrint('Status is completed, navigating to result page');
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) context.go('/exam-result/${widget.examId}');
           });
@@ -170,14 +208,14 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
           // Do not force the user home just because a previous session stored
           // "incomplete". That stale value is often created by a refresh or a
           // forced page close. The exam should continue unless it was truly completed.
-          debugPrint('⚠️ Status is incomplete but not blocking (not a reload)');
+          debugPrint('Status is incomplete but not blocking (not a reload)');
           return;
         }
       } else {
-        debugPrint('📝 No exam result document found yet');
+        debugPrint('No exam result document found yet');
       }
     } catch (e) {
-      debugPrint('❌ Error checking exam status: $e');
+      debugPrint('Error checking exam status: $e');
     }
 
     return;
@@ -229,13 +267,13 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
   void _handleFinish(String examId) {
     if (_finishHandled || !mounted) return;
     _finishHandled = true;
-    debugPrint('✅ finishExam received, navigating to /exam-result/$examId');
+    debugPrint('finishExam received, navigating to /exam-result/$examId');
     context.go('/exam-result/$examId');
   }
 
   void _handleNavigate(String path) {
     if (!mounted) return;
-    debugPrint('✅ navigate received: $path');
+    debugPrint('navigate received: $path');
     context.go(path);
   }
 
@@ -246,6 +284,7 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     }
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF7F8F6),
       body: SafeArea(
         child: ExamView(
           key: ValueKey('exam-view-${widget.examId}-$_resolvedStudentId'),

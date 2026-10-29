@@ -10,544 +10,645 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  // Shared theme palette (matches NotificationsPage)
-  static const Color _bgColor = Color(0xFF0B1220);
-  static const Color _headerColor = Color(0xFF0F2B45);
-  static const Color _headerColorLight = Color(0xFF17456F);
-  static const Color _cardColor = Color(0xFF0F3B61);
-  static const Color _textColor = Color(0xFFE6F0F8);
-  static const Color _mutedTextColor = Color(0xFF9FB0C3);
-  static const Color _accentColor = Color(0xFF3D8BFF);
-  static const Color _onlineColor = Color(0xFF4ADE80);
+  // FOTS editorial green palette, adapted from the supplied HTML.
+  static const Color _background = Color(0xFFF7F8F6);
+  static const Color _ink = Color(0xFF111217);
+  static const Color _muted = Color(0xFF6F7276);
+  static const Color _green = Color(0xFF087B4F);
+  static const Color _line = Color(0xFFDFE2DF);
+  static const Color _softGreen = Color(0xFFDCF2E5);
 
-  String? userId;
+  String? _userId;
+  Map<String, dynamic>? _userData;
+  String? _latestClassYearBlock;
+  String? _latestClassAcademicYear;
+  bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadUserId();
+    _loadProfile();
   }
 
-  Future<void> _loadUserId() async {
-    final storeduserId = await SecureStorageHelper.read('userId');
-    setState(() {
-      userId = storeduserId;
-    });
+  @override
+  void dispose() {
+    super.dispose();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final storedUserId = await SecureStorageHelper.read('userId');
+      if (storedUserId == null || storedUserId.trim().isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _error = 'No signed-in user was found. Please sign in again.';
+          _loading = false;
+        });
+        return;
+      }
+
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(storedUserId)
+          .get();
+
+      if (!mounted) return;
+      if (!snapshot.exists) {
+        setState(() {
+          _userId = storedUserId;
+          _error = 'Profile not found.';
+          _loading = false;
+        });
+        return;
+      }
+
+      final data = snapshot.data() ?? <String, dynamic>{};
+      final classYearBlock = await _fetchLatestClassYearBlock(data);
+      if (!mounted) return;
+      setState(() {
+        _userId = storedUserId;
+        _userData = data;
+        _latestClassYearBlock = classYearBlock;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Unable to load your profile. Please try again.';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<String?> _fetchLatestClassYearBlock(Map<String, dynamic> userData) async {
+    _classYearBlockCandidates.clear();
+    final firestore = FirebaseFirestore.instance;
+    final classIds = <String>{};
+
+    final singleClassId = userData['classId']?.toString().trim();
+    if (singleClassId != null && singleClassId.isNotEmpty) {
+      classIds.add(singleClassId);
+    }
+
+    final rawClassIds = userData['classIds'];
+    if (rawClassIds is Iterable) {
+      for (final id in rawClassIds) {
+        final value = id?.toString().trim();
+        if (value != null && value.isNotEmpty) classIds.add(value);
+      }
+    }
+
+    // First try class document IDs stored on the user's profile.
+    for (final id in classIds) {
+      try {
+        final doc = await firestore.collection('classes').doc(id).get();
+        if (doc.exists && doc.data() != null) {
+          // Keep only documents that actually contain a year/block value.
+          if ((doc.data()!['yearBlock']?.toString().trim().isNotEmpty ?? false)) {
+            // Convert the document snapshot into a query snapshot candidate below
+            // by retaining its data and timestamp separately.
+            final value = doc.data()!['yearBlock'].toString().trim();
+            if (value.isNotEmpty) {
+              final updatedAt = doc.data()!['updatedAt'];
+              _classYearBlockCandidates.add((value, doc.data()!['schoolYear']?.toString().trim(), _dateForSort(updatedAt)));
+            }
+          }
+        }
+      } catch (_) {
+        // Continue to the fallback query if a class document cannot be read.
+      }
+    }
+
+    // If document IDs are auto-generated, also try the classId field itself.
+    for (final id in classIds) {
+      try {
+        final query = await firestore
+            .collection('classes')
+            .where('classId', isEqualTo: id)
+            .get();
+        for (final doc in query.docs) {
+          final value = doc.data()['yearBlock']?.toString().trim();
+          if (value != null && value.isNotEmpty) {
+            _classYearBlockCandidates.add((value, doc.data()['schoolYear']?.toString().trim(), _dateForSort(doc.data()['updatedAt'])));
+          }
+        }
+      } catch (_) {
+        // Some class documents may not have a classId field.
+      }
+    }
+
+    // Also look up by programCode. This handles class documents whose Firestore
+    // document IDs are auto-generated rather than equal to classId.
+    final programCode = userData['programCode']?.toString().trim();
+    if (programCode != null && programCode.isNotEmpty) {
+      try {
+        final query = await firestore
+            .collection('classes')
+            .where('programCode', isEqualTo: programCode)
+            .get();
+        for (final doc in query.docs) {
+          final value = doc.data()['yearBlock']?.toString().trim();
+          if (value != null && value.isNotEmpty) {
+            _classYearBlockCandidates.add((value, doc.data()['schoolYear']?.toString().trim(), _dateForSort(doc.data()['updatedAt'])));
+          }
+        }
+      } catch (_) {
+        // Keep the year/block already available on the user profile as fallback.
+      }
+    }
+
+    if (_classYearBlockCandidates.isEmpty) return null;
+    _classYearBlockCandidates.sort((a, b) => b.$3.compareTo(a.$3));
+    final latest = _classYearBlockCandidates.first;
+    _latestClassAcademicYear = (latest.$2 != null && latest.$2!.isNotEmpty) ? latest.$2 : null;
+    _classYearBlockCandidates.clear();
+    return latest.$1;
+  }
+
+  final List<(String, String?, DateTime)> _classYearBlockCandidates = [];
+
+  DateTime _dateForSort(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  String _value(String key, [String fallback = 'N/A']) {
+    final value = _userData?[key];
+    if (value == null || value.toString().trim().isEmpty) return fallback;
+    return value.toString();
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((e) => e.isNotEmpty);
+    if (parts.isEmpty) return 'ST';
+    if (parts.length == 1) {
+      return parts.first.substring(0, parts.first.length < 2 ? parts.first.length : 2).toUpperCase();
+    }
+    return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (userId == null) {
+    if (_loading) {
       return const Scaffold(
-        backgroundColor: _bgColor,
-        body: Center(child: CircularProgressIndicator(color: _accentColor)),
+        backgroundColor: _background,
+        body: Center(child: CircularProgressIndicator(color: _green)),
       );
     }
 
-    final userRef = FirebaseFirestore.instance.collection("users").doc(userId);
+    if (_error != null || _userData == null) {
+      return Scaffold(
+        backgroundColor: _background,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.person_off_outlined, size: 42, color: _muted),
+                const SizedBox(height: 12),
+                Text(
+                  _error ?? 'Profile not found.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: _ink, fontSize: 14),
+                ),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _loading = true;
+                      _error = null;
+                    });
+                    _loadProfile();
+                  },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final name = _value('name', _value('displayName', 'Student'));
+    final imageUrl = _normaliseImageUrl(_value('profileImage', ''));
+    final width = MediaQuery.sizeOf(context).width;
+    final wide = width >= 900;
 
     return Scaffold(
-      backgroundColor: _bgColor,
-      body: FutureBuilder<DocumentSnapshot>(
-        future: userRef.get(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: _accentColor),
-            );
-          }
-          if (!snapshot.hasData || !snapshot.data!.exists) {
-            return const Center(
-              child: Text(
-                "Profile not found",
-                style: TextStyle(color: _textColor),
+      backgroundColor: _background,
+      body: Stack(
+        children: [
+          const Positioned(
+            top: -120,
+            right: -100,
+            child: _BackgroundGlow(size: 340),
+          ),
+          const Positioned(
+            bottom: -170,
+            left: -140,
+            child: _BackgroundGlow(size: 380),
+          ),
+          SafeArea(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                width < 600 ? 16 : 32,
+                width < 600 ? 22 : 34,
+                width < 600 ? 16 : 32,
+                40,
               ),
-            );
-          }
-
-          final data = snapshot.data!.data() as Map<String, dynamic>;
-
-          // Fix Imgur link handling
-          String? imageUrl = data["profileImage"];
-          if (imageUrl != null &&
-              imageUrl.contains("imgur.com") &&
-              !imageUrl.contains("i.imgur.com")) {
-            imageUrl = "${imageUrl.replaceAll("imgur.com", "i.imgur.com")}.jpg";
-          }
-
-          return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Small floating title bar — separate from the card below
-                _buildTitleBar(),
-                const SizedBox(height: 16),
-                // Avatar block + Personal Details fused into ONE rounded card:
-                // rounded corners live on the outer wrapper, the two zones
-                // inside just change color with no gap between them.
-                Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(24),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.25),
-                        blurRadius: 16,
-                        offset: const Offset(0, 8),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1250),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const _Eyebrow('ACCOUNT  /  STUDENT RECORD'),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'My Profile',
+                        style: TextStyle(
+                          color: _ink,
+                          fontSize: 36,
+                          height: 1.12,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -1.5,
+                        ),
                       ),
+                      const SizedBox(height: 9),
+                      const Text(
+                        'View your student information and enrollment details.',
+                        style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
+                      ),
+                      const SizedBox(height: 26),
+                      if (wide)
+  SizedBox(
+    height: 430, // CHANGE THIS VALUE TO INCREASE BOTH CARD HEIGHTS
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          flex: 1,
+          child: _profileCard(name, imageUrl),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          flex: 2,
+          child: _personalCard(),
+        ),
+      ],
+    ),
+  )
+else ...[
+  _profileCard(name, imageUrl),
+  const SizedBox(height: 16),
+  _personalCard(),
+],
+                      const SizedBox(height: 18),
+                      _enrollmentCard(),
                     ],
                   ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(24),
-                    child: Column(
-                      children: [
-                        _buildAvatarZone(imageUrl, data),
-                        _buildDetailsZone(
-                          title: "Personal Details",
-                          headerIcon: Icons.badge_outlined,
-                          rows: [
-                            _DetailRow(
-                              Icons.person_outline,
-                              "Name",
-                              data["name"],
-                            ),
-                            _DetailRow(Icons.wc, "Gender", data["gender"]),
-                            _DetailRow(
-                              Icons.favorite_border,
-                              "Civil Status",
-                              data["civilStatus"],
-                            ),
-                            _DetailRow(
-                              Icons.flag_outlined,
-                              "Nationality",
-                              data["nationality"],
-                            ),
-                            _DetailRow(
-                              Icons.cake_outlined,
-                              "Date of Birth",
-                              data["dob"] ?? "N/A",
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                // Enrolment Details — its own separate floating card
-                _buildInfoCard(
-                  title: "Enrolment Details",
-                  headerIcon: Icons.school_outlined,
-                  rows: [
-                    _DetailRow(
-                      Icons.menu_book_outlined,
-                      "Program",
-                      data["program"],
-                    ),
-                    _DetailRow(
-                      Icons.groups_outlined,
-                      "Year/Block",
-                      data["yearBlock"] ?? "N/A",
-                    ),
-                    _DetailRow(
-                      Icons.event_note_outlined,
-                      "Semester",
-                      data["semester"],
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  // ---------- GLOW HELPERS ----------
-
-  // Small glowing icon chip (gradient ring + soft accent glow).
-  // Used for the section header icons.
-  Widget _glowIconChip(IconData icon, {double iconSize = 16}) {
-    return Container(
-      padding: const EdgeInsets.all(2), // ring thickness
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            _accentColor.withOpacity(0.9),
-            _accentColor.withOpacity(0.25),
-          ],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: _accentColor.withOpacity(0.35),
-            blurRadius: 12,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10), // outer radius minus ring
-        child: Container(
-          color: _cardColor, // solid fill so the glow stays outside
-          padding: const EdgeInsets.all(6),
-          child: Icon(icon, size: iconSize, color: Colors.white),
-        ),
-      ),
-    );
-  }
-
-  // Compact floating bar: icon + "My Profile" with a "STUDENT INFORMATION" tag
-  Widget _buildTitleBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_headerColorLight, _headerColor],
-        ),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(3), // border thickness
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(15),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  const Color(0xFF3D8BFF).withOpacity(0.9),
-                  const Color(0xFF3D8BFF).withOpacity(0.25),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF3D8BFF).withOpacity(0.35),
-                  blurRadius: 14,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(
-                12,
-              ), // outer radius minus padding
-              child: Container(
-                color: const Color(0xFF0F3B61),
-                padding: const EdgeInsets.all(10),
-                child: const Icon(
-                  Icons.badge_outlined,
-                  color: Colors.white,
-                  size: 22,
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                "My Profile",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.25),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  "STUDENT INFORMATION",
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 1.0,
-                  ),
-                ),
-              ),
-            ],
           ),
         ],
       ),
     );
   }
 
-  // Top zone of the fused card: avatar with status dot, name, ID chip
-  Widget _buildAvatarZone(String? imageUrl, Map<String, dynamic> data) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 26),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_headerColorLight, _headerColor],
-        ),
-      ),
+  String _normaliseImageUrl(String url) {
+    if (url.isEmpty) return '';
+    if (url.contains('imgur.com') && !url.contains('i.imgur.com')) {
+      final clean = url.split('?').first;
+      return '${clean.replaceAll('imgur.com', 'i.imgur.com')}.jpg';
+    }
+    return url;
+  }
+
+  Widget _profileCard(String name, String imageUrl) {
+    return _Panel(
+      padding: const EdgeInsets.all(26),
       child: Column(
         children: [
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(
-                width: 96,
-                height: 96,
-                padding: const EdgeInsets.all(3),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(22),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      _accentColor.withOpacity(0.9),
-                      _accentColor.withOpacity(0.25),
-                    ],
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _accentColor.withOpacity(0.35),
-                      blurRadius: 14,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(19),
-                  child: (imageUrl != null && imageUrl.isNotEmpty)
-                      ? Image.network(imageUrl, fit: BoxFit.cover)
-                      : Container(
-                          color: _cardColor,
-                          child: const Icon(
-                            Icons.person,
-                            size: 44,
-                            color: _mutedTextColor,
-                          ),
-                        ),
-                ),
-              ),
-              Positioned(
-                bottom: 2,
-                right: 2,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: _onlineColor,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: _headerColor, width: 2.5),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            (data["name"] ?? "N/A").toString().toUpperCase(),
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: _textColor,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.4,
+          Container(
+            width: 92,
+            height: 92,
+            padding: const EdgeInsets.all(3),
+            decoration: const BoxDecoration(
+              color: _green,
+              shape: BoxShape.circle,
+            ),
+            child: ClipOval(
+              child: imageUrl.isNotEmpty
+                  ? Image.network(
+                      imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _avatarFallback(name),
+                    )
+                  : _avatarFallback(name),
             ),
           ),
-          const SizedBox(height: 10),
-
-          // Student ID pill — gradient ring + glow (solid fill inside)
+          const SizedBox(height: 18),
+          Text(
+            name.toUpperCase(),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: _ink,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -.3,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            _value('studentId', _value('ID', 'Student ID not set')),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: _muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 16),
           Container(
-            padding: const EdgeInsets.all(1.5), // ring thickness
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(30),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  _accentColor.withOpacity(0.9),
-                  _accentColor.withOpacity(0.25),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: _accentColor.withOpacity(0.35),
-                  blurRadius: 12,
-                  spreadRadius: 1,
+              color: _softGreen,
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(color: const Color(0xFFB9E2CA)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.verified_outlined, color: _green, size: 14),
+                SizedBox(width: 6),
+                Text(
+                  'STUDENT PROFILE',
+                  style: TextStyle(
+                    color: _green,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .5,
+                  ),
                 ),
               ],
             ),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: _cardColor, // solid so the glow doesn't bleed inside
-                borderRadius: BorderRadius.circular(28.5),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.badge, size: 14, color: _accentColor),
-                  const SizedBox(width: 6),
-                  Text(
-                    data["studentId"]?.toString() ?? "N/A",
-                    style: const TextStyle(
-                      color: _textColor,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ),
+          const SizedBox(height: 22),
+          const Divider(color: _line, height: 1),
+          const SizedBox(height: 15),
+          _miniInfo(Icons.school_outlined, 'Program', _value('program')),
+          const SizedBox(height: 13),
+          _miniInfo(Icons.calendar_month_outlined, 'Academic year', _latestClassAcademicYear ?? _value('academicYear', _value('schoolYear'))),
         ],
       ),
     );
   }
 
-  // Bottom zone of the fused card: small header + detail rows, no card
-  // decoration of its own — it inherits the outer wrapper's rounded corners.
-  Widget _buildDetailsZone({
-    required String title,
-    required IconData headerIcon,
-    required List<_DetailRow> rows,
-  }) {
+  Widget _avatarFallback(String name) {
     return Container(
-      width: double.infinity,
-      color: _cardColor,
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
+      color: _softGreen,
+      alignment: Alignment.center,
+      child: Text(
+        _initials(name),
+        style: const TextStyle(
+          color: _green,
+          fontSize: 25,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _miniInfo(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: _green, size: 17),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: _muted, fontSize: 10)),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: _ink,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _personalCard() {
+    return _Panel(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              _glowIconChip(headerIcon),
-              const SizedBox(width: 10),
-              Text(
-                title,
-                style: const TextStyle(
-                  color: _textColor,
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
+          const _PanelHeader(
+            title: 'Personal information',
+            subtitle: 'Your details used across the student portal',
+            icon: Icons.person_outline,
+          ),
+          Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final twoColumns = constraints.maxWidth >= 520;
+                    final fieldWidth = twoColumns
+                        ? (constraints.maxWidth - 14) / 2
+                        : constraints.maxWidth;
+                    return Wrap(
+                      spacing: 14,
+                      runSpacing: 16,
+                      children: [
+                        SizedBox(
+                          width: fieldWidth,
+                          child: _readOnlyField(
+                            'DISPLAY NAME',
+                            _value('name', _value('displayName', 'Student')),
+                            Icons.person_outline,
+                          ),
+                        ),
+                        SizedBox(
+                          width: fieldWidth,
+                          child: _readOnlyField(
+                            'STUDENT ID',
+                            _value('studentId', _value('ID')),
+                            Icons.badge_outlined,
+                          ),
+                        ),
+                        SizedBox(
+                          width: fieldWidth,
+                          child: _readOnlyField(
+                            'GENDER',
+                            _value('gender'),
+                            Icons.wc_outlined,
+                          ),
+                        ),
+                        SizedBox(
+                          width: fieldWidth,
+                          child: _readOnlyField(
+                            'CIVIL STATUS',
+                            _value('civilStatus'),
+                            Icons.favorite_border,
+                          ),
+                        ),
+                        SizedBox(
+                          width: fieldWidth,
+                          child: _readOnlyField(
+                            'NATIONALITY',
+                            _value('nationality'),
+                            Icons.flag_outlined,
+                          ),
+                        ),
+                        SizedBox(
+                          width: fieldWidth,
+                          child: _readOnlyField(
+                            'DATE OF BIRTH',
+                            _value('dob'),
+                            Icons.cake_outlined,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
-              ),
-              const SizedBox(width: 10),
+
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _readOnlyField(String label, String value, IconData icon) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _FieldLabel(label),
+        Container(
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: _line),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 15, color: _muted),
+              const SizedBox(width: 9),
               Expanded(
-                child: Container(
-                  height: 1,
-                  color: Colors.white.withOpacity(0.08),
+                child: Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _ink, fontSize: 12, fontWeight: FontWeight.w500),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          for (int i = 0; i < rows.length; i++)
-            _buildDetail(rows[i], shaded: i.isOdd),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  // Standalone floating card — used for Enrolment Details
-  Widget _buildInfoCard({
-    required String title,
-    required IconData headerIcon,
-    required List<_DetailRow> rows,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_cardColor.withOpacity(0.9), _cardColor.withOpacity(0.55)],
-        ),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 16, 14, 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                _glowIconChip(headerIcon),
-                const SizedBox(width: 10),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: _textColor,
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Container(
-                    height: 1,
-                    color: Colors.white.withOpacity(0.08),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            for (int i = 0; i < rows.length; i++)
-              _buildDetail(rows[i], shaded: i.isOdd),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDetail(_DetailRow row, {required bool shaded}) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-      decoration: BoxDecoration(
-        color: shaded ? Colors.white.withOpacity(0.03) : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
+  Widget _enrollmentCard() {
+    return _Panel(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(row.icon, size: 16, color: _accentColor.withOpacity(0.8)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              row.label,
-              style: const TextStyle(fontSize: 13, color: _mutedTextColor),
-            ),
+          const _PanelHeader(
+            title: 'Enrollment details',
+            subtitle: 'Academic information associated with your account',
+            icon: Icons.school_outlined,
           ),
-          Text(
-            (row.value ?? "N/A").toString(),
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: _textColor,
+          Padding(
+            padding: const EdgeInsets.all(22),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 720 ? 3 : (constraints.maxWidth >= 420 ? 2 : 1);
+                final gap = 12.0;
+                final itemWidth = (constraints.maxWidth - gap * (columns - 1)) / columns;
+                final details = <(IconData, String, String)>[
+                  (Icons.menu_book_outlined, 'PROGRAM', _value('program')),
+                  (Icons.groups_outlined, 'YEAR / BLOCK', _latestClassYearBlock ?? _value('yearBlock')),
+                  (Icons.event_note_outlined, 'SEMESTER', _value('semester')),
+                ];
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: 12,
+                  children: details.map((item) {
+                    return SizedBox(
+                      width: itemWidth,
+                      child: Container(
+                        padding: const EdgeInsets.all(15),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFAFBF9),
+                          border: Border.all(color: _line),
+                          borderRadius: BorderRadius.circular(7),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: _softGreen,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Icon(item.$1, color: _green, size: 18),
+                            ),
+                            const SizedBox(width: 11),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    item.$2,
+                                    style: const TextStyle(
+                                      color: _muted,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: .5,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    item.$3,
+                                    style: const TextStyle(
+                                      color: _ink,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                );
+              },
             ),
           ),
         ],
@@ -556,10 +657,153 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 }
 
-class _DetailRow {
-  final IconData icon;
-  final String label;
-  final dynamic value;
+class _Panel extends StatelessWidget {
+  const _Panel({required this.child, required this.padding});
 
-  const _DetailRow(this.icon, this.label, this.value);
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: padding,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.96),
+        border: Border.all(color: const Color(0xFFDFE2DF)),
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x080D1015),
+            blurRadius: 24,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+}
+
+class _PanelHeader extends StatelessWidget {
+  const _PanelHeader({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 17),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFFDFE2DF))),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: const Color(0xFFDCF2E5),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(icon, color: const Color(0xFF087B4F), size: 19),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Color(0xFF111217),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: Color(0xFF6F7276), fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FieldLabel extends StatelessWidget {
+  const _FieldLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Color(0xFF666970),
+          fontSize: 9,
+          fontWeight: FontWeight.w800,
+          letterSpacing: .6,
+        ),
+      ),
+    );
+  }
+}
+
+class _Eyebrow extends StatelessWidget {
+  const _Eyebrow(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: Color(0xFF087B4F),
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.1,
+      ),
+    );
+  }
+}
+
+class _BackgroundGlow extends StatelessWidget {
+  const _BackgroundGlow({required this.size});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            colors: [
+              const Color(0xFF58D99A).withOpacity(.12),
+              const Color(0xFF58D99A).withOpacity(.035),
+              Colors.transparent,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 class GazeCalibrationView extends StatefulWidget {
   final String examId;
+
   /// 'calibrationComplete' | 'calibrationFailed' | 'calibrationCancelled'
   final void Function(String action) onAction;
 
@@ -21,6 +22,7 @@ class GazeCalibrationView extends StatefulWidget {
 class _GazeCalibrationViewState extends State<GazeCalibrationView> {
   static bool _factoryRegistered = false;
   static const String _viewType = 'gaze-calibration-overlay';
+  static html.IFrameElement? _activeFrame;
   StreamSubscription<html.MessageEvent>? _sub;
 
   @override
@@ -41,13 +43,15 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
     if (_factoryRegistered) return;
     // ignore: undefined_prefixed_name
     ui.platformViewRegistry.registerViewFactory(_viewType, (int viewId) {
-      return html.IFrameElement()
+      final iframe = html.IFrameElement()
         ..src = '${html.window.location.origin}/assets/gaze-calibration.html'
         ..style.border = 'none'
         ..style.width = '100%'
         ..style.height = '100%'
         ..style.background = 'transparent'
         ..allow = 'camera; fullscreen';
+      _activeFrame = iframe;
+      return iframe;
     });
     _factoryRegistered = true;
   }
@@ -55,6 +59,12 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
   @override
   void dispose() {
     _sub?.cancel();
+    final iframe = _activeFrame;
+    if (iframe != null) {
+      iframe.contentWindow?.postMessage({'action': 'dispose'}, '*');
+      iframe.src = 'about:blank';
+      _activeFrame = null;
+    }
     super.dispose();
   }
 

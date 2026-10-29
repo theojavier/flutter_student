@@ -10,6 +10,7 @@ import 'firebase_options.dart';
 import 'widgets/responsive_scaffold.dart';
 import 'pages/home/home_page.dart';
 import 'pages/exams/exam_list_page.dart';
+import 'pages/exams/class_exam_page.dart';
 import 'pages/home/schedule_page.dart';
 import 'pages/auth/login_page.dart';
 import 'pages/exams/take_exam_page.dart';
@@ -99,9 +100,9 @@ final GoRouter router = GoRouter(
 
         if (location.startsWith('/home')) {
           selectedIndex = 0;
-        } else if (location.startsWith('/exam-list')) {
-          selectedIndex = 1;
         } else if (location.startsWith('/schedule')) {
+          selectedIndex = 1;
+        } else if (location.startsWith('/exam-history')) {
           selectedIndex = 2;
         }
 
@@ -122,6 +123,15 @@ final GoRouter router = GoRouter(
           path: '/schedule',
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: SchedulePage()),
+        ),
+        GoRoute(
+          path: '/student/class/:classId',
+          pageBuilder: (context, state) {
+            final classId = state.pathParameters['classId']!;
+            return NoTransitionPage(
+              child: ClassExamPage(key: ValueKey(classId), classId: classId),
+            );
+          },
         ),
         GoRoute(
           path: '/profile',
@@ -145,6 +155,17 @@ final GoRouter router = GoRouter(
         ),
 
         GoRoute(
+          name: 'exam',
+          path: '/examhtml/:examId',
+          pageBuilder: (context, state) => NoTransitionPage(
+            child: ExamHtmlPage(
+              examId: state.pathParameters['examId']!,
+              studentId: FirebaseAuth.instance.currentUser?.uid ?? '',
+            ),
+          ),
+        ),
+
+        GoRoute(
           path: '/exam-history',
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: ExamHistoryPage()),
@@ -163,18 +184,6 @@ final GoRouter router = GoRouter(
             return NoTransitionPage(child: ExamResultPage(examId: examId));
           },
         ),
-
-        // Named 'exam' because TakeExamPage calls context.goNamed('exam', ...)
-        GoRoute(
-          name: 'exam',
-          path: '/examhtml/:examId',
-          pageBuilder: (context, state) => NoTransitionPage(
-            child: ExamHtmlPage(
-              examId: state.pathParameters['examId']!,
-              studentId: FirebaseAuth.instance.currentUser?.uid ?? '',
-            ),
-          ),
-        ),
       ],
     ),
   ],
@@ -189,8 +198,8 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Student FOT',
       theme: ThemeData(
-        scaffoldBackgroundColor: const Color(0xFF0B1220),
-        canvasColor: const Color(0xFF0B1220),
+        scaffoldBackgroundColor: const Color.fromARGB(255, 255, 255, 255),
+        canvasColor: const Color.fromARGB(255, 241, 241, 242),
         scrollbarTheme: ScrollbarThemeData(
           thumbColor: WidgetStateProperty.all(
             const Color.fromARGB(255, 24, 39, 68),
@@ -201,7 +210,7 @@ class MyApp extends StatelessWidget {
           thickness: WidgetStateProperty.all(8),
         ),
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
+          seedColor: const Color(0xFF179C68),
           background: const Color(0xFF0B1220),
         ),
       ),

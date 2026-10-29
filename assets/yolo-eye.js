@@ -36,6 +36,7 @@ const YoloEye = (() => {
     disagree: 0.10, // (non-fusion modes) ox difference above this: pick best eye instead of averaging
     minCut: 0.5, // 1-Euro min cutoff on the eye offset (lower = steadier when still)
     beta: 4, // 1-Euro speed coefficient (features are in eye-widths, so this needs to be SMALL; try 1)
+    headCompDelay: 150, // ms: align head compensation with delayed visual response
     boxSmoothing: 0.85, // smoothing of the crop box position
     gpuRetries: 0, // 0 = go straight to CPU after GPU reset
 
@@ -83,6 +84,8 @@ const YoloEye = (() => {
   let gpuLosses = 0;
   let failed = false;      // true only if even the CPU fallback could not load
   let litert = null;       // LiteRT module, loaded once and reused
+  let disposed = false;
+  let disposePending = false;
 
   class GpuLost extends Error {}
   const isGpuLoss = (e) => {
@@ -100,6 +103,8 @@ const YoloEye = (() => {
   const cctx = cc.getContext("2d", { willReadFrequently: true });
   cctx.imageSmoothingEnabled = true;
   cctx.imageSmoothingQuality = "high";
+  const snap = document.createElement("canvas");
+  const snapCtx = snap.getContext("2d");
   // NB: resizing the canvas in load() resets these two settings, exactly like in the test page.
   // Left as-is on purpose so the features match what you validated there.
 
@@ -117,16 +122,23 @@ const YoloEye = (() => {
 
   // Compile the model with the first accelerator in `accels` that works.
   async function compile(accels) {
+    if (disposed) return;
     const m = await getLiteRt();
     let lastErr = null;
     for (const accel of accels) {
       try {
+        if (disposed) return;
         if (accel === "webgpu") {
           if (!navigator.gpu) throw new Error("WebGPU is unavailable");
           const adapter = await navigator.gpu.requestAdapter();
           if (!adapter) throw new Error("no WebGPU adapter");
         }
-        eyeModel = await m.loadAndCompile(cfg.modelUrl, { accelerator: accel });
+        const model = await m.loadAndCompile(cfg.modelUrl, { accelerator: accel });
+        if (disposed) {
+          try { model?.delete?.(); } catch (_) {}
+          return;
+        }
+        eyeModel = model;
         usedAccel = accel;
         LTensor = m.Tensor;
         return;
@@ -140,12 +152,14 @@ const YoloEye = (() => {
 
   async function load() {
     const jr = await fetch(cfg.jsonUrl);
+    if (disposed) return;
     if (!jr.ok) throw new Error(`Could not load ${cfg.jsonUrl} (HTTP ${jr.status})`);
     J = await jr.json();
     S = J.imgsz || 128;
     cc.width = cc.height = S;
 
     await compile(cfg.accelerators);
+    if (disposed || !eyeModel) return;
 
     info = `Eye model loaded (${usedAccel}).`;
     try {
@@ -165,7 +179,7 @@ const YoloEye = (() => {
   // Called when the GPU resets mid-exam: drop the dead model, rebuild in the background.
   // In fusion mode the bubble keeps running on MediaPipe + the last bias while this happens.
   function handleGpuLoss(err) {
-    if (recovering) return;
+    if (disposed || recovering) return;
     gpuLosses++;
     console.error(`YoloEye: GPU device lost (#${gpuLosses}), recovering…`, err);
 
@@ -179,6 +193,7 @@ const YoloEye = (() => {
     recovering = compile(accels)
       .then(() => console.warn(`YoloEye: recovered on ${usedAccel} after GPU reset #${gpuLosses}.`))
       .catch((e) => {
+        if (disposed) return;
         failed = true;
         error = e;
         console.error("YoloEye: recovery failed:", e);
@@ -187,6 +202,7 @@ const YoloEye = (() => {
   }
 
   function init(opts = {}) {
+    if (disposed) return Promise.reject(new Error("YoloEye has been disposed"));
     Object.assign(cfg, opts);
     if (!initPromise) {
       initPromise = load().catch((e) => {
@@ -197,6 +213,27 @@ const YoloEye = (() => {
       });
     }
     return initPromise;
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    if (busy) {
+      disposePending = true;
+      return;
+    }
+    releaseModel();
+  }
+
+  function releaseModel() {
+    const model = eyeModel;
+    eyeModel = null;
+    lastResult = null;
+    lastGaze = null;
+    disposePending = false;
+    try { model?.delete?.(); } catch (e) {
+      console.warn("YoloEye: failed to release the eye model:", e);
+    }
   }
 
   // ---------- crop + inference ----------
@@ -215,7 +252,7 @@ const YoloEye = (() => {
     cctx.fillStyle = "#727272";
     cctx.fillRect(0, 0, S, S);
     cctx.setTransform(M[0], M[3], M[1], M[4], M[2], M[5]);
-    cctx.drawImage(V, 0, 0, V.videoWidth, V.videoHeight);
+    cctx.drawImage(V, 0, 0, V.videoWidth || V.width, V.videoHeight || V.height);
     const d = cctx.getImageData(0, 0, S, S).data, n = S * S, t = new Float32Array(3 * n);
     if (NHWC) for (let i = 0; i < n; i++) { t[3 * i] = d[4 * i] / 255; t[3 * i + 1] = d[4 * i + 1] / 255; t[3 * i + 2] = d[4 * i + 2] / 255; }
     else for (let i = 0; i < n; i++) { t[i] = d[4 * i] / 255; t[n + i] = d[4 * i + 1] / 255; t[2 * n + i] = d[4 * i + 2] / 255; }
@@ -313,6 +350,7 @@ const YoloEye = (() => {
   let warmed = false, warmSince = 0;
 
   function fuseUpdate(lab, dx, dy, now, q, ear) {
+    if (runMaxSpeed > HEAD_SPEED_MAX) return;
     if (q < cfg.fuseMinQ || ear < cfg.fuseMinEar) return;
     const f = fz[lab];
     if (f.skip < cfg.fuseSkipFirst) { f.skip++; return; }
@@ -364,6 +402,8 @@ const YoloEye = (() => {
 
   const trk = {}; // locked crop box per eye: { A, B (box corners, camera px), cA, cB (averaged raw corners), t, miss, rc }
   let busy = false; // prevent concurrent YOLO runs (one shared crop canvas)
+  const HEAD_SPEED_MAX = 0.5; // rad/s. Lower = more strict
+  let hPrev = null, headSpeed = 0, runMaxSpeed = 0;
 
   // Box that stays put. Returns the locked box; it only moves when the eye really moved.
   function lockBox(lab, A, B, now) {
@@ -462,22 +502,41 @@ const YoloEye = (() => {
 
   // fusion mode: synchronous. YOLO is kicked off in the background and only updates the bias.
   function extractFused(lm, W, H, video) {
+    if (disposed) return null;
+    const h = GazeCore.extract(lm, W, H);
+    const tN = performance.now();
+    if (hPrev) {
+      const dt = Math.max((tN - hPrev.t) / 1000, 1e-3);
+      const v = Math.hypot(h.yaw - hPrev.yaw, h.pitch - hPrev.pitch) / dt;
+      headSpeed += 0.3 * (v - headSpeed);
+    }
+    hPrev = { t: tN, yaw: h.yaw, pitch: h.pitch };
+    runMaxSpeed = Math.max(runMaxSpeed, headSpeed);
     if (eyeModel && !recovering && !failed && !busy) {
       busy = true;
-      V = video;
+      if (snap.width !== video.videoWidth || snap.height !== video.videoHeight) {
+        snap.width = video.videoWidth;
+        snap.height = video.videoHeight;
+      }
+      snapCtx.drawImage(video, 0, 0);
+      V = snap;
+      runMaxSpeed = headSpeed;
       yoloGaze(lm, W, H)
-        .then((g) => { lastGaze = g; })
+        .then((g) => { if (!disposed) lastGaze = g; })
         .catch((e) => { if (!(e instanceof GpuLost)) console.error("YOLO eye failed:", e); })
-        .finally(() => { busy = false; });
+        .finally(() => {
+          busy = false;
+          if (disposePending) releaseModel();
+        });
     }
     const f = fusedFrame(lm, W, H);
     if (!f) return null; // no bias learned yet (first YOLO frame, or eyes closed so far)
-    const h = GazeCore.extract(lm, W, H); // fresh head pose every frame
     return { ear: h.ear, ox: f.ox, oy: f.oy, yaw: h.yaw, pitch: h.pitch, roll: h.roll, cx: h.cx, cy: h.cy, scale: h.scale, eyePx: f.eyePx };
   }
 
   // non-fusion modes: original behaviour (async, features only update when YOLO finishes)
   async function extractYolo(lm, W, H, video) {
+    if (disposed) return null;
     if (recovering || failed) return null; // rebuilding (or dead): skip frames quietly
     if (!eyeModel) return lastResult;
     if (busy) return lastResult;
@@ -496,6 +555,7 @@ const YoloEye = (() => {
       throw e;
     } finally {
       busy = false;
+      if (disposePending) releaseModel();
     }
   }
 
@@ -530,11 +590,18 @@ const YoloEye = (() => {
     const s = { init: false, t: 0 };
     let hist = { ox: [], oy: [] };
     let euro = { ox: new OneEuro(), oy: new OneEuro() };
+    const hh = [];
     const fn = (raw, now) => {
       // Head-compensate each frame FIRST (same frame as the eye measurement), then filter the combined signal.
       // Subtracting a separately smoothed yaw/pitch made the dot swing whenever the head moved, because the
       // head filter and the eye filter lag by different amounts. Steady-state values are unchanged.
-      const r = { ...raw, ox: raw.ox - EYE_PER_RAD * raw.yaw, oy: raw.oy - EYE_PER_RAD * raw.pitch };
+      hh.push({ t: now, yaw: raw.yaw, pitch: raw.pitch });
+      while (hh.length > 1 && hh[1].t <= now - cfg.headCompDelay) hh.shift();
+      const r = {
+        ...raw,
+        ox: raw.ox - EYE_PER_RAD * hh[0].yaw,
+        oy: raw.oy - EYE_PER_RAD * hh[0].pitch,
+      };
       for (const k of ["ox", "oy"]) {
         hist[k].push(r[k]);
         if (hist[k].length > avgN) hist[k].shift(); // configurable frame window
@@ -560,6 +627,7 @@ const YoloEye = (() => {
       s.init = false;
       hist = { ox: [], oy: [] };
       euro = { ox: new OneEuro(), oy: new OneEuro() };
+      hh.length = 0;
     };
     return fn;
   }
@@ -586,7 +654,7 @@ const YoloEye = (() => {
   }
 
   return {
-    cfg, init, extract, reset, makeSmoother, exportCfg, applyCfg, drawKeypoints,
+    cfg, init, dispose, extract, reset, makeSmoother, exportCfg, applyCfg, drawKeypoints,
     get ready() { return !!eyeModel; },
     isReady() { return !!eyeModel; }, // alias
     isBusy() { return busy; }, // YOLO is processing a frame (in fusion mode this does NOT block features)

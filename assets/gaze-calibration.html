@@ -2,9 +2,38 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f8f6" />
     <title>Gaze Calibration — 9-Point</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <style>
+      /* =====================================================================
+         FOTS — editorial green / paper theme (matches the student portal)
+         paper #f7f8f6 • ink #111217 • emerald #087B4F
+         All element IDs and classes used by gaze-calibration.js are unchanged.
+         ===================================================================== */
+      :root {
+        --paper: #f7f8f6;
+        --panel: #ffffff;
+        --ink: #111217;
+        --muted: #6f7276;
+        --line: #dfe2df;
+        --green: #087b4f;
+        --green-dark: #075c3c;
+        --green-soft: #e8f5ee;
+        --green-line: #cde7d7;
+        --warn: #9a6712;
+        --warn-bg: #fff5e5;
+        --warn-line: #f2dfb9;
+        --danger: #cb354b;
+        --danger-bg: #fff1f3;
+        --danger-line: #f0cad0;
+      }
       * {
         box-sizing: border-box;
       }
@@ -16,15 +45,37 @@
         height: 100%;
       }
       body {
-        font:
-          14px system-ui,
-          sans-serif;
-        background: transparent;
-        color: #e6f0f8;
-        overflow: hidden;
+  font:
+    14px "Inter",
+    system-ui,
+    sans-serif;
+  letter-spacing: -0.015em;
+
+  background: transparent !important;
+  background-color: transparent !important;
+
+  color: var(--ink);
+  overflow: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+      /* faint dot grain like the portal */
+      body::before {
+  content: none !important;
+  display: none !important;
+}
+      ::selection {
+        background: var(--green);
+        color: #fff;
+      }
+      button:focus-visible {
+        outline: 2px solid var(--green);
+        outline-offset: 3px;
       }
 
+      /* ---------- Start screen ---------- */
       #mainScreen {
+        position: relative;
+        z-index: 1;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -38,123 +89,273 @@
       }
 
       #mainScreen .info-box {
-        background: rgba(11, 18, 32, 0.95);
-        padding: 32px;
-        border-radius: 16px;
-        border: 2px solid #1e90ff;
+        background: var(--panel);
+        padding: 0;
+        border-radius: 11px;
+        border: 1px solid var(--line);
+        box-shadow: 0 15px 42px rgba(17, 18, 23, 0.07);
         cursor: default;
+        overflow: hidden;
+        text-align: left;
       }
 
-      #calibrationOverlay {
-        display: none;
-        position: fixed;
-        inset: 0;
-        z-index: 20;
-        background: rgba(11, 18, 32, 0.95);
+      .info-box {
+        max-width: 520px;
+        width: 100%;
+        margin: 0 auto;
       }
+
+      /* ink header strip, same as the portal's entry card hero */
+      .info-head {
+        background: var(--ink);
+        color: #fff;
+        padding: 26px 30px 24px;
+        position: relative;
+        overflow: hidden;
+      }
+      .info-head::after {
+        content: "";
+        position: absolute;
+        width: 210px;
+        height: 210px;
+        right: -50px;
+        top: -95px;
+        border: 1px solid rgba(116, 230, 172, 0.33);
+        border-radius: 50%;
+      }
+      .info-eyebrow {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font: 500 10px/1 "DM Mono", monospace;
+        letter-spacing: 0.8px;
+        color: #aeb1ba;
+        margin-bottom: 16px;
+      }
+      .info-eyebrow i {
+        width: 9px;
+        height: 9px;
+        background: var(--green);
+        display: inline-block;
+      }
+      .info-head h2 {
+        position: relative;
+        z-index: 1;
+        margin: 0;
+        font: 700 28px/1.08 "Space Grotesk", sans-serif;
+        letter-spacing: -1.1px;
+      }
+      .info-head p {
+        position: relative;
+        z-index: 1;
+        margin: 10px 0 0;
+        color: #adb0ba;
+        font-size: 12px;
+        line-height: 1.65;
+        max-width: 420px;
+      }
+
+      .info-body {
+        padding: 24px 30px 30px;
+      }
+
+      .instruction-list {
+        list-style: none;
+        margin: 0 0 22px;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+      }
+      .instruction-list li {
+        margin: 0;
+        padding: 14px 15px;
+        background: var(--paper);
+        border: 1px solid #e5e8e4;
+        border-radius: 5px;
+        color: #31343b;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      /* ---------- Buttons ---------- */
+      button {
+        background: var(--green);
+        color: #fff;
+        border: 1px solid var(--green);
+        border-radius: 6px;
+        padding: 0 20px;
+        min-height: 46px;
+        font: 700 12px "Inter", sans-serif;
+        cursor: pointer;
+        box-shadow: none;
+        transition:
+          transform 0.18s,
+          background 0.18s,
+          border-color 0.18s;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      button:hover:not(:disabled) {
+        background: var(--green-dark);
+        border-color: var(--green-dark);
+        transform: translateY(-2px);
+      }
+
+      #startBtn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        width: 100%;
+      }
+      #startBtn .spinner {
+        display: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.35);
+        border-top-color: #fff;
+        animation: spin 0.8s linear infinite;
+      }
+      #startBtn.loading .spinner {
+        display: inline-block;
+      }
+      #startBtn.loading:disabled {
+        opacity: 1;
+        background: var(--green-soft);
+        border-color: var(--green-line);
+        color: var(--green);
+      }
+      #startBtn.loading .spinner {
+        border-color: rgba(8, 123, 79, 0.25);
+        border-top-color: var(--green);
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* ---------- Calibration overlay ---------- */
+      #calibrationOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+
+  background: transparent !important;
+  background-color: transparent !important;
+}
       #calibrationOverlay.active {
         display: block;
       }
 
+      /* instruction card, top centre */
       #calMessage {
         position: absolute;
-        top: 18px;
-        left: 0;
-        right: 0;
+        top: calc(18px + env(safe-area-inset-top, 0px));
+        left: 50%;
+        transform: translateX(-50%);
+        width: min(560px, calc(100% - 28px));
+        padding: 13px 16px;
         text-align: center;
-        font-size: 16px;
-        font-weight: 600;
+        font: 600 13px/1.5 "Inter", sans-serif;
+        color: var(--ink);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        box-shadow: 0 18px 46px rgba(17, 18, 23, 0.1);
       }
 
+      /* feedback pill sits under the instruction card */
       #feedbackMessage {
         position: absolute;
-        top: 70px;
+        top: calc(82px + env(safe-area-inset-top, 0px));
         left: 0;
         right: 0;
         text-align: center;
-        font-size: 14px;
-        padding: 8px 16px;
+        font: 500 12px/1.4 "Inter", sans-serif;
         opacity: 0;
         transition: opacity 0.2s;
+        pointer-events: none;
       }
       #feedbackMessage.show {
         opacity: 1;
       }
-      #feedbackMessage.warning {
-        color: #ffa726;
-        background: rgba(255, 167, 38, 0.15);
-        border-radius: 8px;
+      #feedbackMessage.warning,
+      #feedbackMessage.error {
         display: inline-block;
-        border: 1px solid rgba(255, 167, 38, 0.4);
+        padding: 8px 14px;
+        border-radius: 4px;
+        border: 1px solid;
+      }
+      #feedbackMessage.warning {
+        color: var(--warn);
+        background: var(--warn-bg);
+        border-color: var(--warn-line);
       }
       #feedbackMessage.error {
-        color: #ff6b6b;
-        background: rgba(255, 107, 107, 0.15);
-        border-radius: 8px;
-        display: inline-block;
-        border: 1px solid rgba(255, 107, 107, 0.4);
+        color: var(--danger);
+        background: var(--danger-bg);
+        border-color: var(--danger-line);
       }
 
+      /* target dot: green core, pale ring, ink pupil — readable on paper */
       #dot {
         position: absolute;
+        left: 0;
+        top: 0;
         width: 30px;
         height: 30px;
         border-radius: 50%;
-        transform: translate(-50%, -50%);
-        background: radial-gradient(circle, #0b1220 0 3px, #fff 3.5px);
-        border: 5px solid #1e90ff;
-        transition:
-          left 0.3s ease,
-          top 0.3s ease;
-        box-shadow: 0 0 20px rgba(30, 144, 255, 0.6);
+        transform: translate(0, 0) translate(-50%, -50%);
+        background: radial-gradient(circle, var(--ink) 0 3px, #fff 3.5px);
+        border: 7px solid var(--green);
+        box-shadow: 0 0 0 8px rgba(8, 123, 79, 0.13), 0 8px 24px rgba(17, 18, 23, 0.22);
         z-index: 30;
+        pointer-events: none;
+        will-change: transform;
+      }
+
+      #dot svg {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 44px;
+        height: 44px;
+        transform: translate(-50%, -50%);
         pointer-events: none;
       }
 
-      #dot::after {
-        content: "";
-        position: absolute;
-        inset: -8px;
-        border-radius: 50%;
-        border: 3px solid transparent;
-        border-top-color: #4ade80;
-        transform: rotate(0deg);
-        transition: transform 0.1s linear;
-      }
-
-      #dot.collecting::after {
-        animation: spin-progress 1.5s linear forwards;
-      }
-
-      @keyframes spin-progress {
-        from {
-          transform: rotate(0deg);
-          clip-path: polygon(50% 50%, 50% 0%, 50% 0%, 50% 0%);
-        }
-        to {
-          transform: rotate(360deg);
-          clip-path: polygon(
-            50% 50%,
-            50% 0%,
-            100% 0%,
-            100% 100%,
-            0% 100%,
-            0% 0%
-          );
-        }
-      }
-
+      /* ---------- Camera preview ---------- */
       .cam-preview {
         position: absolute;
-        bottom: 20px;
+        bottom: calc(20px + env(safe-area-inset-bottom, 0px));
         right: 20px;
         width: 200px;
         aspect-ratio: 4/3;
-        background: #000;
-        border-radius: 8px;
-        border: 2px solid #1e90ff;
+        background: #0b0b10;
+        border-radius: 5px;
+        border: 1px solid #272a30;
         overflow: hidden;
         z-index: 10;
+        box-shadow: 0 12px 32px rgba(17, 18, 23, 0.18);
+      }
+      .cam-preview::after {
+        position: absolute;
+        left: 8px;
+        bottom: 8px;
+        padding: 4px 7px;
+        border-radius: 3px;
+        background: rgba(17, 18, 23, 0.9);
+        border: 1px solid #66c192;
+        color: #dff2e7;
+        font: 500 8px "DM Mono", monospace;
+        letter-spacing: 0.7px;
       }
       .cam-preview video {
         width: 100%;
@@ -169,74 +370,39 @@
         visibility: hidden;
       }
 
-      button {
-        background: #1e90ff;
-        color: #06203a;
-        border: 0;
-        border-radius: 8px;
-        padding: 12px 24px;
-        font-weight: 600;
-        cursor: pointer;
-        font-size: 16px;
-        box-shadow: 0 4px 12px rgba(30, 144, 255, 0.3);
-      }
-      button:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      button:hover:not(:disabled) {
-        background: #3d9fff;
-      }
-
-      #startBtn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        min-width: 280px;
-      }
-      #startBtn .spinner {
-        display: none;
-        width: 16px;
-        height: 16px;
-        border-radius: 50%;
-        border: 2px solid rgba(6, 32, 58, 0.3);
-        border-top-color: #06203a;
-        animation: spin 0.8s linear infinite;
-      }
-      #startBtn.loading .spinner {
-        display: inline-block;
-      }
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
+      @media (max-width: 680px) {
+        .info-head {
+          padding: 22px 20px 20px;
+        }
+        .info-head h2 {
+          font-size: 25px;
+        }
+        .info-body {
+          padding: 20px;
+        }
+        .instruction-list li {
+          font-size: 13px;
+        }
+        button {
+          min-height: 56px;
+          font-size: 15px;
+          border-radius: 15px;
+        }
+        #calMessage {
+          font-size: 13px;
+        }
+        .cam-preview {
+          width: 140px;
+          right: 12px;
         }
       }
-
-      .info-box {
-        max-width: 500px;
-        margin: 0 auto;
-      }
-      .info-box h2 {
-        font-size: 24px;
-        margin-bottom: 12px;
-      }
-      .info-box p {
-        color: #9fb0c3;
-        line-height: 1.6;
-        margin-bottom: 20px;
-      }
-
-      .instruction-list {
-        text-align: left;
-        background: #071a2b;
-        padding: 16px;
-        border-radius: 8px;
-        margin-bottom: 20px;
-      }
-      .instruction-list li {
-        margin: 8px 0;
-        color: #dbeefc;
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          transition-duration: 0.01ms !important;
+        }
       }
     </style>
   </head>
@@ -244,22 +410,27 @@
     <!-- Start screen -->
     <div id="mainScreen">
       <div class="info-box">
-        <h2>🎯 Gaze Calibration Required</h2>
-        <p>
-          Before starting the exam, we need to calibrate your gaze tracking for
-          accurate monitoring.
-        </p>
+        <div class="info-head">
+          <div class="info-eyebrow"><i></i>FOTS / GAZE CALIBRATION</div>
+          <h2>Calibrate your gaze</h2>
+          <p>
+            Before starting the exam, we need to calibrate your gaze tracking
+            for accurate monitoring.
+          </p>
+        </div>
 
-        <ul class="instruction-list">
-          <li>✓ Look at each of the 9 dots; no head-movement exercise is required</li>
-          <li>✓ Usually takes about 20 seconds; slower phones may take longer</li>
-          <li>✓ Make sure your face is clearly visible</li>
-        </ul>
+        <div class="info-body">
+          <ul class="instruction-list">
+            <li>✓ Look at each of the 9 dots; no head-movement exercise is required</li>
+            <li>✓ Usually takes about 40 seconds; slower phones may take longer</li>
+            <li>✓ Make sure your face is clearly visible</li>
+          </ul>
 
-        <button id="startBtn" class="loading" disabled>
-          <span class="spinner"></span>
-          <span id="startLabel">Loading model…</span>
-        </button>
+          <button id="startBtn" class="loading" disabled>
+            <span class="spinner"></span>
+            <span id="startLabel">Loading model…</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -285,7 +456,7 @@
         sessionStorage.removeItem('gazeOnlineClicks');
         sessionStorage.removeItem('examStarted');
         sessionStorage.removeItem('is_unloading');
-        console.log('🧹 Cleared calibration storage for fresh start');
+        console.log('Cleared calibration storage for fresh start');
       }
 
       // Bridge function for cross-platform communication

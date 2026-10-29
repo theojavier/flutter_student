@@ -1,7 +1,8 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter_week_view/flutter_week_view.dart';
 import '../../helpers/SecureStorageHelper.dart';
 
 class SchedulePage extends StatefulWidget {
@@ -11,354 +12,1425 @@ class SchedulePage extends StatefulWidget {
   State<SchedulePage> createState() => _SchedulePageState();
 }
 
-class _SchedulePageState extends State<SchedulePage> {
-  // Shared theme palette (same as ProfilePage / LoginPage)
-  static const Color _bgColor = Color(0xFF0B1220);
-  static const Color _headerColor = Color(0xFF0F2B45);
-  static const Color _headerColorLight = Color(0xFF17456F);
-  static const Color _cardColor = Color(0xFF0F3B61);
-  static const Color _textColor = Color(0xFFE6F0F8);
-  static const Color _mutedTextColor = Color(0xFF9FB0C3);
-  static const Color _accentColor = Color(0xFF3D8BFF);
+// ============================================================
+// HELPERS
+// ============================================================
 
-  final FirebaseFirestore firestore = FirebaseFirestore.instance;
-  final DateFormat timeFormat = DateFormat("h:mm a");
+DateTime? _toDate(dynamic value) {
+  if (value == null) return null;
+  if (value is Timestamp) return value.toDate();
+  if (value is String) return DateTime.tryParse(value);
+  if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+  return null;
+}
 
-  // Created once (not inside the StreamBuilder) so they aren't recreated
-  // on every snapshot, and disposed properly.
-  final ScrollController _horizontalController = ScrollController();
-  final ScrollController _verticalController = ScrollController();
+int? _intOf(dynamic v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}');
 
-  String? studentId;
-  String? program;
-  String? yearBlock;
-  bool loadingUser = true;
+String _text(dynamic v, [String fallback = '']) {
+  final s = (v ?? '').toString().trim();
+  return s.isEmpty ? fallback : s;
+}
+
+String _norm(String s) => s.trim().toLowerCase();
+
+/// "08:30" -> 510
+int? _parseHm(dynamic v) {
+  final parts = _text(v).split(':');
+  if (parts.length < 2) return null;
+  final h = int.tryParse(parts[0]);
+  final m = int.tryParse(parts[1]);
+  if (h == null || m == null) return null;
+  return h * 60 + m;
+}
+
+DateTime _mondayOf(DateTime d) =>
+    DateTime(d.year, d.month, d.day - (d.weekday - 1));
+
+bool _sameDay(DateTime a, DateTime b) =>
+    a.year == b.year && a.month == b.month && a.day == b.day;
+
+/// Reads class days from `days` (list) or `day` (string).
+/// Accepts "Mon", "Monday", "Mon, Wed", or numbers 1-7 (Mon = 1).
+Set<int> _classDays(Map<String, dynamic> d) {
+  const names = {
+    'mon': 1,
+    'tue': 2,
+    'wed': 3,
+    'thu': 4,
+    'fri': 5,
+    'sat': 6,
+    'sun': 7,
+  };
+  final raw = d['days'] ?? d['day'] ?? d['dayOfWeek'];
+  final List items = raw is List
+      ? raw
+      : raw is String
+      ? raw.split(RegExp(r'[,/;\s]+'))
+      : const [];
+  final out = <int>{};
+  for (final item in items) {
+    if (item is num && item >= 1 && item <= 7) {
+      out.add(item.toInt());
+      continue;
+    }
+    final s = item.toString().trim().toLowerCase();
+    if (s.length < 3) continue;
+    final wd = names[s.substring(0, 3)];
+    if (wd != null) out.add(wd);
+  }
+  return out;
+}
+
+// ============================================================
+// MODELS
+// ============================================================
+
+class _Entry {
+  const _Entry({
+    required this.title,
+    required this.start,
+    required this.end,
+    required this.isExam,
+    this.room = '',
+    this.adviser = '',
+    this.linked = false,
+    this.both = false,
+  });
+
+  final String title;
+  final DateTime start;
+  final DateTime end;
+  final bool isExam;
+  final bool both;
+  final String room;
+  final String adviser;
+
+  /// True when an approved exam set this class's date/time.
+  final bool linked;
+
+  String get key => '$title|${start.toIso8601String()}|$isExam';
+
+  /// Minutes from midnight (clamped to the start day).
+  int get startMin => start.hour * 60 + start.minute;
+
+  int get endMin {
+    if (!_sameDay(start, end)) return 24 * 60;
+    final e = end.hour * 60 + end.minute;
+    return e <= startMin ? startMin + 60 : e;
+  }
+}
+
+class _Unplaced {
+  const _Unplaced({
+    required this.title,
+    required this.timeLabel,
+    required this.room,
+    required this.adviser,
+  });
+
+  final String title;
+  final String timeLabel;
+  final String room;
+  final String adviser;
+}
+
+class _ExamInfo {
+  const _ExamInfo({
+    required this.id,
+    required this.subject,
+    required this.classId,
+    required this.start,
+    required this.end,
+  });
+
+  final String id;
+  final String subject;
+  final String classId;
+  final DateTime start;
+  final DateTime end;
+}
+
+class _ScheduleData {
+  const _ScheduleData(this.entries, this.unplaced);
+  final List<_Entry> entries;
+  final List<_Unplaced> unplaced;
+}
+
+/// A card with its final position inside a day column.
+class _Placed {
+  const _Placed(this.entry, this.top, this.height, this.stacked);
+  final _Entry entry;
+  final double top;
+  final double height;
+
+  /// True when this card overlaps another one (shown as a stacked card).
+  final bool stacked;
+}
+
+// ============================================================
+// HOVER CARD (pops up above the child)
+// ============================================================
+
+class _HoverCard extends StatefulWidget {
+  const _HoverCard({
+    required this.child,
+    required this.popup,
+    this.onHoverChange,
+  });
+
+  final Widget child;
+  final Widget popup;
+  final ValueChanged<bool>? onHoverChange;
 
   @override
-  void initState() {
-    super.initState();
-    _loadPrefs();
+  State<_HoverCard> createState() => _HoverCardState();
+}
+
+class _HoverCardState extends State<_HoverCard> {
+  final LayerLink _link = LayerLink();
+  OverlayEntry? _entry;
+
+  void _show() {
+    if (_entry != null) return;
+
+    // If there is no room above (top of the screen), show it below instead.
+    var below = false;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box != null && box.hasSize) {
+      below = box.localToGlobal(Offset.zero).dy < 240;
+    }
+
+    _entry = OverlayEntry(
+      builder: (_) => Positioned(
+        left: 0,
+        top: 0,
+        child: CompositedTransformFollower(
+          link: _link,
+          showWhenUnlinked: false,
+          targetAnchor: below ? Alignment.bottomCenter : Alignment.topCenter,
+          followerAnchor: below ? Alignment.topCenter : Alignment.bottomCenter,
+          offset: Offset(0, below ? 8 : -8),
+          child: IgnorePointer(
+            child: Material(color: Colors.transparent, child: widget.popup),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_entry!);
+    widget.onHoverChange?.call(true);
   }
 
-  Future<void> _loadPrefs() async {
-    final storedProgram = await SecureStorageHelper.read('program');
-    final storedYearBlock = await SecureStorageHelper.read('yearBlock');
-    if (!mounted) return;
-    setState(() {
-      program = storedProgram;
-      yearBlock = storedYearBlock;
-      loadingUser = false;
-    });
+  void _hide() {
+    if (_entry == null) return;
+    _entry!.remove();
+    _entry = null;
+    widget.onHoverChange?.call(false);
   }
 
   @override
   void dispose() {
-    _horizontalController.dispose();
-    _verticalController.dispose();
+    _entry?.remove();
+    _entry = null;
     super.dispose();
   }
 
-  bool _isToday(DateTime d) {
-    final now = DateTime.now();
-    return d.year == now.year && d.month == now.month && d.day == now.day;
+  @override
+  Widget build(BuildContext context) {
+    return CompositedTransformTarget(
+      link: _link,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => _show(),
+        onExit: (_) => _hide(),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          // Touch devices: tap to toggle.
+          onTap: () => _entry == null ? _show() : _hide(),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// PAGE
+// ============================================================
+
+class _SchedulePageState extends State<SchedulePage> {
+  // FOTS editorial palette (green)
+  static const Color _bg = Color(0xFFF7F8F6);
+  static const Color _ink = Color(0xFF111217);
+  static const Color _accent = Color(0xFF087B4F);
+  static const Color _accentDark = Color(0xFF075C3C);
+  static const Color _accentSoft = Color(0xFFE8F5EB);
+  static const Color _examSoft = Color(0xFFEDEEF0);
+  static const Color _todayTint = Color(0xFFFAFCFA);
+  static const Color _line = Color(0xFFDFE2DF);
+  static const Color _muted = Color(0xFF6F7276);
+  static const Color _muted2 = Color(0xFF8A8D91);
+  static const String _mono = 'monospace';
+
+  // Grid sizing
+  static const double _timeColumnWidth = 78;
+  static const double _dayColumnWidth = 170;
+  static const double _hourRowHeight = 88;
+
+  /// How much of a card stays visible when another card covers it.
+  static const double _peek = 28;
+  static const double _minCardHeight = 64;
+
+  final FirebaseFirestore db = FirebaseFirestore.instance;
+  final DateFormat _timeFmt = DateFormat('h:mm a');
+
+  /// Key of the card the mouse is over (it is brought to the front).
+  final ValueNotifier<String?> _hover = ValueNotifier<String?>(null);
+
+  late DateTime _weekStart;
+
+  bool _loading = true;
+  bool _missingInfo = false;
+  String? _yearBlock;
+
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _classesStream;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _examsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _weekStart = _mondayOf(DateTime.now());
+    _loadPrefs();
   }
 
-  // ---------- UI ----------
+  @override
+  void dispose() {
+    _hover.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPrefs() async {
+    final storedProgram = await SecureStorageHelper.read('program');
+    final storedCode = await SecureStorageHelper.read('programCode');
+    final storedYearBlock = await SecureStorageHelper.read('yearBlock');
+
+    String profileCode = '';
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      try {
+        final profile = await db.collection('users').doc(uid).get();
+        profileCode = _text(profile.data()?['programCode']);
+      } catch (_) {}
+    }
+
+    final programValues = <String>{
+      for (final v in [profileCode, storedCode, storedProgram])
+        if ((v ?? '').trim().isNotEmpty) v!.trim(),
+    }.toList();
+    final yearBlock = (storedYearBlock ?? '').trim();
+
+    if (!mounted) return;
+
+    if (programValues.isEmpty || yearBlock.isEmpty) {
+      setState(() {
+        _missingInfo = true;
+        _loading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _yearBlock = yearBlock;
+      _classesStream = db
+          .collection('classes')
+          .where('program', whereIn: programValues)
+          .where('yearBlock', isEqualTo: yearBlock)
+          .snapshots();
+      _examsStream = db
+          .collection('exams')
+          .where('program', whereIn: programValues)
+          .where('yearBlock', isEqualTo: yearBlock)
+          .snapshots();
+      _loading = false;
+    });
+  }
+
+  // ============================================================
+  // SCHEDULE LOGIC
+  // ============================================================
+  //
+  // 1. Classes come from the `classes` collection (status == active).
+  // 2. A class repeats weekly on its `days` (if set).
+  // 3. If an APPROVED exam belongs to the same class (same classId, or same
+  //    subject in the same program/year-block), the exam's date and time
+  //    replace the class's regular session on that date.
+  // 4. A class with no `days` and an approved exam appears only on the
+  //    exam's date. With no days and no exam it goes in "Day not set".
+  // 5. Exams can be anywhere. When anything overlaps in time, the cards
+  //    are stacked (see _stackDay).
+
+  _ScheduleData _compose(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> classDocs,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> examDocs,
+  ) {
+    final exams = <_ExamInfo>[];
+    for (final doc in examDocs) {
+      final d = doc.data();
+      if (_text(d['approvalStatus']) != 'approved') continue;
+      final start = _toDate(d['startTime']);
+      if (start == null) continue;
+      final end =
+          _toDate(d['endTime']) ??
+          start.add(
+            Duration(
+              minutes: _intOf(d['duration'] ?? d['durationMinutes']) ?? 60,
+            ),
+          );
+      exams.add(
+        _ExamInfo(
+          id: doc.id,
+          subject: _text(d['subject'], 'Untitled exam'),
+          classId: _text(d['classId']),
+          start: start,
+          end: end,
+        ),
+      );
+    }
+
+    final entries = <_Entry>[];
+    final unplaced = <_Unplaced>[];
+    final examClassInfo = <String, ({String room, String adviser})>{};
+
+    for (final doc in classDocs) {
+      final d = doc.data();
+      if (_text(d['status']) != 'active') continue;
+
+      final subject = _text(d['subject'], 'Untitled class');
+      final room = _text(d['roomDefault']);
+      final adviser = _text(d['adviserName']);
+
+      final startMin = _intOf(d['startMinutes']) ?? _parseHm(d['startLabel']);
+      final endMin =
+          _intOf(d['endMinutes']) ??
+          _parseHm(d['endLabel']) ??
+          (startMin == null
+              ? null
+              : startMin + (_intOf(d['durationMin']) ?? 60));
+      final days = _classDays(d);
+
+      final myExams = exams
+          .where(
+            (e) =>
+                e.classId == doc.id ||
+                (e.classId.isEmpty && _norm(e.subject) == _norm(subject)),
+          )
+          .toList();
+      for (final e in myExams) {
+        examClassInfo[e.id] = (room: room, adviser: adviser);
+      }
+
+      if (startMin != null && endMin != null && days.isNotEmpty) {
+        for (final wd in days) {
+          final date = DateTime(
+            _weekStart.year,
+            _weekStart.month,
+            _weekStart.day + (wd - 1),
+          );
+  
+          entries.add(
+            _Entry(
+              title: subject,
+              start: DateTime(
+                date.year,
+                date.month,
+                date.day,
+                startMin ~/ 60,
+                startMin % 60,
+              ),
+              end: DateTime(
+                date.year,
+                date.month,
+                date.day,
+                endMin ~/ 60,
+                endMin % 60,
+              ),
+              isExam: false,
+              room: room,
+              adviser: adviser,
+            ),
+          );
+        }
+      } else if (myExams.isEmpty) {
+        final label = (startMin != null && endMin != null)
+            ? '${_minutesLabel(startMin)} – ${_minutesLabel(endMin)}'
+            : 'Time not set';
+        unplaced.add(
+          _Unplaced(
+            title: subject,
+            timeLabel: label,
+            room: room,
+            adviser: adviser,
+          ),
+        );
+      }
+    }
+
+    // Approved exams (linked to a class or not)
+    final weekEnd = DateTime(
+      _weekStart.year,
+      _weekStart.month,
+      _weekStart.day + 7,
+    );
+    for (final e in exams) {
+  if (e.start.isBefore(_weekStart) || !e.start.isBefore(weekEnd)) continue;
+  final info = examClassInfo[e.id];
+
+  // Same-subject class that meets at the same time on the exam's day -> one "both" card.
+  final i = entries.indexWhere(
+    (c) =>
+        !c.isExam &&
+        _sameDay(c.start, e.start) &&
+        c.start.isBefore(e.end) &&
+        c.end.isAfter(e.start) &&
+        _norm(c.title) == _norm(e.subject),
+  );
+
+  final merged = _Entry(
+    title: e.subject,
+    start: e.start,
+    end: e.end,
+    isExam: true,
+    both: i != -1,
+    room: info?.room ?? '',
+    adviser: info?.adviser ?? '',
+    linked: info != null,
+  );
+
+  if (i != -1) {
+    entries[i] = merged;
+  } else {
+    entries.add(merged);
+  }
+}
+
+    entries.sort((a, b) => a.start.compareTo(b.start));
+    unplaced.sort((a, b) => a.title.compareTo(b.title));
+    return _ScheduleData(entries, unplaced);
+  }
+
+  String _minutesLabel(int minutes) {
+    final m = minutes % (24 * 60);
+    return _timeFmt.format(DateTime(2000, 1, 1, m ~/ 60, m % 60));
+  }
+
+  // ============================================================
+  // STACK LAYOUT
+  // ============================================================
+  //
+  // Cards that overlap in time form a "cluster" and are drawn as a
+  // stack: each card starts at its real time but is pushed down at least
+  // `_peek` px below the previous card, so its header always stays
+  // visible. Later cards sit on top, the last one shows fully.
+  // Hovering any card brings it to the front.
+
+  List<_Placed> _stackDay(
+    List<_Entry> items,
+    int firstHour,
+    double totalHeight,
+  ) {
+    final sorted = [...items]..sort((a, b) => a.start.compareTo(b.start));
+    final result = <_Placed>[];
+
+    // Group into clusters of overlapping entries.
+    final clusters = <List<_Entry>>[];
+    var clusterEnd = -1;
+    for (final e in sorted) {
+      if (clusters.isNotEmpty && e.startMin < clusterEnd) {
+        clusters.last.add(e);
+        if (e.endMin > clusterEnd) clusterEnd = e.endMin;
+      } else {
+        clusters.add([e]);
+        clusterEnd = e.endMin;
+      }
+    }
+
+    for (final cluster in clusters) {
+      final stacked = cluster.length > 1;
+      var prevTop = -1000.0;
+      for (final e in cluster) {
+        final naturalTop = (e.startMin - firstHour * 60) / 60 * _hourRowHeight;
+        final naturalBottom =
+            (e.endMin - firstHour * 60) / 60 * _hourRowHeight - 3;
+
+        var top = naturalTop + 2;
+        if (stacked && top < prevTop + _peek) top = prevTop + _peek;
+
+        var bottom = naturalBottom < top + _minCardHeight
+            ? top + _minCardHeight
+            : naturalBottom;
+        if (bottom > totalHeight - 2) bottom = totalHeight - 2;
+        if (bottom < top + 30) top = bottom - 30;
+
+        prevTop = top;
+        result.add(_Placed(e, top, bottom - top, stacked));
+      }
+    }
+    return result;
+  }
+
+  // ============================================================
+  // WEEK NAVIGATION
+  // ============================================================
+
+  void _shiftWeek(int delta) {
+    setState(() {
+      _weekStart = DateTime(
+        _weekStart.year,
+        _weekStart.month,
+        _weekStart.day + (7 * delta),
+      );
+    });
+  }
+
+  void _goToToday() => setState(() => _weekStart = _mondayOf(DateTime.now()));
+
+  String _weekLabel() {
+    final end = DateTime(_weekStart.year, _weekStart.month, _weekStart.day + 6);
+    return '${DateFormat('MMM d').format(_weekStart)} – ${DateFormat('MMM d, y').format(end)}'
+        .toUpperCase();
+  }
+
+  // ============================================================
+  // BUILD
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        backgroundColor: _bg,
+        body: Center(child: CircularProgressIndicator(color: _accent)),
+      );
+    }
+
+    if (_missingInfo) {
+      return Scaffold(
+        backgroundColor: _bg,
+        body: _stateBox(
+          Icons.info_outline,
+          'Student information missing',
+          'Your program or year/block could not be found. Please sign in again.',
+        ),
+      );
+    }
+
     return Scaffold(
-      backgroundColor: _bgColor,
-      body: loadingUser
-          ? const Center(child: CircularProgressIndicator(color: _accentColor))
-          : (program == null || yearBlock == null)
-          ? const Center(
-              child: Text(
-                "No program/yearBlock found",
-                style: TextStyle(color: _textColor),
-              ),
-            )
-          : SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildTitleBar(),
-                    const SizedBox(height: 16),
-                    Expanded(child: _buildScheduleCard()),
-                  ],
-                ),
+      backgroundColor: _bg,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 24, 16, 40),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1350),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _pageHead(),
+                  const SizedBox(height: 22),
+                  Container(
+                    clipBehavior: Clip.antiAlias,
+                    decoration: _cardBox(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [_cardHeader(), _scheduleBody()],
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
+        ),
+      ),
     );
   }
 
-  // Floating title bar — same construction as the Profile page
-  Widget _buildTitleBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_headerColorLight, _headerColor],
+  // ============================================================
+  // STYLES
+  // ============================================================
+
+  TextStyle _monoStyle(double size, {Color color = _muted2}) => TextStyle(
+    fontFamily: _mono,
+    fontSize: size,
+    color: color,
+    letterSpacing: 0.8,
+    fontWeight: FontWeight.w500,
+  );
+
+  TextStyle _display(double size, {Color color = _ink, double h = 1.0}) =>
+      TextStyle(
+        fontSize: size,
+        height: h,
+        color: color,
+        fontWeight: FontWeight.w700,
+        letterSpacing: -size * 0.05,
+      );
+
+  BoxDecoration _cardBox({Color color = Colors.white, double radius = 10}) =>
+      BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: _line),
+      );
+
+  // ============================================================
+  // PAGE HEAD
+  // ============================================================
+
+  Widget _pageHead() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text("FOTS / SCHEDULE", style: _monoStyle(11, color: _accent)),
+        const SizedBox(height: 10),
+        Text("Schedule.", style: _display(38, h: 1.08)),
+        const SizedBox(height: 7),
+        const Text(
+          "Your weekly classes and approved exams. Overlapping items stack "
+          "like cards — hover one to bring it forward.",
+          style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
         ),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
+      ],
+    );
+  }
+
+  // ============================================================
+  // CARD HEADER (title, week navigator, legend)
+  // ============================================================
+
+  Widget _cardHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: _line)),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 760;
+
+          final title = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Weekly Schedule",
+                style: TextStyle(
+                  color: _ink,
+                  fontSize: 26,
+                  height: 1.1,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.7,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                "Classes and approved exams for ${_yearBlock ?? ''}",
+                style: const TextStyle(color: _muted, fontSize: 12),
+              ),
+            ],
+          );
+
+          final nav = _weekNavigator();
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [title, const SizedBox(height: 16), nav],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: title),
+              const SizedBox(width: 20),
+              nav,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _weekNavigator() {
+    Widget arrow(IconData icon, VoidCallback onTap, String tip) => Tooltip(
+      message: tip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: _cardBox(radius: 8),
+          child: Icon(icon, size: 20, color: _ink),
+        ),
+      ),
+    );
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        arrow(Icons.chevron_left, () => _shiftWeek(-1), 'Previous week'),
+        Container(
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          alignment: Alignment.center,
+          decoration: _cardBox(color: _bg, radius: 8),
+          child: Text(_weekLabel(), style: _monoStyle(11, color: _ink)),
+        ),
+        arrow(Icons.chevron_right, () => _shiftWeek(1), 'Next week'),
+        OutlinedButton(
+          onPressed: _goToToday,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _accent,
+            backgroundColor: _accentSoft,
+            minimumSize: const Size(0, 40),
+            side: BorderSide(color: _accent.withOpacity(.25)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+          child: Text("TODAY", style: _monoStyle(10, color: _accent)),
+        ),
+      ],
+    );
+  }
+
+  // ============================================================
+  // BODY (streams -> weekly table)
+  // ============================================================
+
+  Widget _scheduleBody() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _classesStream,
+      builder: (context, classSnap) {
+        if (classSnap.hasError) {
+          return _stateBox(
+            Icons.error_outline,
+            'Unable to load classes',
+            classSnap.error.toString(),
+          );
+        }
+
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _examsStream,
+          builder: (context, examSnap) {
+            if (examSnap.hasError) {
+              return _stateBox(
+                Icons.error_outline,
+                'Unable to load exams',
+                examSnap.error.toString(),
+              );
+            }
+
+            if (!classSnap.hasData || !examSnap.hasData) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 70),
+                child: Center(
+                  child: CircularProgressIndicator(color: _accent),
+                ),
+              );
+            }
+
+            final data = _compose(classSnap.data!.docs, examSnap.data!.docs);
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _weeklyTable(data.entries),
+                if (data.unplaced.isNotEmpty) _unplacedSection(data.unplaced),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ============================================================
+  // WEEKLY TABLE
+  // ============================================================
+
+  Widget _weeklyTable(List<_Entry> entries) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // Timeline grows if something starts before 7 AM or ends after 7 PM.
+    var firstHour = 7;
+    var lastHour = 19;
+    for (final e in entries) {
+      final sh = e.startMin ~/ 60;
+      final eh = (e.endMin + 59) ~/ 60;
+      if (sh < firstHour) firstHour = sh;
+      if (eh > lastHour) lastHour = eh;
+    }
+    if (lastHour > 24) lastHour = 24;
+
+    final days = List.generate(
+      7,
+      (i) => DateTime(_weekStart.year, _weekStart.month, _weekStart.day + i),
+    );
+
+    return Container(
+      color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ScrollConfiguration(
+            behavior: ScrollConfiguration.of(context).copyWith(
+              scrollbars: false,
+              dragDevices: const {
+                PointerDeviceKind.touch,
+                PointerDeviceKind.mouse,
+                PointerDeviceKind.stylus,
+              },
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      _tableCorner(),
+                      for (final day in days)
+                        _weekdayHeader(day, isToday: _sameDay(day, today)),
+                    ],
+                  ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Column(
+                        children: [
+                          for (int h = firstHour; h < lastHour; h++)
+                            _timeCell(h),
+                        ],
+                      ),
+                      for (final day in days)
+                        _dayScheduleColumn(
+                          day: day,
+                          entries: entries,
+                          firstHour: firstHour,
+                          lastHour: lastHour,
+                          isToday: _sameDay(day, today),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              border: Border(top: BorderSide(color: _line)),
+            ),
+            child: Wrap(
+  spacing: 20,
+  runSpacing: 10,
+  children: [
+    _tableLegend(color: _accent, label: 'CLASS'),
+    _tableLegend(color: _ink, label: 'EXAM'),
+    _tableLegend(color: _accentDark, label: 'CLASS + EXAM'),
+    _tableLegend(color: _todayTint, label: 'TODAY', outlined: true),
+  ],
+),
           ),
         ],
       ),
-      child: Row(
+    );
+  }
+
+  Widget _tableCorner() {
+    return Container(
+      width: _timeColumnWidth,
+      height: 64,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
+        color: _bg,
+        border: Border(
+          right: BorderSide(color: _line),
+          bottom: BorderSide(color: _line),
+        ),
+      ),
+      child: Text('TIME', style: _monoStyle(9, color: _muted)),
+    );
+  }
+
+  Widget _weekdayHeader(DateTime day, {required bool isToday}) {
+    return Container(
+      width: _dayColumnWidth,
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: isToday ? _accentSoft : Colors.white,
+        border: Border(
+          right: const BorderSide(color: _line),
+          bottom: BorderSide(
+            color: isToday ? _accent : _line,
+            width: isToday ? 2 : 1,
+          ),
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            padding: const EdgeInsets.all(3), // border thickness
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(15),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  const Color(0xFF3D8BFF).withOpacity(0.9),
-                  const Color(0xFF3D8BFF).withOpacity(0.25),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF3D8BFF).withOpacity(0.35),
-                  blurRadius: 14,
-                  spreadRadius: 1,
-                ),
-              ],
+          Text(
+            DateFormat('EEEE').format(day).toUpperCase(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: _monoStyle(10, color: isToday ? _accent : _muted),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            DateFormat('MMM d').format(day),
+            style: TextStyle(
+              color: _ink,
+              fontSize: 16,
+              fontWeight: isToday ? FontWeight.w800 : FontWeight.w600,
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(
-                12,
-              ), // outer radius minus padding
-              child: Container(
-                color: const Color(0xFF0F3B61),
-                padding: const EdgeInsets.all(10),
-                child: const Icon(
-                  Icons.calendar_month_outlined,
-                  color: Colors.white,
-                  size: 22,
-                ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _timeCell(int hour) {
+    final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+    final period = hour >= 12 && hour < 24 ? 'PM' : 'AM';
+
+    return Container(
+      width: _timeColumnWidth,
+      height: _hourRowHeight,
+      alignment: Alignment.topCenter,
+      padding: const EdgeInsets.only(top: 10),
+      decoration: const BoxDecoration(
+        color: _bg,
+        border: Border(
+          right: BorderSide(color: _line),
+          bottom: BorderSide(color: _line),
+        ),
+      ),
+      child: Text('$displayHour $period', style: _monoStyle(10, color: _muted)),
+    );
+  }
+
+  Widget _dayScheduleColumn({
+    required DateTime day,
+    required List<_Entry> entries,
+    required int firstHour,
+    required int lastHour,
+    required bool isToday,
+  }) {
+    final totalHeight = (lastHour - firstHour) * _hourRowHeight;
+    final placed = _stackDay(
+      entries.where((e) => _sameDay(e.start, day)).toList(),
+      firstHour,
+      totalHeight,
+    );
+
+    final grid = Column(
+      children: [
+        for (int h = firstHour; h < lastHour; h++)
+          Container(
+            width: _dayColumnWidth,
+            height: _hourRowHeight,
+            decoration: BoxDecoration(
+              color: isToday ? _todayTint : Colors.white,
+              border: const Border(
+                right: BorderSide(color: _line),
+                bottom: BorderSide(color: _line),
               ),
             ),
           ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
+      ],
+    );
+
+    // Rebuilds only this stack when the hovered card changes.
+    return ValueListenableBuilder<String?>(
+      valueListenable: _hover,
+      builder: (context, hovered, _) {
+        // Hovered card goes last so it is drawn on top.
+        final ordered = [...placed];
+        final hi = ordered.indexWhere((p) => p.entry.key == hovered);
+        if (hi != -1) ordered.add(ordered.removeAt(hi));
+
+        return SizedBox(
+          width: _dayColumnWidth,
+          height: totalHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              const Text(
-                "Schedule",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+              grid,
+              for (final p in ordered)
+                _positionedCard(p, isHovered: p.entry.key == hovered),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _positionedCard(_Placed p, {required bool isHovered}) {
+    final e = p.entry;
+    return Positioned(
+      key: ValueKey(e.key),
+      top: p.top,
+      left: 5,
+      right: 5,
+      height: p.height,
+      child: _HoverCard(
+        popup: _popupCard(e),
+        onHoverChange: (on) {
+          if (on) {
+            _hover.value = e.key;
+          } else if (_hover.value == e.key) {
+            _hover.value = null;
+          }
+        },
+        child: _eventCard(p, isHovered: isHovered),
+      ),
+    );
+  }
+
+  /// A card in the grid: rounded, soft fill, solid border.
+  /// The header row stays visible when another card covers the rest.
+  Widget _eventCard(_Placed p, {required bool isHovered}) {
+    final e = p.entry;
+   final Color color = e.both ? _accentDark : (e.isExam ? _ink : _accent);
+final Color fill = e.both
+    ? const Color(0xFFD3EBDD)
+    : (e.isExam ? _examSoft : _accentSoft);
+    final timeRange =
+        '${_timeFmt.format(e.start)} – ${_timeFmt.format(e.end)}';
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOut,
+      transform: Matrix4.translationValues(0, isHovered ? -1 : 0, 0),
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(isHovered ? .9 : .55)),
+        boxShadow: (p.stacked || isHovered)
+            ? [
+                BoxShadow(
+                  color: Colors.black.withOpacity(isHovered ? .18 : .08),
+                  blurRadius: isHovered ? 14 : 6,
+                  offset: const Offset(0, 3),
+                ),
+              ]
+            : null,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(9),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(9, 6, 9, 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // HEADER ROW (always visible, even when stacked)
+              SizedBox(
+                height: _peek - 10,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        e.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      e.both ? 'CLASS + EXAM' : (e.isExam ? 'EXAM' : 'CLASS'),
+                      style: _monoStyle(8, color: color),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 5),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.25),
-                  borderRadius: BorderRadius.circular(6),
+              if (p.height >= 52) ...[
+                const SizedBox(height: 4),
+                Text(
+                  timeRange,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _muted, fontSize: 10),
                 ),
-                child: Text(
-                  "${program!} • ${yearBlock!}".toUpperCase(),
-                  style: const TextStyle(
-                    color: Colors.white70,
+              ],
+              if (p.height >= 72 && e.room.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(
+                  e.room,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
-                    letterSpacing: 1.0,
+                  ),
+                ),
+              ],
+              if (p.height >= 90 && e.linked) ...[
+                const SizedBox(height: 3),
+                const Text(
+                  'EXAM LINKED',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _accentDark,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The detail card that pops up on hover (full date, time, room...).
+  Widget _popupCard(_Entry e) {
+    final Color color = e.both ? _accentDark : (e.isExam ? _ink : _accent);
+    final date = DateFormat('EEEE, MMMM d, y').format(e.start);
+    final time = '${_timeFmt.format(e.start)} – ${_timeFmt.format(e.end)}';
+    final mins = e.end.difference(e.start).inMinutes;
+    final duration = mins >= 60
+        ? '${mins ~/ 60} hr${mins % 60 == 0 ? '' : ' ${mins % 60} min'}'
+        : '$mins min';
+
+    Widget row(IconData icon, String text) => Padding(
+      padding: const EdgeInsets.only(top: 7),
+      child: Row(
+        children: [
+          Icon(icon, size: 14, color: _muted2),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(color: _muted, fontSize: 12, height: 1.3),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return Container(
+      width: 270,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _line),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(width: 4, color: color),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        e.both ? 'CLASS + EXAM' : (e.isExam ? 'EXAM' : 'CLASS'),
+                        style: _monoStyle(9, color: color),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        e.title,
+                        style: const TextStyle(
+                          color: _ink,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          height: 1.25,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      row(Icons.calendar_today_outlined, date),
+                      row(Icons.schedule, '$time  ·  $duration'),
+                      if (e.room.isNotEmpty)
+                        row(Icons.meeting_room_outlined, e.room),
+                      if (e.adviser.isNotEmpty)
+                        row(Icons.person_outline, e.adviser),
+                      if (e.linked)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 9),
+                          child: Text(
+                            'CLASS DATE SET BY APPROVED EXAM',
+                            style: _monoStyle(8, color: _accentDark),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tableLegend({
+    required Color color,
+    required String label,
+    bool outlined = false,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+            border: outlined
+                ? Border.all(color: _accent.withOpacity(.35))
+                : null,
+          ),
+        ),
+        const SizedBox(width: 7),
+        Text(label, style: _monoStyle(9, color: _muted)),
+      ],
+    );
+  }
+
+  // ============================================================
+  // CLASSES WITH NO DAY SET
+  // ============================================================
+
+  Widget _unplacedSection(List<_Unplaced> items) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: _bg,
+        border: Border(top: BorderSide(color: _line)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "WEEKLY CLASSES · DAY NOT SET",
+            style: _monoStyle(10, color: _ink),
+          ),
+          const SizedBox(height: 5),
+          const Text(
+            "These classes have a time but no day assigned yet.",
+            style: TextStyle(color: _muted, fontSize: 11),
+          ),
+          const SizedBox(height: 10),
+          for (final u in items)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: _cardBox(radius: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          u.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: _ink,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (u.room.isNotEmpty || u.adviser.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            [
+                              if (u.room.isNotEmpty) u.room,
+                              if (u.adviser.isNotEmpty) u.adviser,
+                            ].join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: _monoStyle(9),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(u.timeLabel, style: _monoStyle(10, color: _ink)),
+                ],
+              ),
+            ),
         ],
       ),
     );
   }
 
-  // Calendar card with the week view inside
-  Widget _buildScheduleCard() {
-    return Container(
-      decoration: BoxDecoration(
-        color: _cardColor,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(17),
-        child: StreamBuilder<QuerySnapshot>(
-          stream: firestore
-              .collection("exams")
-              .where("program", isEqualTo: program)
-              .where("yearBlock", isEqualTo: yearBlock)
-              .snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(
-                child: CircularProgressIndicator(color: _accentColor),
-              );
-            }
+  // ============================================================
+  // EMPTY / ERROR STATE
+  // ============================================================
 
-            final events = <FlutterWeekViewEvent>[];
-            final now = DateTime.now();
-            final monday = now.subtract(Duration(days: now.weekday - 1));
-            final weekStart = DateTime(monday.year, monday.month, monday.day);
-            final weekEnd = weekStart.add(const Duration(days: 7));
-
-            if (snapshot.hasData) {
-              for (var doc in snapshot.data!.docs) {
-                final start = (doc["startTime"] as Timestamp).toDate();
-                final end = (doc["endTime"] as Timestamp).toDate();
-                final subject = doc["subject"];
-
-                if (start.isAfter(weekStart) && start.isBefore(weekEnd)) {
-                  events.add(
-                    FlutterWeekViewEvent(
-                      title: subject,
-                      description:
-                          "${timeFormat.format(start)} – ${timeFormat.format(end)}",
-                      start: start,
-                      end: end,
-                    ),
-                  );
-                }
-              }
-            }
-
-            return ScrollbarTheme(
-              data: ScrollbarThemeData(
-                thumbColor: WidgetStateProperty.all(
-                  _accentColor.withOpacity(0.7),
-                ),
-                radius: const Radius.circular(8),
+  Widget _stateBox(IconData icon, String title, String message) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 50),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _accentSoft,
+                borderRadius: BorderRadius.circular(10),
               ),
-              child: Scrollbar(
-                controller: _horizontalController,
-                thumbVisibility: true,
-                child: SingleChildScrollView(
-                  controller: _horizontalController,
-                  scrollDirection: Axis.horizontal,
-                  child: SizedBox(
-                    width: (185 * 7) + 60,
-                    height: (19 - 7) * 60.0, // 7AM–7PM
-                    child: SingleChildScrollView(
-                      controller: _verticalController,
-                      scrollDirection: Axis.vertical,
-                      child: AbsorbPointer(
-                        absorbing: true,
-                        child: WeekView(
-                          dates: List.generate(
-                            7,
-                            (i) => weekStart.add(Duration(days: i)),
-                          ),
-                          events: events,
-                          minimumTime: const TimeOfDay(hour: 6, minute: 57),
-                          maximumTime: const TimeOfDay(hour: 19, minute: 18),
-                          initialTime: DateTime(
-                            now.year,
-                            now.month,
-                            now.day,
-                            7,
-                            0,
-                          ),
-                          style: const WeekViewStyle(
-                            dayViewWidth: 185,
-                            headerSize: 50,
-                          ),
-
-                          // Day columns: dark, today gets a soft blue tint
-                          dayViewStyleBuilder: (date) => DayViewStyle(
-                            backgroundColor: _isToday(date)
-                                ? Color.alphaBlend(
-                                    _accentColor.withOpacity(0.10),
-                                    _bgColor,
-                                  )
-                                : _bgColor,
-                            backgroundRulesColor: Colors.white.withOpacity(
-                              0.06,
-                            ),
-                            currentTimeRuleColor: Colors.grey.withOpacity(0.0),
-                            currentTimeCircleColor: Colors.grey.withOpacity(
-                              0.0,
-                            ),
-                          ),
-
-                          // Day header bar
-                          dayBarStyleBuilder: (date) => DayBarStyle(
-                            color: _headerColor,
-                            textStyle: TextStyle(
-                              color: _isToday(date) ? _accentColor : _textColor,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                            dateFormatter: (year, month, day) =>
-                                DateFormat("EEE d").format(date),
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [_headerColorLight, _headerColor],
-                              ),
-                              border: Border(
-                                bottom: BorderSide(
-                                  color: _isToday(date)
-                                      ? _accentColor
-                                      : Colors.white.withOpacity(0.08),
-                                  width: _isToday(date) ? 2 : 1,
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          // Hour column on the left
-                          hourColumnStyle: HourColumnStyle(
-                            textStyle: const TextStyle(
-                              color: _mutedTextColor,
-                              fontSize: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _headerColor,
-                              border: Border(
-                                right: BorderSide(
-                                  color: Colors.white.withOpacity(0.08),
-                                  width: 1,
-                                ),
-                              ),
-                            ),
-                            timeFormatter: (time) {
-                              final hour = time.hour > 12
-                                  ? time.hour - 12
-                                  : time.hour;
-                              final period = time.hour >= 12 ? 'PM' : 'AM';
-                              return '$hour $period'; // "7 AM", "8 AM", etc.
-                            },
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+              child: Icon(icon, color: _accent, size: 26),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: _ink,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
               ),
-            );
-          },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _muted, fontSize: 12, height: 1.5),
+            ),
+          ],
         ),
       ),
     );

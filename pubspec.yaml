@@ -71,6 +71,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -97,6 +98,28 @@ flutter:
     - assets/model_1024/best_w8a32_640.tflite
     - assets/model_1024/best_w8a16_640.tflite
     - assets/model_1024/eye_keypoint_names.json
+    - assets/image/student_font-removebg-preview.png
+    - assets/icon/icon.png
+flutter_launcher_icons:
+  image_path: "assets/icon/icon.png"
+  android: true
+  ios: true
+
+  web:
+    generate: true
+    image_path: "assets/icon/icon.png"
+    background_color: "#FFFFFF"
+    theme_color: "#0F3B61"
+
+  windows:
+    generate: true
+    image_path: "assets/icon/icon.png"
+    icon_size: 48
+
+  macos:
+    generate: true
+    image_path: "assets/icon/icon.png"
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

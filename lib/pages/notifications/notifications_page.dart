@@ -1,10 +1,11 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
+
 import '../../helpers/SecureStorageHelper.dart';
+import '../../widgets/notification_bubble.dart';
 import 'notification_item.dart';
 
 class NotificationsPage extends StatefulWidget {
@@ -15,20 +16,26 @@ class NotificationsPage extends StatefulWidget {
 }
 
 class _NotificationsPageState extends State<NotificationsPage> {
-  // Shared theme palette (same as HomePage / ProfilePage / ExamHistoryPage)
-  static const Color _bgColor = Color(0xFF0B1220);
-  static const Color _headerColor = Color(0xFF0F2B45);
-  static const Color _headerColorLight = Color(0xFF17456F);
-  static const Color _cardColor = Color(0xFF0F3B61);
-  static const Color _textColor = Color(0xFFE6F0F8);
-  static const Color _mutedTextColor = Color(0xFF9FB0C3);
-  static const Color _accentColor = Color(0xFF3D8BFF);
+  // FOTS editorial palette
+  static const Color _bg = Color(0xFFF7F8F6);
+  static const Color _ink = Color(0xFF111217);
+  static const Color _accent = Color(0xFF087B4F);
+  static const Color _accentSoft = Color(0xFFE8F5EB);
+  static const Color _line = Color(0xFFDFE2DF);
+  static const Color _muted = Color(0xFF6F7276);
+  static const Color _muted2 = Color(0xFF8A8D91);
+  static const String _mono = 'monospace';
+
+  static const int _pageSize = 10;
 
   List<NotificationItem> _notifications = [];
   String? _userId;
   CollectionReference? _notifRef;
   StreamSubscription? _sub;
   bool _loading = true;
+  bool _unreadOnly = false;
+  int _page = 0;
+  Object? _loadError;
 
   @override
   void initState() {
@@ -60,6 +67,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
     _sub = _notifRef!
         .orderBy('createdAt', descending: true)
+        .limit(200)
         .snapshots()
         .listen(
           (snap) {
@@ -81,434 +89,383 @@ class _NotificationsPageState extends State<NotificationsPage> {
             if (mounted) {
               setState(() {
                 _notifications = loaded;
+                _loadError = null;
                 _loading = false;
               });
             }
           },
-          onError: (_) {
-            if (mounted) setState(() => _loading = false);
+          onError: (Object error) {
+            if (mounted) {
+              setState(() {
+                _loadError = error;
+                _loading = false;
+              });
+            }
           },
         );
   }
 
   void _onNotificationClick(NotificationItem item) {
-    if (_userId != null && _notifRef != null) {
-      _notifRef!.doc(item.examId).update({'viewed': true});
+    final ref = _notifRef;
+    if (ref != null) {
+      unawaited(_markNotificationRead(ref, item.examId));
     }
-    context.go('/take-exam/${item.examId}');
+    context.go('/take-exam/${Uri.encodeComponent(item.examId)}');
   }
 
-  // ---------- BUILD ----------
+  Future<void> _markNotificationRead(
+    CollectionReference ref,
+    String notificationId,
+  ) async {
+    try {
+      await ref.doc(notificationId).update({'viewed': true});
+    } catch (error) {
+      debugPrint('Could not mark notification $notificationId as read: $error');
+    }
+  }
+
+  Future<void> _markAllRead() async {
+    final ref = _notifRef;
+    if (ref == null) return;
+    final unread = _notifications.where((n) => !n.viewed).toList();
+    if (unread.isEmpty) return;
+
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      for (final n in unread) {
+        batch.update(ref.doc(n.examId), {'viewed': true});
+      }
+      await batch.commit();
+    } catch (e) {
+      debugPrint('Could not mark notifications as read: $e');
+    }
+  }
+
+  // ============================================================
+  // STYLES
+  // ============================================================
+
+  TextStyle _monoStyle(double size, {Color color = _muted2}) => TextStyle(
+    fontFamily: _mono,
+    fontSize: size,
+    color: color,
+    letterSpacing: 0.8,
+    fontWeight: FontWeight.w500,
+  );
+
+  TextStyle _display(double size, {Color color = _ink, double h = 1.0}) =>
+      TextStyle(
+        fontSize: size,
+        height: h,
+        color: color,
+        fontWeight: FontWeight.w700,
+        letterSpacing: -size * 0.05,
+      );
+
+  // ============================================================
+  // BUILD
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
-    final unreadCount = _notifications.where((item) => !item.viewed).length;
+    final compact = MediaQuery.sizeOf(context).width < 600;
 
     return Scaffold(
-      backgroundColor: _bgColor,
+      backgroundColor: _bg,
       body: SafeArea(
-        child: _loading
-            ? _buildSkeletonUI()
-            // Hides scrollbars on this page (scrolling still works)
-            : ScrollConfiguration(
-                behavior: ScrollConfiguration.of(
-                  context,
-                ).copyWith(scrollbars: false, overscroll: false),
-                child: CustomScrollView(
-                  slivers: [
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                      sliver: SliverToBoxAdapter(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _buildTitleBar(unreadCount),
-                            const SizedBox(height: 22),
-                            _sectionHeader(
-                              Icons.inbox_outlined,
-                              "Recent Notifications",
-                            ),
-                          ],
-                        ),
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(compact ? 16 : 24, 24, compact ? 16 : 24, 40),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1250),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _pageHead(compact),
+                  const SizedBox(height: 20),
+                  if (_loading)
+                    _skeleton()
+                  else if (_userId == null)
+                    _card(
+                      _stateBox(
+                        Icons.person_off_outlined,
+                        'Sign in to see your notifications.',
                       ),
-                    ),
-                    if (_notifications.isEmpty)
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                        sliver: SliverToBoxAdapter(
-                          child: _emptyCard(
-                            Icons.notifications_none_outlined,
-                            "No notifications",
-                          ),
-                        ),
-                      )
-                    else
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                        sliver: SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) =>
-                                _notificationCard(_notifications[index]),
-                            childCount: _notifications.length,
-                          ),
-                        ),
+                    )
+                  else if (_loadError != null)
+                    _card(
+                      _stateBox(
+                        Icons.error_outline,
+                        'Could not load notifications. Check your connection and try again.',
                       ),
-                  ],
-                ),
+                    )
+                  else
+                    _inboxCard(),
+                ],
               ),
+            ),
+          ),
+        ),
       ),
     );
   }
 
-  // ---------- UI helpers ----------
+  // ============================================================
+  // PAGE HEAD
+  // ============================================================
 
-  BoxDecoration _cardDecoration({bool highlight = false}) {
-    return BoxDecoration(
-      borderRadius: BorderRadius.circular(18),
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [_cardColor.withOpacity(0.9), _cardColor.withOpacity(0.55)],
-      ),
-      border: Border.all(
-        color: highlight
-            ? _accentColor.withOpacity(0.35)
-            : Colors.white.withOpacity(0.06),
-      ),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(0.2),
-          blurRadius: 12,
-          offset: const Offset(0, 6),
+  Widget _pageHead(bool compact) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('FOTS / 04', style: _monoStyle(10, color: _accent)),
+        const SizedBox(height: 10),
+        Text('Notifications.', style: _display(compact ? 32 : 34, h: 1.08)),
+        const SizedBox(height: 7),
+        const Text(
+          'New exams assigned to you',
+          style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
         ),
       ],
     );
   }
 
-  // Icon chip: gradient ring + soft glow when active, flat muted ring when not.
-  // Fill is solid so the glow stays outside the chip.
-  Widget _glowChip(
-    IconData icon, {
-    double iconSize = 18,
-    double padding = 8,
-    double ring = 2,
-    double radius = 12,
-    bool active = true,
-  }) {
-    return Container(
-      padding: EdgeInsets.all(ring),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(radius),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: active
-              ? [_accentColor.withOpacity(0.9), _accentColor.withOpacity(0.25)]
-              : [
-                  Colors.white.withOpacity(0.18),
-                  Colors.white.withOpacity(0.05),
-                ],
-        ),
-        boxShadow: active
-            ? [
-                BoxShadow(
-                  color: _accentColor.withOpacity(0.35),
-                  blurRadius: 12,
-                  spreadRadius: 1,
-                ),
-              ]
-            : null,
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius - ring),
-        child: Container(
-          color: _cardColor,
-          padding: EdgeInsets.all(padding),
-          child: Icon(
-            icon,
-            size: iconSize,
-            color: active ? Colors.white : _mutedTextColor,
-          ),
-        ),
+  // ============================================================
+  // INBOX CARD
+  // ============================================================
+
+  Widget _inboxCard() {
+    final all = _notifications;
+    final unreadCount = all.where((n) => !n.viewed).length;
+    final visible = _unreadOnly ? all.where((n) => !n.viewed).toList() : all;
+
+    final pageCount = (visible.length / _pageSize).ceil();
+    final page = pageCount == 0 ? 0 : _page.clamp(0, pageCount - 1).toInt();
+    final items = visible.skip(page * _pageSize).take(_pageSize).toList();
+
+    return _card(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _inboxHeader(total: all.length, unread: unreadCount),
+          if (items.isEmpty)
+            _stateBox(
+              _unreadOnly ? Icons.done_all : Icons.notifications_off_outlined,
+              _unreadOnly
+                  ? 'You are all caught up.'
+                  : 'No notifications yet. New exams will show up here.',
+            )
+          else
+            for (var i = 0; i < items.length; i++) ...[
+              if (i > 0) const Divider(height: 1, color: _line),
+              NotificationTile(
+                subject: items[i].title,
+                createdAt: items[i].createdAt,
+                isRead: items[i].viewed,
+                onTap: () => _onNotificationClick(items[i]),
+              ),
+            ],
+          if (pageCount > 1) _pager(page, pageCount),
+        ],
       ),
     );
   }
 
-  // Compact floating bar (same style as ProfilePage title bar)
-  Widget _buildTitleBar(int unreadCount) {
+  Widget _inboxHeader({required int total, required int unread}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_headerColorLight, _headerColor],
-        ),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: _line)),
+      ),
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 16,
+        runSpacing: 14,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Inbox',
+                style: TextStyle(
+                  color: _ink,
+                  fontSize: 28,
+                  height: 1.1,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.7,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '$unread unread · $total total',
+                style: const TextStyle(
+                  color: _muted,
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _filterButton(
+                'All',
+                Icons.view_list_outlined,
+                !_unreadOnly,
+                () => setState(() {
+                  _unreadOnly = false;
+                  _page = 0;
+                }),
+              ),
+              _filterButton(
+                'Unread',
+                Icons.mark_email_unread_outlined,
+                _unreadOnly,
+                () => setState(() {
+                  _unreadOnly = true;
+                  _page = 0;
+                }),
+              ),
+              OutlinedButton.icon(
+                onPressed: unread == 0 ? null : _markAllRead,
+                icon: const Icon(Icons.done_all, size: 17),
+                label: const Text('Mark all as read'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _ink,
+                  backgroundColor: Colors.white,
+                  side: const BorderSide(color: _line),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _filterButton(
+    String label,
+    IconData icon,
+    bool selected,
+    VoidCallback onPressed,
+  ) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 17),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: selected ? Colors.white : _ink,
+        backgroundColor: selected ? _accent : Colors.white,
+        side: BorderSide(color: selected ? _accent : _line),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+
+  Widget _pager(int page, int pageCount) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: _line)),
+      ),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _glowChip(
-            Icons.notifications_active_outlined,
-            iconSize: 22,
-            padding: 10,
-            ring: 3,
-            radius: 15,
+          IconButton(
+            tooltip: 'Previous page',
+            icon: const Icon(Icons.chevron_left),
+            color: _ink,
+            onPressed: page > 0 ? () => setState(() => _page = page - 1) : null,
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  "Notifications",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.25),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Text(
-                    "ALL NOTIFICATIONS",
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.0,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          Text(
+            'Page ${page + 1} of $pageCount',
+            style: const TextStyle(color: _muted, fontSize: 12.5),
           ),
-          if (unreadCount > 0) ...[
-            const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Next page',
+            icon: const Icon(Icons.chevron_right),
+            color: _ink,
+            onPressed: page < pageCount - 1
+                ? () => setState(() => _page = page + 1)
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // SHARED PIECES
+  // ============================================================
+
+  Widget _card(Widget child) => Container(
+    clipBehavior: Clip.antiAlias,
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(11),
+      border: Border.all(color: _line),
+    ),
+    child: child,
+  );
+
+  Widget _stateBox(IconData icon, String message) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 50),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: _accentColor.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: _accentColor.withOpacity(0.4)),
+                color: _accentSoft,
+                borderRadius: BorderRadius.circular(10),
               ),
-              child: Text(
-                "$unreadCount NEW",
-                style: const TextStyle(
-                  color: _accentColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
+              child: Icon(icon, color: _accent, size: 26),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: _ink,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                height: 1.5,
               ),
             ),
           ],
-        ],
-      ),
-    );
-  }
-
-  // Icon chip + title + divider line
-  Widget _sectionHeader(IconData icon, String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: _accentColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, size: 16, color: _accentColor),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            title,
-            style: const TextStyle(
-              color: _textColor,
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Container(height: 1, color: Colors.white.withOpacity(0.08)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _notificationCard(NotificationItem item) {
-    final unread = !item.viewed;
-    final dateText = DateFormat('MMM d, yyyy • h:mm a').format(item.createdAt);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Container(
-        decoration: _cardDecoration(highlight: unread),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => _onNotificationClick(item),
-            borderRadius: BorderRadius.circular(18),
-            splashColor: _accentColor.withOpacity(0.15),
-            highlightColor: Colors.transparent,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                children: [
-                  _glowChip(
-                    Icons.notifications_active_outlined,
-                    active: unread,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          item.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: unread
-                                ? FontWeight.bold
-                                : FontWeight.w500,
-                            color: unread
-                                ? _textColor
-                                : _textColor.withOpacity(0.75),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Icon(
-                              Icons.schedule,
-                              size: 13,
-                              color: _mutedTextColor,
-                            ),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                dateText,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: _mutedTextColor,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  unread
-                      // Glowing unread dot
-                      ? Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: _accentColor,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: _accentColor.withOpacity(0.6),
-                                blurRadius: 8,
-                                spreadRadius: 1,
-                              ),
-                            ],
-                          ),
-                        )
-                      : const Icon(
-                          Icons.check_circle_outline,
-                          size: 20,
-                          color: _mutedTextColor,
-                        ),
-                ],
-              ),
-            ),
-          ),
         ),
       ),
     );
   }
 
-  Widget _emptyCard(IconData icon, String message) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
-      decoration: _cardDecoration(),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: _accentColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: _accentColor, size: 28),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: _mutedTextColor,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSkeletonUI() {
-    Widget block(double height, {double radius = 18}) => Container(
+  Widget _skeleton() {
+    Widget block(double height, {double radius = 10}) => Container(
       height: height,
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
+        color: const Color(0xFFE9ECE9),
         borderRadius: BorderRadius.circular(radius),
       ),
     );
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      child: Column(
-        children: [
-          block(76),
-          const SizedBox(height: 22),
-          block(22, radius: 10),
-          const SizedBox(height: 12),
-          block(76),
-          const SizedBox(height: 12),
-          block(76),
-          const SizedBox(height: 12),
-          block(76),
-        ],
-      ),
+    return Column(
+      children: [
+        block(70),
+        const SizedBox(height: 12),
+        block(64),
+        const SizedBox(height: 12),
+        block(64),
+        const SizedBox(height: 12),
+        block(64),
+      ],
     );
   }
 }

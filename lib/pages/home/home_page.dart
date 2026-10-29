@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:go_router/go_router.dart';
 import '../../helpers/SecureStorageHelper.dart';
 
 class HomePage extends StatefulWidget {
@@ -10,7 +11,6 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-/// convert Firestore field to DateTime safely
 DateTime? _toDate(dynamic value) {
   if (value == null) return null;
   if (value is Timestamp) return value.toDate();
@@ -20,625 +20,1276 @@ DateTime? _toDate(dynamic value) {
 }
 
 class _HomePageState extends State<HomePage> {
-  // Shared theme palette (same as ProfilePage / LoginPage / SchedulePage)
-  static const Color _bgColor = Color(0xFF0B1220);
-  static const Color _headerColor = Color(0xFF0F2B45);
-  static const Color _headerColorLight = Color(0xFF17456F);
-  static const Color _cardColor = Color(0xFF0F3B61);
-  static const Color _textColor = Color(0xFFE6F0F8);
-  static const Color _mutedTextColor = Color(0xFF9FB0C3);
-  static const Color _accentColor = Color(0xFF3D8BFF);
-  static const Color _successColor = Color(0xFF4ADE80);
-  static const Color _errorColor = Color(0xFFF87171);
+  // ============================================================
+  // FOTS EDITORIAL PALETTE
+  // ============================================================
+
+  static const Color _bg = Color(0xFFF7F8F6);
+  static const Color _ink = Color(0xFF111217);
+  static const Color _accent = Color(0xFF087B4F);
+  static const Color _accentDark = Color(0xFF075C3C);
+  static const Color _accentSoft = Color(0xFFE8F5EB);
+  static const Color _line = Color(0xFFDFE2DF);
+  static const Color _muted = Color(0xFF6F7276);
+  static const Color _muted2 = Color(0xFF8A8D91);
+  static const Color _danger = Color(0xFFCB354B);
+  static const Color _dangerSoft = Color(0xFFFFF1F3);
+  static const String _mono = 'monospace';
 
   final FirebaseFirestore db = FirebaseFirestore.instance;
 
   String? studentId;
   String? program;
+  String? programCode;
   String? yearBlock;
   String? _authUid;
+  String? _prefsError;
 
   @override
   void initState() {
     super.initState();
 
     _authUid = FirebaseAuth.instance.currentUser?.uid;
-    if (_authUid == null) return;
 
-    _loadPrefs();
+    if (_authUid != null) {
+      _loadPrefs();
+    }
   }
 
   Future<void> _loadPrefs() async {
+    final authUid = _authUid;
+    if (authUid == null) {
+      throw StateError(
+        'A signed-in student is required to load the dashboard.',
+      );
+    }
+
     final storedStudentId = await SecureStorageHelper.read('studentId');
+
     final storedProgram = await SecureStorageHelper.read('program');
+
+    final storedProgramCode = await SecureStorageHelper.read('programCode');
+
     final storedYearBlock = await SecureStorageHelper.read('yearBlock');
 
+    DocumentSnapshot<Map<String, dynamic>> profile;
+    try {
+      profile = await db.collection('users').doc(authUid).get();
+    } on FirebaseException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _prefsError = error.message ?? 'Unable to load your student profile.';
+      });
+      return;
+    }
+
+    final profileProgramCode = (profile.data()?['programCode'] ?? '')
+        .toString()
+        .trim();
+    final savedProgramCode = (storedProgramCode ?? '').trim();
+
     if (!mounted) return;
+
     setState(() {
       studentId = storedStudentId;
       program = storedProgram;
+      programCode = profileProgramCode.isNotEmpty
+          ? profileProgramCode
+          : savedProgramCode.isNotEmpty
+          ? savedProgramCode
+          : null;
       yearBlock = storedYearBlock;
     });
   }
 
-  Future<Map<String, dynamic>> _processExamsAndResults() async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+  // ============================================================
+  // FIRESTORE DATA
+  // ============================================================
 
-    //Exams schedule
+  Future<Map<String, dynamic>> _loadDashboardData() async {
+    final now = DateTime.now();
+
+    // ------------------------------------------------------------
+    // EXAMS
+    // ------------------------------------------------------------
+
     final examsSnap = await db
         .collection("exams")
-        .where("program", isEqualTo: program)
+        .where(
+          "program",
+          isEqualTo: programCode?.isNotEmpty == true ? programCode : program,
+        )
         .where("yearBlock", isEqualTo: yearBlock)
         .get();
 
-    List<QueryDocumentSnapshot> todaysSchedule = [];
-    int todayExamCount = 0;
+    final List<QueryDocumentSnapshot> upcomingExams = [];
 
     for (final examDoc in examsSnap.docs) {
       final data = examDoc.data();
-      final startTime = _toDate(data["startTime"]);
 
-      if (startTime != null) {
-        final examDay = DateTime(
-          startTime.year,
-          startTime.month,
-          startTime.day,
-        );
-        if (examDay == today) {
-          todayExamCount++;
-          todaysSchedule.add(examDoc);
-        }
+      final startTime = _toDate(data["startTime"]);
+      final endTime = _toDate(data["endTime"]);
+      final notEnded = endTime == null || endTime.isAfter(now);
+
+      if (startTime != null && startTime.isAfter(now) && notEnded) {
+        upcomingExams.add(examDoc);
       }
     }
 
-    //Student results
-    final examResultsSnap = await db
-        .collection("examResults")
-        .where("program", isEqualTo: program)
-        .where("yearBlock", isEqualTo: yearBlock)
-        .get();
+    upcomingExams.sort((a, b) {
+      final aData = a.data() as Map<String, dynamic>;
+      final bData = b.data() as Map<String, dynamic>;
 
-    List<Map<String, dynamic>> results = [];
+      final aTime = _toDate(aData["startTime"]) ?? DateTime(9999);
+
+      final bTime = _toDate(bData["startTime"]) ?? DateTime(9999);
+
+      return aTime.compareTo(bTime);
+    });
+
+    // ------------------------------------------------------------
+    // RESULTS
+    // ------------------------------------------------------------
+
+    final examResultsSnap = await db.collection("examResults").get();
+
+    final List<Map<String, dynamic>> results = [];
+
     int completedCount = 0;
+
+    final authUid = _authUid;
+    if (authUid == null) {
+      throw StateError('A signed-in student is required to load exam results.');
+    }
 
     for (final examResultDoc in examResultsSnap.docs) {
       final studentSnap = await examResultDoc.reference
           .collection("students")
-          .doc(_authUid!)
+          .doc(authUid)
           .get();
 
-      if (studentSnap.exists) {
-        final rData = studentSnap.data() as Map<String, dynamic>;
-        final status = rData["status"] ?? "incomplete";
-        final score = rData["score"] ?? "—";
-        final submittedAt = _toDate(rData["submittedAt"]);
+      if (!studentSnap.exists) continue;
 
-        if (status == "completed") {
-          completedCount++;
-        }
+      final data = studentSnap.data() as Map<String, dynamic>;
 
-        results.add({
-          "subject":
-              rData["subject"] ?? "—", // subject stored in student result
-          "score": score,
-          "status": status,
-          "submittedAt": submittedAt,
-        });
+      final status = (data["status"] ?? "incomplete").toString();
+
+      final score = data["score"] ?? "—";
+
+      final submittedAt = _toDate(data["submittedAt"]);
+
+      if (status == "completed") {
+        completedCount++;
       }
+
+      results.add({
+        "subject": data["subject"] ?? "—",
+        "score": score,
+        "status": status,
+        "submittedAt": submittedAt,
+        "total": data["total"] ?? "—",
+        "examId": data["examId"] ?? examResultDoc.id,
+      });
     }
 
-    // Sort results by submittedAt (newest first)
     results.sort((a, b) {
       final aTime = a["submittedAt"] ?? DateTime(1970);
+
       final bTime = b["submittedAt"] ?? DateTime(1970);
+
       return bTime.compareTo(aTime);
     });
 
+    // ------------------------------------------------------------
+    // READINESS
+    // ------------------------------------------------------------
+
+    final bool accountReady =
+        _authUid != null &&
+        studentId?.isNotEmpty == true &&
+        (program?.isNotEmpty == true || programCode?.isNotEmpty == true) &&
+        yearBlock?.isNotEmpty == true;
+
+    final int readiness = accountReady ? 100 : 0;
+
     return {
-      "todayExamCount": todayExamCount,
+      "availableExams": upcomingExams.length,
       "completedCount": completedCount,
-      "schedule": todaysSchedule, // sorted by startTime
-      "results": results, // sorted by submittedAt
+      "upcomingExams": upcomingExams,
+      "results": results,
+      "readiness": readiness,
+      "strikes": 0,
+      "ready": accountReady,
     };
   }
 
-  // ---------- BUILD ----------
+  // ============================================================
+  // BUILD
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
-    // still show spin while prefs load
-    if (_authUid == null || program == null || yearBlock == null) {
+    if (_prefsError != null) {
+      return Scaffold(
+        backgroundColor: _bg,
+        body: Center(
+          child: Text(
+            'Error: $_prefsError',
+            style: const TextStyle(color: _danger),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    if (_authUid == null ||
+        (program?.isNotEmpty != true && programCode?.isNotEmpty != true) ||
+        yearBlock?.isNotEmpty != true) {
       return const Scaffold(
-        backgroundColor: _bgColor,
-        body: Center(child: CircularProgressIndicator(color: _accentColor)),
+        backgroundColor: _bg,
+        body: Center(child: CircularProgressIndicator(color: _accent)),
       );
     }
 
     return Scaffold(
-      backgroundColor: _bgColor,
-      body: StreamBuilder<QuerySnapshot>(
-        stream: db
-            .collection("exams")
-            .where("program", isEqualTo: program)
-            .where("yearBlock", isEqualTo: yearBlock)
-            .snapshots(),
-        builder: (context, examsSnapshot) {
-          // show skeleton while exams list loads
-          if (!examsSnapshot.hasData) {
+      backgroundColor: _bg,
+
+      body: FutureBuilder<Map<String, dynamic>>(
+        future: _loadDashboardData(),
+
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return _buildSkeletonUI();
           }
-          // Now fetch per-exam student results
-          return FutureBuilder<Map<String, dynamic>>(
-            future: _processExamsAndResults(),
-            builder: (context, processedSnapshot) {
-              if (processedSnapshot.connectionState ==
-                  ConnectionState.waiting) {
-                // show skeleton while per-exam reads are happening
-                return _buildSkeletonUI();
-              }
-              if (processedSnapshot.hasError) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Error: ${processedSnapshot.error}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: _errorColor),
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                "Error: ${snapshot.error}",
+                style: const TextStyle(color: _danger),
+              ),
+            );
+          }
+
+          final data = snapshot.data!;
+
+          final int availableExams = data["availableExams"] as int;
+
+          final int completedCount = data["completedCount"] as int;
+
+          final int readiness = data["readiness"] as int;
+
+          final int strikes = data["strikes"] as int;
+
+          final bool ready = data["ready"] as bool;
+
+          final List<QueryDocumentSnapshot> upcomingExams =
+              data["upcomingExams"] as List<QueryDocumentSnapshot>;
+
+          final List<Map<String, dynamic>> results =
+              data["results"] as List<Map<String, dynamic>>;
+
+          return SafeArea(
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(
+                context,
+              ).copyWith(scrollbars: false, overscroll: false),
+
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 24, 16, 40),
+
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1250),
+
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+
+                      children: [
+                        // ==================================================
+                        // HEADER
+                        // ==================================================
+
+                        _pageHead(),
+
+                        const SizedBox(height: 22),
+
+                        // ==================================================
+                        // HERO
+                        // ==================================================
+                        _hero(),
+
+                        const SizedBox(height: 16),
+
+                        // ==================================================
+                        // FOUR STAT CARDS
+                        // ==================================================
+                        _statsGrid(
+                          availableExams,
+                          completedCount,
+                          readiness,
+                          strikes,
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // ==================================================
+                        // UPCOMING + READINESS
+                        // ==================================================
+                        _dashboardGrid(upcomingExams, readiness, ready),
+
+                        const SizedBox(height: 30),
+
+                        // ==================================================
+                        // RESULTS
+                        // ==================================================
+                        _sectionHeader(
+                          Icons.assignment_turned_in_outlined,
+                          "Results",
+                          "SECTION 02",
+                        ),
+
+                        _buildResultsTable(results),
+                      ],
                     ),
                   ),
-                );
-              }
-
-              final data = processedSnapshot.data!;
-              final schedule = data["schedule"] as List<QueryDocumentSnapshot>;
-              final results = data["results"] as List<Map<String, dynamic>>;
-              final todayExamCount = data["todayExamCount"] as int;
-              final completedCount = data["completedCount"] as int;
-
-              // Hides scrollbars everywhere on this page (scrolling still works)
-              return ScrollConfiguration(
-                behavior: ScrollConfiguration.of(
-                  context,
-                ).copyWith(scrollbars: false, overscroll: false),
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _infoCard(),
-                      const SizedBox(height: 22),
-
-                      _sectionHeader(Icons.dashboard_outlined, "Dashboard"),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _statCard(
-                              icon: Icons.event_available_outlined,
-                              title: "Today's Exams",
-                              count: todayExamCount,
-                              color: _accentColor,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _statCard(
-                              icon: Icons.check_circle_outline,
-                              title: "Completed Exams",
-                              count: completedCount,
-                              color: _successColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 22),
-
-                      _sectionHeader(
-                        Icons.event_note_outlined,
-                        "Exam Schedule for Today",
-                      ),
-                      _buildScheduleTable(schedule),
-                      const SizedBox(height: 22),
-
-                      _sectionHeader(
-                        Icons.assignment_turned_in_outlined,
-                        "Results",
-                      ),
-                      _buildResultsTable(results),
-                    ],
-                  ),
                 ),
-              );
-            },
+              ),
+            ),
           );
         },
       ),
     );
   }
 
-  // ---------- UI helpers ----------
+  // ============================================================
+  // TEXT STYLES
+  // ============================================================
 
-  // Same card look as the Profile page's standalone cards
-  BoxDecoration _cardDecoration() {
+  TextStyle _monoStyle(double size, {Color color = _muted2}) {
+    return TextStyle(
+      fontFamily: _mono,
+      fontSize: size,
+      color: color,
+      letterSpacing: 0.8,
+      fontWeight: FontWeight.w500,
+    );
+  }
+
+  TextStyle _display(double size, {Color color = _ink, double h = 1.0}) {
+    return TextStyle(
+      fontSize: size,
+      height: h,
+      color: color,
+      fontWeight: FontWeight.w700,
+      letterSpacing: -size * 0.05,
+    );
+  }
+
+  BoxDecoration _cardBox({Color color = Colors.white, double radius = 10}) {
     return BoxDecoration(
-      borderRadius: BorderRadius.circular(18),
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [_cardColor.withOpacity(0.9), _cardColor.withOpacity(0.55)],
-      ),
-      border: Border.all(color: Colors.white.withOpacity(0.06)),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(0.2),
-          blurRadius: 12,
-          offset: const Offset(0, 6),
+      color: color,
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(color: _line),
+    );
+  }
+
+  // ============================================================
+  // PAGE HEADER
+  // ============================================================
+
+  Widget _pageHead() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+
+      children: [
+        Text("FOTS / STUDENT WORKSPACE", style: _monoStyle(11, color: _accent)),
+
+        const SizedBox(height: 10),
+
+        Text("Overview.", style: _display(38, h: 1.08)),
+
+        const SizedBox(height: 7),
+
+        const Text(
+          "See your upcoming exams, track your readiness and review your results.",
+          style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
         ),
       ],
     );
   }
 
-  // Icon chip + title + divider line (same as Profile section headers)
-  Widget _sectionHeader(IconData icon, String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: _accentColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, size: 16, color: _accentColor),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            title,
-            style: const TextStyle(
-              color: _textColor,
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Container(height: 1, color: Colors.white.withOpacity(0.08)),
-          ),
-        ],
-      ),
+  // ============================================================
+  // HERO
+  // ============================================================
+
+  Widget _hero() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bool wide = constraints.maxWidth >= 700;
+
+        return Container(
+          decoration: _cardBox(radius: 12),
+
+          clipBehavior: Clip.antiAlias,
+
+          child: wide
+              ? IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+
+                    children: [
+                      Expanded(flex: 58, child: _heroCopy(wide)),
+
+                      Expanded(flex: 42, child: _heroArt(wide)),
+                    ],
+                  ),
+                )
+              : Column(children: [_heroCopy(false), _heroArt(false)]),
+        );
+      },
     );
   }
 
-  Widget _buildSkeletonUI() {
-    Widget block(double height, {double radius = 18}) => Container(
-      height: height,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(radius),
-      ),
-    );
+  Widget _heroCopy(bool wide) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(wide ? 30 : 22, 25, wide ? 30 : 22, 25),
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+
         children: [
-          block(230, radius: 24),
-          const SizedBox(height: 22),
           Row(
             children: [
-              Expanded(child: block(120)),
-              const SizedBox(width: 12),
-              Expanded(child: block(120)),
+              Container(width: 8, height: 8, color: _accent),
+
+              const SizedBox(width: 9),
+
+              Expanded(
+                child: Text(
+                  "FOTS PLATFORM",
+                  style: _monoStyle(10, color: _ink),
+                ),
+              ),
+
+              Text("EDITION / 2026", style: _monoStyle(10)),
             ],
           ),
-          const SizedBox(height: 22),
-          block(140),
-          const SizedBox(height: 22),
-          block(140),
-        ],
-      ),
-    );
-  }
 
-  // Hero card: framed logo + welcome text (like the Profile avatar zone)
-  Widget _infoCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 26),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_headerColorLight, _headerColor],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 16,
-            offset: const Offset(0, 8),
+          const SizedBox(height: 15),
+
+          const Divider(height: 1, color: _ink),
+
+          SizedBox(height: wide ? 35 : 24),
+
+          Text(
+            "A BETTER WAY TO EXAMINE",
+            style: _monoStyle(10, color: _accent),
           ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Container(
-            width: 120,
-            height: 120,
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(26),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  _accentColor.withOpacity(0.9),
-                  _accentColor.withOpacity(0.25),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: _accentColor.withOpacity(0.35),
-                  blurRadius: 14,
-                  spreadRadius: 1,
+
+          const SizedBox(height: 12),
+
+          RichText(
+            text: TextSpan(
+              style: _display(wide ? 52 : 40, h: .98),
+
+              children: const [
+                TextSpan(text: "Stay focused.\n"),
+                TextSpan(
+                  text: "Students.",
+                  style: TextStyle(color: _accent),
                 ),
               ],
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(23),
+          ),
+
+          const SizedBox(height: 15),
+
+          const Text(
+            "Your examination space, redesigned around clarity and confidence.",
+            style: TextStyle(color: _muted, fontSize: 13, height: 1.65),
+          ),
+
+          const SizedBox(height: 24),
+
+          const Divider(height: 1, color: _line),
+
+          const SizedBox(height: 12),
+
+          Row(
+            children: [
+              Text("01 / FOCUS ENGINE", style: _monoStyle(9, color: _ink)),
+
+              const Spacer(),
+
+              Text("STUDENT // HOME", style: _monoStyle(9)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _heroArt(bool wide) {
+    return Container(
+      color: _ink,
+
+      padding: const EdgeInsets.all(22),
+
+      constraints: BoxConstraints(minHeight: wide ? 300 : 240),
+
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(
+                "FOTS / STUDENT SPACE",
+                style: _monoStyle(10, color: Colors.white70),
+              ),
+
+              const Spacer(),
+
+              Text("[ LIVE ]", style: _monoStyle(10, color: Colors.white70)),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          const Divider(height: 1, color: Color(0xFF3A3C44)),
+
+          SizedBox(height: wide ? 65 : 35),
+
+          Align(
+            alignment: Alignment.centerRight,
+
+            child: Transform.rotate(
+              angle: .08,
+
               child: Container(
-                color: _cardColor,
-                padding: const EdgeInsets.all(12),
-                child: Image.asset(
-                  'assets/image/Fots.png',
-                  fit: BoxFit.contain,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+
+                color: _accent,
+
+                child: Text(
+                  "FACE ON\nTHE SCREEN.",
+                  style: _display(wide ? 27 : 22, color: Colors.white, h: 1.05),
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 18),
-          Text(
-            "Welcome to tot Student Application",
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: MediaQuery.of(context).size.width < 360 ? 20 : 24,
-              fontWeight: FontWeight.bold,
-              color: _textColor,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.25),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: const Text(
-              "TRACK, MONITOR, AND EYE OPENER",
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 1.0,
+
+          SizedBox(height: wide ? 65 : 35),
+
+          const Divider(height: 1, color: Color(0xFF3A3C44)),
+
+          const SizedBox(height: 14),
+
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+
+            children: [
+              Text(
+                "FOCUS.",
+                style: _display(wide ? 42 : 36, color: Colors.white, h: .9),
               ),
-            ),
+
+              const Spacer(),
+
+              Text(
+                "WITHOUT\nDISTRACTIONS.",
+                textAlign: TextAlign.right,
+                style: _monoStyle(9, color: Colors.white70),
+              ),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  // ============================================================
+  // FOUR CARDS
+  // ============================================================
+
+  Widget _statsGrid(int available, int completed, int readiness, int strikes) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bool small = constraints.maxWidth < 700;
+
+        final bool medium = constraints.maxWidth < 1000;
+
+        final int columns = small
+            ? 1
+            : medium
+            ? 2
+            : 4;
+
+        return GridView.count(
+          crossAxisCount: columns,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: small ? 2.6 : 1.55,
+
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+
+          children: [
+            _statCard(
+              title: "Available exams",
+              value: "$available",
+              caption: "Upcoming sessions",
+              icon: Icons.assignment_outlined,
+              background: Colors.white,
+            ),
+
+            _statCard(
+              title: "Completed",
+              value: "$completed",
+              caption: "This semester",
+              icon: Icons.check_circle_outline,
+              background: _ink,
+              dark: true,
+            ),
+
+            _statCard(
+              title: "Tracking readiness",
+              value: "$readiness%",
+              caption: "Account + session check",
+              icon: Icons.track_changes_outlined,
+              background: const Color(0xFFEFFBF5),
+            ),
+
+            _statCard(
+              title: "Current strikes",
+              value: "$strikes",
+              caption: strikes == 0
+                  ? "No active secure session"
+                  : "Monitoring strikes",
+              icon: Icons.priority_high_outlined,
+              background: Colors.white,
+              danger: strikes > 0,
+            ),
+          ],
+        );
+      },
     );
   }
 
   Widget _statCard({
-    required IconData icon,
     required String title,
-    required int count,
-    required Color color,
+    required String value,
+    required String caption,
+    required IconData icon,
+    required Color background,
+    bool dark = false,
+    bool danger = false,
   }) {
+    final Color foreground = dark ? Colors.white : _ink;
+
+    final Color secondary = dark ? const Color(0xFFB0B1B7) : _muted2;
+
+    final Color iconColor = danger ? _danger : _accent;
+
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: _cardDecoration(),
+      padding: const EdgeInsets.all(18),
+
+      decoration: _cardBox(
+        color: background,
+        radius: 9,
+      ).copyWith(border: Border.all(color: dark ? _ink : _line)),
+
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, size: 18, color: color),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            count.toString(),
-            style: const TextStyle(
-              fontSize: 30,
-              fontWeight: FontWeight.bold,
-              color: _textColor,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13, color: _mutedTextColor),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _emptyCard(IconData icon, String message) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
-      decoration: _cardDecoration(),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: _accentColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: _accentColor, size: 28),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: _mutedTextColor,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _cell(String text, {Color color = _textColor, FontWeight? weight}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: TextStyle(color: color, fontSize: 13, fontWeight: weight),
-      ),
-    );
-  }
-
-  // Shared table card: dark header strip, subtly shaded alternate rows
-  Widget _tableCard({
-    required List<String> headers,
-    required List<List<Widget>> rows,
-    required Map<int, TableColumnWidth> columnWidths,
-    required double maxHeight,
-  }) {
-    return Container(
-      decoration: _cardDecoration(),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: maxHeight),
-          child: SingleChildScrollView(
-            child: Table(
-              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-              columnWidths: columnWidths,
-              border: TableBorder(
-                horizontalInside: BorderSide(
-                  color: Colors.white.withOpacity(0.06),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title.toUpperCase(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: _monoStyle(10, color: secondary),
                 ),
               ),
-              children: [
-                TableRow(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.22),
-                  ),
-                  children: [
-                    for (final h in headers) _cell(h, weight: FontWeight.bold),
-                  ],
+
+              Container(
+                width: 32,
+                height: 32,
+
+                decoration: BoxDecoration(
+                  color: dark ? const Color(0xFF333640) : _accentSoft,
+
+                  borderRadius: BorderRadius.circular(6),
                 ),
-                for (int i = 0; i < rows.length; i++)
-                  TableRow(
-                    decoration: BoxDecoration(
-                      color: i.isOdd
-                          ? Colors.white.withOpacity(0.03)
-                          : Colors.transparent,
-                    ),
-                    children: rows[i],
+
+                child: Icon(icon, size: 17, color: iconColor),
+              ),
+            ],
+          ),
+
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+
+            children: [
+              Text(value, style: _display(38, color: foreground, h: .95)),
+
+              const SizedBox(height: 7),
+
+              Text(
+                caption,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: secondary, fontSize: 10),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // UPCOMING EXAMS + READINESS
+  // ============================================================
+
+  Widget _dashboardGrid(
+    List<QueryDocumentSnapshot> exams,
+    int readiness,
+    bool ready,
+  ) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 850) {
+          return Column(
+            children: [
+              _upcomingExamsCard(exams),
+
+              const SizedBox(height: 14),
+
+              _readinessCard(readiness, ready),
+            ],
+          );
+        }
+
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(flex: 7, child: _upcomingExamsCard(exams)),
+              const SizedBox(width: 15),
+              Expanded(flex: 3, child: _readinessCard(readiness, ready)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ============================================================
+  // UPCOMING EXAMS
+  // ============================================================
+
+  Widget _upcomingExamsCard(List<QueryDocumentSnapshot> exams) {
+    // Soonest 5 upcoming exams (list is already sorted by startTime)
+    final visibleExams = exams.take(5).toList();
+
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      // White background: any space the rows don't use stays white
+      decoration: _cardBox(color: Colors.white, radius: 9),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // HEADER
+          Container(
+            padding: const EdgeInsets.fromLTRB(19, 17, 19, 15),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              border: Border(bottom: BorderSide(color: _line)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Upcoming exams",
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: _ink,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        "Closest deadlines and available sessions",
+                        style: _monoStyle(9),
+                      ),
+                    ],
                   ),
+                ),
+                Material(
+                  color: _accentSoft,
+                  borderRadius: BorderRadius.circular(6),
+                  child: InkWell(
+                    onTap: () => context.go('/exam-list'),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      child: Text(
+                        "VIEW ALL",
+                        style: _monoStyle(9, color: _accent),
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
+
+          // ROWS
+          for (final exam in visibleExams) _upcomingExamRow(exam),
+
+          // Empty state (dark text now, since the background is white)
+          if (visibleExams.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child: Text(
+                  "NO UPCOMING EXAMS",
+                  style: _monoStyle(10, color: _muted2),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _upcomingExamRow(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+
+    final String subject = (data["subject"] ?? "Untitled Exam").toString();
+
+    final String course = (data["course"] ?? "Student Examination").toString();
+    final classId = (data['classId'] ?? '').toString().trim();
+
+    final DateTime? startTime = _toDate(data["startTime"]);
+
+    final String dateText = startTime == null ? "—" : _formatDate(startTime);
+
+    final String timeText = startTime == null ? "—" : _formatTime(startTime);
+
+    final String duration = (data["duration"] ?? data["durationMinutes"] ?? "—")
+        .toString();
+
+    return Material(
+      color: Colors.white,
+      child: InkWell(
+        onTap: () => _openUpcomingExam(doc),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 19, vertical: 16),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: _line)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 4,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      subject,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: _ink,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      course,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _monoStyle(9),
+                    ),
+                    if (classId.isNotEmpty)
+                      InkWell(
+                        onTap: () => _openClass(classId),
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 5, right: 8),
+                          child: Text(
+                            'OPEN CLASS',
+                            style: _monoStyle(8, color: _accent),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      dateText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: _ink,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(timeText, maxLines: 1, style: _monoStyle(8)),
+                  ],
+                ),
+              ),
+              _statusPill("Available", Icons.circle),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 55,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      duration == "—" ? "—" : "$duration min",
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: _ink,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text("Secure", style: _monoStyle(8)),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildScheduleTable(List<QueryDocumentSnapshot> exams) {
-    if (exams.isEmpty) {
-      return _emptyCard(Icons.info_outline, "No exam schedule found");
-    }
+  // ============================================================
+  // READINESS
+  // ============================================================
 
-    // Sort by startTime (earliest first)
-    exams.sort((a, b) {
-      final aTime =
-          _toDate((a.data() as Map<String, dynamic>)["startTime"]) ??
-          DateTime(9999);
-      final bTime =
-          _toDate((b.data() as Map<String, dynamic>)["startTime"]) ??
-          DateTime(9999);
+  Widget _readinessCard(int readiness, bool ready) {
+    return Container(
+      decoration: _cardBox(radius: 9),
 
-      return aTime.compareTo(bTime);
-    });
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(19, 17, 19, 15),
 
-    final rows = exams.map((doc) {
-      final data = doc.data() as Map<String, dynamic>;
-      final startTime = _toDate(data["startTime"]);
-      String dateText = "—";
-      String timeText = "—";
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: _line)),
+            ),
 
-      if (startTime != null) {
-        dateText =
-            "${startTime.year}-${startTime.month.toString().padLeft(2, '0')}-${startTime.day.toString().padLeft(2, '0')}";
-        timeText =
-            "${startTime.hour % 12 == 0 ? 12 : startTime.hour % 12}:${startTime.minute.toString().padLeft(2, '0')} ${startTime.hour >= 12 ? 'PM' : 'AM'}";
-      }
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
 
-      return <Widget>[
-        _cell((data["subject"] ?? "—").toString()),
-        _cell(dateText, color: _mutedTextColor),
-        _cell(timeText, weight: FontWeight.w600),
-      ];
-    }).toList();
+                    children: [
+                      Text(
+                        "Readiness",
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: _ink,
+                        ),
+                      ),
 
-    return _tableCard(
-      headers: const ["Subject", "Date", "Start"],
-      rows: rows,
-      columnWidths: const {
-        0: FlexColumnWidth(2.4),
-        1: FlexColumnWidth(2.2),
-        2: FlexColumnWidth(2),
-      },
-      maxHeight: 350,
-    );
-  }
+                      SizedBox(height: 4),
 
-  Widget _statusChip(String status) {
-    final completed = status == "completed";
-    final color = completed ? _successColor : _errorColor;
-    final label = status.isEmpty
-        ? "—"
-        : status[0].toUpperCase() + status.substring(1);
+                      Text(
+                        "Secure-exam environment",
+                        style: TextStyle(
+                          color: _muted2,
+                          fontFamily: _mono,
+                          fontSize: 9,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withOpacity(0.35)),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
+                _statusPill(ready ? "Ready" : "Check", Icons.circle),
+              ],
             ),
           ),
-        ),
+
+          Padding(
+            padding: const EdgeInsets.all(22),
+
+            child: Column(
+              children: [
+                _readinessRing(readiness),
+
+                const SizedBox(height: 14),
+
+                Text(
+                  ready
+                      ? "Account and required student information are ready."
+                      : "Some student information is missing.",
+                  textAlign: TextAlign.center,
+
+                  style: const TextStyle(
+                    color: _muted,
+                    fontSize: 11,
+                    height: 1.6,
+                  ),
+                ),
+
+                const SizedBox(height: 18),
+
+                _readinessCheck("Authentication", _authUid != null),
+
+                _readinessCheck(
+                  "Student ID",
+                  studentId != null && studentId!.isNotEmpty,
+                ),
+
+                _readinessCheck(
+                  "Program",
+                  program != null && program!.isNotEmpty,
+                ),
+
+                _readinessCheck(
+                  "Year / Block",
+                  yearBlock != null && yearBlock!.isNotEmpty,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
+
+  Widget _readinessRing(int percentage) {
+    return SizedBox(
+      width: 118,
+      height: 118,
+
+      child: Stack(
+        alignment: Alignment.center,
+
+        children: [
+          SizedBox(
+            width: 118,
+            height: 118,
+
+            child: CircularProgressIndicator(
+              value: percentage / 100,
+
+              strokeWidth: 9,
+
+              backgroundColor: const Color(0xFFE8ECE9),
+
+              valueColor: const AlwaysStoppedAnimation<Color>(_accent),
+            ),
+          ),
+
+          Column(
+            mainAxisSize: MainAxisSize.min,
+
+            children: [
+              Text("$percentage%", style: _display(25, color: _ink)),
+
+              Text("READY", style: _monoStyle(8, color: _accent)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _readinessCheck(String title, bool good) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+
+      child: Row(
+        children: [
+          Icon(
+            good ? Icons.check_circle : Icons.cancel,
+            size: 16,
+            color: good ? _accent : _danger,
+          ),
+
+          const SizedBox(width: 9),
+
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: _ink,
+              ),
+            ),
+          ),
+
+          Text(
+            good ? "OK" : "CHECK",
+            style: _monoStyle(8, color: good ? _accent : _danger),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
+  Widget _statusPill(String text, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+
+      decoration: BoxDecoration(
+        color: _accentSoft,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _accent.withOpacity(.22)),
+      ),
+
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+
+        children: [
+          Icon(icon, size: 6, color: _accent),
+
+          const SizedBox(width: 6),
+
+          Text(
+            text,
+            style: const TextStyle(
+              color: _accent,
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    const months = [
+      "JAN",
+      "FEB",
+      "MAR",
+      "APR",
+      "MAY",
+      "JUN",
+      "JUL",
+      "AUG",
+      "SEP",
+      "OCT",
+      "NOV",
+      "DEC",
+    ];
+
+    return "${months[date.month - 1]} ${date.day}, ${date.year}";
+  }
+
+  String _formatTime(DateTime date) {
+    final int hour = date.hour % 12 == 0 ? 12 : date.hour % 12;
+
+    final String minute = date.minute.toString().padLeft(2, "0");
+
+    final String period = date.hour >= 12 ? "PM" : "AM";
+
+    return "$hour:$minute $period";
+  }
+
+  void _openUpcomingExam(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final startTime = _toDate(data['startTime']);
+    final endTime = _toDate(data['endTime']);
+
+    context.go(
+      '/take-exam/${Uri.encodeComponent(doc.id)}',
+      extra: {
+        'examId': doc.id,
+        'startMillis': startTime?.millisecondsSinceEpoch,
+        'endMillis': endTime?.millisecondsSinceEpoch,
+      },
+    );
+  }
+
+  void _openClass(String classId) {
+    context.go('/student/class/${Uri.encodeComponent(classId)}');
+  }
+
+  // ============================================================
+  // SECTION HEADER
+  // ============================================================
+
+  Widget _sectionHeader(IconData icon, String title, String tag) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(7),
+
+            decoration: BoxDecoration(
+              color: _accentSoft,
+              borderRadius: BorderRadius.circular(6),
+            ),
+
+            child: Icon(icon, size: 16, color: _accent),
+          ),
+
+          const SizedBox(width: 10),
+
+          Text(
+            title,
+            style: const TextStyle(
+              color: _ink,
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+
+          const SizedBox(width: 12),
+
+          const Expanded(child: Divider(height: 1, color: _line)),
+
+          const SizedBox(width: 12),
+
+          Text(tag, style: _monoStyle(9)),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // RESULTS
+  // ============================================================
 
   Widget _buildResultsTable(List<Map<String, dynamic>> results) {
     if (results.isEmpty) {
@@ -648,23 +1299,270 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    final rows = results.map((data) {
-      return <Widget>[
-        _cell((data["subject"] ?? "—").toString()),
-        _cell((data["score"] ?? "—").toString(), weight: FontWeight.w600),
-        _statusChip((data["status"] ?? "—").toString()),
-      ];
-    }).toList();
+    return Container(
+      decoration: _cardBox(),
 
-    return _tableCard(
-      headers: const ["Subject", "Score", "Status"],
-      rows: rows,
-      columnWidths: const {
-        0: FlexColumnWidth(2.4),
-        1: FlexColumnWidth(1.6),
-        2: FlexColumnWidth(2.2),
-      },
-      maxHeight: 400,
+      clipBehavior: Clip.antiAlias,
+
+      child: Column(
+        children: [
+          Container(
+            color: _ink,
+
+            padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 10),
+
+            child: const Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    "SUBJECT",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontFamily: _mono,
+                      fontSize: 9,
+                    ),
+                  ),
+                ),
+
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    "SCORE",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontFamily: _mono,
+                      fontSize: 9,
+                    ),
+                  ),
+                ),
+
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    "STATUS",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontFamily: _mono,
+                      fontSize: 9,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          ...List.generate(results.length, (index) {
+            final result = results[index];
+
+            final examId = (result['examId'] ?? '').toString();
+            final status = (result['status'] ?? '').toString().toLowerCase();
+
+            return Material(
+              color: index.isOdd ? _bg : Colors.white,
+              child: InkWell(
+                onTap: examId.isEmpty
+                    ? null
+                    : () {
+                        if (status == 'completed') {
+                          context.go(
+                            '/exam-result/${Uri.encodeComponent(examId)}',
+                          );
+                        } else {
+                          context.go(
+                            '/take-exam/${Uri.encodeComponent(examId)}',
+                          );
+                        }
+                      },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 14,
+                    horizontal: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Text(
+                          (result["subject"] ?? "—").toString(),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+
+                      Expanded(
+                        flex: 2,
+                        child: Text(
+                          (result["score"] ?? "—").toString(),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+
+                      Expanded(
+                        flex: 2,
+                        child: Center(
+                          child: _statusChip(
+                            (result["status"] ?? "—").toString(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip(String status) {
+    final bool completed = status == "completed";
+
+    final Color color = completed ? _accent : _danger;
+
+    final Color bg = completed ? _accentSoft : _dangerSoft;
+
+    final String label = status.isEmpty
+        ? "—"
+        : status[0].toUpperCase() + status.substring(1);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withOpacity(.25)),
+      ),
+
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+
+          const SizedBox(width: 7),
+
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // EMPTY
+  // ============================================================
+
+  Widget _emptyCard(IconData icon, String message) {
+    return Container(
+      width: double.infinity,
+
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+
+            decoration: BoxDecoration(
+              color: _accentSoft,
+              borderRadius: BorderRadius.circular(10),
+            ),
+
+            child: Icon(icon, color: _accent, size: 26),
+          ),
+
+          const SizedBox(height: 12),
+
+          Text(
+            message,
+            textAlign: TextAlign.center,
+
+            style: const TextStyle(
+              color: _muted,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // SKELETON
+  // ============================================================
+
+  Widget _buildSkeletonUI() {
+    Widget block(double height, {double radius = 10}) {
+      return Container(
+        height: height,
+        decoration: BoxDecoration(
+          color: const Color(0xFFECEEEB),
+          borderRadius: BorderRadius.circular(radius),
+        ),
+      );
+    }
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+
+        child: Column(
+          children: [
+            block(75),
+
+            const SizedBox(height: 20),
+
+            block(350, radius: 12),
+
+            const SizedBox(height: 14),
+
+            GridView.count(
+              crossAxisCount: 4,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.55,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+
+              children: [block(155), block(155), block(155), block(155)],
+            ),
+
+            const SizedBox(height: 16),
+
+            block(300),
+
+            const SizedBox(height: 16),
+
+            block(250),
+          ],
+        ),
+      ),
     );
   }
 }
