@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../helpers/ExamLockState.dart';
 import '../../helpers/platform_utils.dart';
@@ -242,26 +243,25 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     final isReload = isPageReload();
 
     if (!isReload && _authUid != null && _resolvedStudentId != null) {
-      final resultRef = FirebaseFirestore.instance
-          .collection('examResults')
-          .doc(widget.examId)
-          .collection('students')
-          .doc(_authUid!);
-
-      resultRef.get().then((doc) async {
-        if (doc.exists && doc.data()?['status'] == 'completed') return;
-
-        await resultRef.set({
-          'status': 'incomplete',
-          'submittedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      });
+      unawaited(_markIncompleteOnServer());
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ExamLockState.isInExam.value = false;
     });
     super.dispose();
+  }
+
+  Future<void> _markIncompleteOnServer() async {
+    try {
+      await FirebaseFunctions.instanceFor(region: 'asia-southeast1')
+          .httpsCallable('markExamIncomplete')
+          .call({'examId': widget.examId});
+    } on FirebaseFunctionsException catch (error) {
+      debugPrint('Could not mark exam incomplete: ${error.message}');
+    } catch (error) {
+      debugPrint('Could not mark exam incomplete: $error');
+    }
   }
 
   void _handleFinish(String examId) {

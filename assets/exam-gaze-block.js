@@ -1006,6 +1006,11 @@ async function onResults(results) {
     headOk &&
     !outsideCalibratedRange(f.ox, eyeRange.ox) &&
     !outsideCalibratedRange(f.oy, eyeRange.oy);
+  if (window.examStarted && !gazeOk) {
+    if (!window.awayStartedAt) window.awayStartedAt = Date.now();
+  } else if (gazeOk && awayMs <= 0) {
+    window.awayStartedAt = 0;
+  }
   gazeWasOk = gazeOk;
 
   if (!window.examStarted) {

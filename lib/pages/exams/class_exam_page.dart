@@ -41,28 +41,164 @@ String _minutesLabel(int minutes) {
   return DateFormat('h:mm a').format(DateTime(2000, 1, 1, m ~/ 60, m % 60));
 }
 
-String _daysLabel(Map<String, dynamic> c) {
-  const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  final raw = c['days'] ?? c['day'];
-  if (raw is List) {
-    return raw
-        .map((d) {
-          if (d is num && d >= 1 && d <= 7) return names[d.toInt() - 1];
-          return d.toString().trim();
-        })
-        .where((s) => s.isNotEmpty)
-        .join(', ');
-  }
-  return _text(raw);
+const _dayShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+int? _weekdayOf(dynamic item) {
+  if (item is num && item >= 1 && item <= 7) return item.toInt();
+  final value = item.toString().trim().toLowerCase();
+  if (value.length < 3) return null;
+  const map = {
+    'mon': 1,
+    'tue': 2,
+    'wed': 3,
+    'thu': 4,
+    'fri': 5,
+    'sat': 6,
+    'sun': 7,
+  };
+  return map[value.substring(0, 3)];
 }
 
-String _scheduleLabel(Map<String, dynamic> c) {
-  final s = _intOf(c['startMinutes']) ?? _parseHm(c['startLabel']);
-  final e = _intOf(c['endMinutes']) ?? _parseHm(c['endLabel']);
-  final days = _daysLabel(c);
-  if (s == null || e == null) return days.isEmpty ? '—' : days;
-  final time = '${_minutesLabel(s)} – ${_minutesLabel(e)}';
-  return days.isEmpty ? time : '$days · $time';
+/// Every (weekday, start, end) session of a class, new or old format.
+List<({int weekday, int start, int end})> _classSlots(
+  Map<String, dynamic> classData,
+) {
+  int? minutesOf(Map source, String key, String labelKey) {
+    final value = source[key];
+    if (value is num) return value.toInt();
+    return _parseHm(source[labelKey]);
+  }
+
+  final slots = <({int weekday, int start, int end})>[];
+  final rawSchedules = classData['schedules'];
+
+  if (rawSchedules is List && rawSchedules.isNotEmpty) {
+    for (final schedule in rawSchedules) {
+      if (schedule is! Map) continue;
+      final weekday = _weekdayOf(schedule['dayOfWeek']);
+      final start = minutesOf(schedule, 'startMinutes', 'startLabel');
+      if (weekday == null || start == null) continue;
+      final duration = _intOf(schedule['durationMin']);
+      final end =
+          minutesOf(schedule, 'endMinutes', 'endLabel') ??
+          (duration == null || duration <= 0 ? null : start + duration);
+      if (end != null && end > start) {
+        slots.add((weekday: weekday, start: start, end: end));
+      }
+    }
+  } else {
+    // Old single-slot format
+    final start = minutesOf(classData, 'startMinutes', 'startLabel');
+    final duration = _intOf(classData['durationMin']);
+    final end =
+        minutesOf(classData, 'endMinutes', 'endLabel') ??
+        (start == null || duration == null || duration <= 0
+            ? null
+            : start + duration);
+    if (start != null && end != null && end > start) {
+      final rawScheduleDays = classData['scheduleDays'];
+      final rawDays = rawScheduleDays is List && rawScheduleDays.isNotEmpty
+          ? rawScheduleDays
+          : classData['days'] ?? classData['day'] ?? classData['dayOfWeek'];
+      final items = rawDays is List
+          ? rawDays
+          : rawDays is String
+          ? rawDays.split(RegExp(r'[,/;\s]+'))
+          : const [];
+      final seen = <int>{};
+      for (final item in items) {
+        final weekday = _weekdayOf(item);
+        if (weekday != null && seen.add(weekday)) {
+          slots.add((weekday: weekday, start: start, end: end));
+        }
+      }
+    }
+  }
+
+  slots.sort((a, b) {
+    final byDay = a.weekday.compareTo(b.weekday);
+    return byDay != 0 ? byDay : a.start.compareTo(b.start);
+  });
+  return slots;
+}
+
+/// "Mon, Wed · 8:00 AM – 9:30 AM"
+/// "Thu · 1:00 PM – 2:30 PM" (one line per distinct time)
+String _scheduleLabel(Map<String, dynamic> classData) {
+  final slots = _classSlots(classData);
+
+  if (slots.isEmpty) {
+    // Days without a time (or nothing at all)
+    final days = <int>{};
+    final rawSchedules = classData['schedules'];
+    if (rawSchedules is List) {
+      for (final schedule in rawSchedules) {
+        if (schedule is Map) {
+          final weekday = _weekdayOf(schedule['dayOfWeek']);
+          if (weekday != null) days.add(weekday);
+        }
+      }
+    }
+    if (days.isEmpty) {
+      final rawScheduleDays = classData['scheduleDays'];
+      final rawDays = rawScheduleDays is List && rawScheduleDays.isNotEmpty
+          ? rawScheduleDays
+          : classData['days'] ?? classData['day'] ?? classData['dayOfWeek'];
+      final items = rawDays is List
+          ? rawDays
+          : rawDays is String
+          ? rawDays.split(RegExp(r'[,/;\s]+'))
+          : const [];
+      for (final item in items) {
+        final weekday = _weekdayOf(item);
+        if (weekday != null) days.add(weekday);
+      }
+    }
+    if (days.isEmpty) return '—';
+    final sorted = days.toList()..sort();
+    return '${sorted.map((day) => _dayShort[day - 1]).join(', ')} · time not set';
+  }
+
+  // Group days that share the same time range.
+  final groups = <String, List<int>>{};
+  for (final slot in slots) {
+    final time = '${_minutesLabel(slot.start)} – ${_minutesLabel(slot.end)}';
+    groups.putIfAbsent(time, () => []).add(slot.weekday);
+  }
+
+  final lines = groups.entries.toList()
+    ..sort((a, b) => a.value.first.compareTo(b.value.first));
+
+  return lines
+      .map(
+        (entry) =>
+            '${entry.value.map((day) => _dayShort[day - 1]).join(', ')} · ${entry.key}',
+      )
+      .join('\n');
+}
+
+/// Short, one-line version for the tile.
+String _scheduleShort(Map<String, dynamic> classData) {
+  final slots = _classSlots(classData);
+  if (slots.isEmpty) return _scheduleLabel(classData);
+
+  final groups = <int, Set<int>>{};
+  for (final slot in slots) {
+    groups.putIfAbsent(slot.start, () => <int>{}).add(slot.weekday);
+  }
+  final lines = groups.entries.toList()
+    ..sort((a, b) {
+      final aDay = a.value.reduce((x, y) => x < y ? x : y);
+      final bDay = b.value.reduce((x, y) => x < y ? x : y);
+      return aDay.compareTo(bDay);
+    });
+
+  final first = lines.first;
+  final days = (first.value.toList()..sort())
+      .map((day) => _dayShort[day - 1])
+      .join(', ');
+  final label = '$days · ${_minutesLabel(first.key)}';
+  return lines.length > 1 ? '$label  +${lines.length - 1} more' : label;
 }
 
 String _initials(String name) {
@@ -91,6 +227,7 @@ class _ClassExamPageState extends State<ClassExamPage> {
   late Future<Map<String, dynamic>> _classDetails;
   String? _takenExamIdsKey;
   Future<Map<String, String>>? _takenExamIdsFuture;
+  bool _scheduleOpen = false;
 
   late Stream<QuerySnapshot<Map<String, dynamic>>> _examStream;
 
@@ -377,11 +514,7 @@ class _ClassExamPageState extends State<ClassExamPage> {
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    tile(
-                      "Schedule",
-                      _scheduleLabel(c),
-                      Icons.schedule_outlined,
-                    ),
+                    SizedBox(width: width, child: _scheduleTile(c)),
                     tile("Room", room, Icons.meeting_room_outlined),
                     tile("Year / Block", yearBlock, Icons.groups_outlined),
                     tile(
@@ -397,6 +530,123 @@ class _ClassExamPageState extends State<ClassExamPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _scheduleTile(Map<String, dynamic> c) {
+    final slots = _classSlots(c);
+    final expandable = slots.isNotEmpty;
+
+    return Material(
+      color: _bg,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: _line),
+      ),
+      child: InkWell(
+        onTap: expandable
+            ? () => setState(() => _scheduleOpen = !_scheduleOpen)
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: _accentSoft,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(
+                      Icons.schedule_outlined,
+                      size: 17,
+                      color: _accent,
+                    ),
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("SCHEDULE", style: _monoStyle(9)),
+                        const SizedBox(height: 5),
+                        Text(
+                          _scheduleShort(c),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: _ink,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (expandable)
+                    AnimatedRotation(
+                      turns: _scheduleOpen ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: const Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 20,
+                        color: _muted,
+                      ),
+                    ),
+                ],
+              ),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                alignment: Alignment.topCenter,
+                child: (_scheduleOpen && expandable)
+                    ? Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Column(
+                          children: [
+                            const Divider(height: 1, color: _line),
+                            for (final slot in slots)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 9),
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 40,
+                                      child: Text(
+                                        _dayShort[slot.weekday - 1]
+                                            .toUpperCase(),
+                                        style: _monoStyle(10, color: _accent),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        '${_minutesLabel(slot.start)} – ${_minutesLabel(slot.end)}',
+                                        style: const TextStyle(
+                                          color: _ink,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      )
+                    : const SizedBox(width: double.infinity),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -426,6 +676,8 @@ class _ClassExamPageState extends State<ClassExamPage> {
                 const SizedBox(height: 5),
                 Text(
                   value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _ink,
                     fontSize: 12,

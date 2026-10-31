@@ -490,8 +490,8 @@ class _TakeExamPageState extends State<TakeExamPage>
                 ];
 
                 return _pageBody(
-  showSteps: status?.toString().toLowerCase() != "completed",
-  card: _detailsCard(
+                  showSteps: status?.toString().toLowerCase() != "completed",
+                  card: _detailsCard(
                     subject: (subject ?? "Exam").toString(),
                     status: status?.toString(),
                     rows: rows,
@@ -905,7 +905,6 @@ class _TakeExamPageState extends State<TakeExamPage>
                   );
                 },
               );
-
               if (!mounted || calibrationOk != true) {
                 // Release the screen share so it doesn't keep running
                 if (isPc) {
@@ -934,43 +933,20 @@ class _TakeExamPageState extends State<TakeExamPage>
 
               final now = DateTime.now();
               final startedAt = Timestamp.fromDate(now);
-              final monitoredAt = Timestamp.fromDate(
-                now.add(const Duration(minutes: 5)),
-              );
 
-              final examStart = examData["startTime"] as Timestamp?;
-              final examEnd = examData["endTime"] as Timestamp?;
-              final examSubject = examData["subject"] ?? subject;
-              final examTeacher =
-                  examData["creator"] ??
-                  examData["teacher"] ??
-                  examData["createdBy"] ??
-                  "Unknown";
-
-              await db
+              final resultRef = db
                   .collection("examResults")
                   .doc(widget.examId)
                   .collection("students")
-                  .doc(uid)
-                  .set({
-                    "examId": widget.examId,
-                    "uid": uid,
-                    "studentId": studentId ?? uid,
-                    "status": "in-progress",
-                    "cheatingCount": 0,
-                    "currentIndex": 0,
-                    "subject": examSubject,
-                    "teacher": examTeacher,
-                    "startTime": examStart ?? startedAt,
-                    "endTime": examEnd ?? monitoredAt,
-                    "startedAt": startedAt,
-                    "createdAt": startedAt,
-                    "lastHeartbeatAt": startedAt,
-                    "monitoringEnabled": true,
-                    "monitoringStartedAt": startedAt,
-                    "monitoringDeadlineAt": monitoredAt,
-                    "updatedAt": startedAt,
-                  }, SetOptions(merge: true));
+                  .doc(uid);
+              await resultRef.set({
+                "examId": widget.examId,
+                "uid": uid,
+                "studentId": studentId ?? uid,
+                "status": "in-progress",
+                "currentIndex": 0,
+                "startedAt": startedAt,
+              }, SetOptions(merge: true));
 
               if (!mounted) return;
               _screen.handedOff = true;
@@ -1002,133 +978,131 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   // ---------- UI helpers: match the clean Secure Exam HTML layout ----------
 
-Widget _skelBox({double? width, required double height, double radius = 6}) {
-  return Container(
-    width: width,
-    height: height,
-    decoration: BoxDecoration(
-      color: const Color(0xFFE9ECE9),
-      borderRadius: BorderRadius.circular(radius),
-    ),
-  );
-}
-
-Widget _buildSkeleton() {
-  return _SkeletonPulse(
-    child: Container(
+  Widget _skelBox({double? width, required double height, double radius = 6}) {
+    return Container(
+      width: width,
+      height: height,
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: const Color(0xFFDFE2DF)),
-        borderRadius: BorderRadius.circular(9),
+        color: const Color(0xFFE9ECE9),
+        borderRadius: BorderRadius.circular(radius),
       ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(26, 25, 26, 25),
-            color: const Color(0xFFF1F3F1),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _skelBox(width: 220, height: 24),
-                const SizedBox(height: 12),
-                _skelBox(width: 320, height: 12),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(22),
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final wide = c.maxWidth >= 690;
-                final left = Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _skelBox(height: 96),
-                    const SizedBox(height: 14),
-                    for (var i = 0; i < 3; i++)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                        child: _skelBox(height: 14),
-                      ),
-                  ],
-                );
-                final right = _skelBox(height: 190, radius: 7);
+    );
+  }
 
-                if (wide) {
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 20),
-                          child: left,
-                        ),
-                      ),
-                      Expanded(flex: 2, child: right),
-                    ],
-                  );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [left, const SizedBox(height: 14), right],
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-  Widget _pageShell({required Widget child}) {
-  return Scaffold(
-    backgroundColor: _bgColor,
-    body: SafeArea(
-      child: LayoutBuilder(
-        builder: (context, viewport) {
-          final horizontal = viewport.maxWidth < 600 ? 16.0 : 28.0;
-          return SingleChildScrollView(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: viewport.maxHeight),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(horizontal, 22, horizontal, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildTitleBar(),
-                    const SizedBox(height: 24),
-                    child, // no Expanded here
-                  ],
-                ),
+  Widget _buildSkeleton() {
+    return _SkeletonPulse(
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xFFDFE2DF)),
+          borderRadius: BorderRadius.circular(9),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(26, 25, 26, 25),
+              color: const Color(0xFFF1F3F1),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _skelBox(width: 220, height: 24),
+                  const SizedBox(height: 12),
+                  _skelBox(width: 320, height: 12),
+                ],
               ),
             ),
-          );
-        },
+            Padding(
+              padding: const EdgeInsets.all(22),
+              child: LayoutBuilder(
+                builder: (context, c) {
+                  final wide = c.maxWidth >= 690;
+                  final left = Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _skelBox(height: 96),
+                      const SizedBox(height: 14),
+                      for (var i = 0; i < 3; i++)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          child: _skelBox(height: 14),
+                        ),
+                    ],
+                  );
+                  final right = _skelBox(height: 190, radius: 7);
+
+                  if (wide) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 20),
+                            child: left,
+                          ),
+                        ),
+                        Expanded(flex: 2, child: right),
+                      ],
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [left, const SizedBox(height: 14), right],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
+
+  Widget _pageShell({required Widget child}) {
+    return Scaffold(
+      backgroundColor: _bgColor,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, viewport) {
+            final horizontal = viewport.maxWidth < 600 ? 16.0 : 28.0;
+            return SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: viewport.maxHeight),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(horizontal, 22, horizontal, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildTitleBar(),
+                      const SizedBox(height: 24),
+                      child, // no Expanded here
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
 
   Widget _pageBody({
-  required Widget card,
-  Widget? action,
-  bool showSteps = true,
-}) {
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      if (showSteps) ...[
-        _buildSecureFlowSteps(),
-        const SizedBox(height: 20),
+    required Widget card,
+    Widget? action,
+    bool showSteps = true,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (showSteps) ...[_buildSecureFlowSteps(), const SizedBox(height: 20)],
+        card,
+        if (action != null) ...[const SizedBox(height: 16), action],
       ],
-      card,
-      if (action != null) ...[const SizedBox(height: 16), action],
-    ],
-  );
-}
+    );
+  }
 
   Widget _buildSecureFlowSteps() {
     return Align(
@@ -1681,6 +1655,7 @@ class _DetailRow {
 
   const _DetailRow(this.icon, this.label, this.value);
 }
+
 class _SkeletonPulse extends StatefulWidget {
   final Widget child;
   const _SkeletonPulse({required this.child});
@@ -1705,9 +1680,10 @@ class _SkeletonPulseState extends State<_SkeletonPulse>
   @override
   Widget build(BuildContext context) {
     return FadeTransition(
-      opacity: Tween<double>(begin: .55, end: 1).animate(
-        CurvedAnimation(parent: _c, curve: Curves.easeInOut),
-      ),
+      opacity: Tween<double>(
+        begin: .55,
+        end: 1,
+      ).animate(CurvedAnimation(parent: _c, curve: Curves.easeInOut)),
       child: widget.child,
     );
   }

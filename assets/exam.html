@@ -28,7 +28,6 @@
         serverTimestamp,
         deleteField,
         onSnapshot,
-        increment,
         waitForPendingWrites,
       } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 
@@ -80,6 +79,52 @@
       const functions = getFunctions(app, "asia-southeast1");
       window.functions = functions;
       window.httpsCallable = httpsCallable;
+      const registerStrikeFn = httpsCallable(functions, "registerExamStrike");
+      const getStrikeCountFn = httpsCallable(functions, "getExamStrikeCount");
+
+      window.renderStrikes = function (count) {
+        const el = document.getElementById("strikeBox");
+        if (!el) return;
+        const n = Number(count);
+        if (!Number.isFinite(n)) {
+          el.textContent = "Strikes: –";
+          return;
+        }
+        window.cheatingCount = n;
+        el.textContent = `Strikes: ${n}`;
+        el.classList.toggle("has-strikes", n > 0);
+      };
+
+      async function syncStrikesFromServer(examId) {
+        try {
+          const { data } = await getStrikeCountFn({ examId });
+          window.renderStrikes(data.cheatingCount);
+          return true;
+        } catch (err) {
+          console.warn("Strike sync failed:", err);
+          return false;
+        }
+      }
+
+      async function sendStrike(examId, eventId) {
+        const RETRY = [
+          "functions/unavailable",
+          "functions/deadline-exceeded",
+          "functions/internal",
+        ];
+        let lastErr;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            return (await registerStrikeFn({ examId, eventId })).data;
+          } catch (err) {
+            lastErr = err;
+            if (!RETRY.includes(err.code)) break;
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+          }
+        }
+        throw lastErr;
+      }
+
       window.rtdb = rtdb;
       window.heartbeatInterval = null;
       window.presenceRef = null;
@@ -138,10 +183,7 @@
       window.examFinished = window.examFinished ?? false;
       window.disableGazeDetection = false;
       window.submitting = false;
-      window.cheatingCount = parseInt(
-        localStorage.getItem("cheatingCount") ?? "0",
-        10,
-      );
+      window.cheatingCount = 0;
       window.lastClippedCount = 0;
       window.cheatClipIndex = parseInt(
         localStorage.getItem("cheatClipIndex") ?? "0",
@@ -152,6 +194,7 @@
       window.cheatClipWindowStart = null;
       window.cheatClipWindowStartCount = null;
       const CHEAT_CLIP_DURATION_MS = 3000;
+      const CHEAT_CLIP_SEGMENT_MS = 8000;
       const CHEAT_GROUP_WINDOW_MS = 3000;
       const CHEAT_CLIP_MAX_BYTES = 2 * 1024 * 1024;
       const PENDING_STILL_KEY = "pendingCheatStill";
@@ -455,6 +498,7 @@
         if (wasStarted) {
           window.examStarted = true;
           window.allowStrikes = true;
+          window.startRings?.();
           document.getElementById("examGate").style.display = "none";
           document.getElementById("examCard").style.display = "block";
         } else {
@@ -472,8 +516,8 @@
         await setExamPresence(examId, window.authUid, true);
         startExamHeartbeat();
         startCountdownFromFirestore(examId);
-        await loadExamQuestions(examId);
         window.strikesLoadedPromise = loadExistingStrikes();
+        await loadExamQuestions(examId);
         await window.strikesLoadedPromise;
         flushPendingStill(examId).catch((err) =>
           console.warn("Pending still upload failed:", err),
@@ -503,34 +547,6 @@
           ? `?examId=${encodeURIComponent(examId)}`
           : window.location.pathname,
       );
-      // Metadata logger (no cheatingCount increment here)
-      window.logCheatingEvent = async function logCheatingEvent() {
-        if (window.examFinished) return;
-        try {
-          const examId = window.examData?.examId;
-          const studentId = window.examData?.studentId;
-          if (!examId || !studentId) return;
-
-          const resultRef = getStudentDocRef(examId);
-          const snap = await getDoc(resultRef);
-          const currentStatus = snap.exists() ? snap.data().status : null;
-          if (currentStatus === "completed" || currentStatus === "incomplete")
-            return;
-
-          await setDoc(
-            resultRef,
-            {
-              examId,
-              studentId,
-              status: currentStatus ?? "in-progress",
-              lastCheatingUpdate: new Date(),
-            },
-            { merge: true },
-          );
-        } catch (err) {
-          console.error("logCheatingEvent error:", err);
-        }
-      };
       async function markInProgress() {
         try {
           const examId = window.examData?.examId;
@@ -957,6 +973,147 @@
         }
       }
 
+      class RingRecorder {
+        constructor(getStream, label, segMs = CHEAT_CLIP_SEGMENT_MS) {
+          this.getStream = getStream;
+          this.label = label;
+          this.segMs = segMs;
+          this.stopped = true;
+          this.staggerTimer = null;
+          this.slots = [0, 1].map(() => ({
+            rec: null,
+            startedAt: 0,
+            chunks: [],
+            held: false,
+            retryTimer: null,
+            segmentTimer: null,
+            captureTimer: null,
+            onFinish: null,
+          }));
+        }
+
+        start() {
+          if (!this.stopped) return;
+          this.stopped = false;
+          this._run(this.slots[0]);
+          this.staggerTimer = setTimeout(
+            () => this._run(this.slots[1]),
+            this.segMs / 2,
+          );
+        }
+
+        stop() {
+          this.stopped = true;
+          clearTimeout(this.staggerTimer);
+          for (const slot of this.slots) {
+            clearTimeout(slot.retryTimer);
+            clearTimeout(slot.segmentTimer);
+            if (slot.rec?.state === "recording") slot.rec.stop();
+          }
+        }
+
+        capture(postMs) {
+          const slot = this.slots
+            .filter(
+              (candidate) =>
+                candidate.rec?.state === "recording" && !candidate.held,
+            )
+            .sort((a, b) => a.startedAt - b.startedAt)[0];
+          if (!slot) return Promise.resolve(null);
+
+          slot.held = true;
+          return new Promise((resolve) => {
+            slot.onFinish = resolve;
+            slot.captureTimer = setTimeout(() => {
+              if (slot.rec?.state === "recording") slot.rec.stop();
+              else resolve(null);
+            }, postMs);
+          });
+        }
+
+        _run(slot) {
+          if (this.stopped) return;
+          const stream = this.getStream();
+          if (!stream?.active || typeof MediaRecorder === "undefined") {
+            slot.retryTimer = setTimeout(() => this._run(slot), 1000);
+            return;
+          }
+
+          let recorder;
+          try {
+            const mimeType = pickMimeType();
+            recorder = new MediaRecorder(stream, {
+              ...(mimeType ? { mimeType } : {}),
+              videoBitsPerSecond: 800_000,
+            });
+          } catch (err) {
+            console.warn(`${this.label} ring recorder failed:`, err);
+            slot.retryTimer = setTimeout(() => this._run(slot), 2000);
+            return;
+          }
+
+          const chunks = [];
+          slot.rec = recorder;
+          slot.chunks = chunks;
+          slot.startedAt = performance.now();
+          recorder.ondataavailable = (event) => {
+            if (event.data?.size > 0) chunks.push(event.data);
+          };
+          recorder.onstop = async () => {
+            clearTimeout(slot.segmentTimer);
+            clearTimeout(slot.captureTimer);
+            const onFinish = slot.onFinish;
+            slot.onFinish = null;
+            slot.held = false;
+
+            if (onFinish) {
+              let blob = chunks.length
+                ? new Blob(chunks, {
+                    type: recorder.mimeType || "video/webm",
+                  })
+                : null;
+              if (blob?.type.includes("webm")) {
+                try {
+                  blob = await setWebmDuration(
+                    blob,
+                    performance.now() - slot.startedAt,
+                  );
+                } catch (err) {
+                  console.warn(`${this.label} ring duration fix failed:`, err);
+                }
+              }
+              onFinish(blob);
+            }
+
+            slot.chunks = [];
+            if (!this.stopped) this._run(slot);
+          };
+          recorder.onerror = (event) => {
+            console.warn(`${this.label} ring recorder error:`, event.error);
+            if (recorder.state === "recording") recorder.stop();
+          };
+          recorder.start(250);
+          slot.segmentTimer = setTimeout(() => {
+            if (!slot.held && recorder.state === "recording") recorder.stop();
+          }, this.segMs);
+        }
+      }
+
+      window.cameraRing = new RingRecorder(
+        () => getLiveCameraStream() || window.cameraCaptureStream,
+        "camera",
+      );
+      window.screenRing = new RingRecorder(
+        () =>
+          window.cheatCaptureStream?.active ? window.cheatCaptureStream : null,
+        "screen",
+      );
+      window.startRings = function startRings() {};
+      window.stopRings = function stopRings() {
+        window.cameraRing.stop();
+        window.screenRing.stop();
+      };
+
       function withTimeout(promise, ms) {
         let timeoutId;
         return Promise.race([
@@ -1084,14 +1241,14 @@
           return;
         }
 
-        const ok = await uploadCheatClip(
+        const upload = await uploadCheatClip(
           examId,
           blobs,
           pending.startedAt,
           pending.startCount,
           pending.startCount,
         );
-        if (ok) clearPendingStill(pending.startedAt);
+        if (upload.uploaded) clearPendingStill(pending.startedAt);
       }
 
       async function recordCheatClip(examId) {
@@ -1103,97 +1260,122 @@
         }
         window.cheatClipBusy = true;
 
-        let blobs = null;
         const stills = {};
-        const startedAt = Date.now();
+        const startedAt = window.awayStartedAt || Date.now();
         const startCount = window.lastClippedCount + 1;
         let endCount = startCount;
+        let videoBlobs = {};
+        let stillUpload = { clipNumber: null, uploaded: false };
 
         try {
-          const hasCamera = await startCameraCapture();
-          let cameraStill = await stillFromVideo(
-            document.getElementById("input_video"),
+          const cameraStream =
+            getLiveCameraStream() || window.cameraCaptureStream;
+          if (!cameraStream?.active) await startCameraCapture();
+          const hasCamera = Boolean(
+            (getLiveCameraStream() || window.cameraCaptureStream)?.active,
           );
-          if (!cameraStill && hasCamera) {
-            cameraStill = await withTimeout(
-              stillFromStream(window.cameraCaptureStream),
-              1000,
-            );
-          }
-          if (cameraStill) {
-            stills.camera = cameraStill;
-            await savePendingStill(examId, startedAt, startCount, stills);
-          }
+          tryInheritParentScreenStream();
+          const screenStream =
+            isPcExam() && window.cheatCaptureStream?.active
+              ? window.cheatCaptureStream
+              : null;
 
-          const hasScreen = isPcExam() ? await startScreenCapture() : false;
-          const screenStream = hasScreen ? window.cheatCaptureStream : null;
-          const screenRecording = screenStream
-            ? recordBlob(screenStream, CHEAT_CLIP_DURATION_MS, "screen")
-            : Promise.resolve(null);
           const cameraRecording = hasCamera
             ? recordCameraBlob(CHEAT_CLIP_DURATION_MS)
             : Promise.resolve(null);
+          const screenRecording = screenStream
+            ? recordBlob(screenStream, CHEAT_CLIP_DURATION_MS, "screen")
+            : Promise.resolve(null);
 
-          if (!screenStream && !hasCamera && !Object.keys(stills).length) {
+          if (!screenStream && !hasCamera) {
             console.warn(
               "No screen or camera capture available, skipping clip.",
             );
             return;
           }
 
+          const cameraStillPromise = (async () => {
+            const still = await stillFromVideo(
+              document.getElementById("input_video"),
+            );
+            if (still || !hasCamera) return still;
+            return withTimeout(
+              stillFromStream(
+                getLiveCameraStream() || window.cameraCaptureStream,
+              ),
+              1000,
+            );
+          })();
           const screenStillPromise = screenStream
             ? withTimeout(stillFromStream(screenStream), 2000).then(
-                async (screenStill) => {
-                  if (screenStill) {
-                    stills.screen = screenStill;
-                    await savePendingStill(
-                      examId,
-                      startedAt,
-                      startCount,
-                      stills,
-                    );
-                  }
-                  return screenStill;
-                },
+                (screenStill) => screenStill,
               )
             : Promise.resolve(null);
 
-          const [screenBlob, cameraBlob] = await Promise.all([
+          const stillUploadPromise = Promise.all([
+            cameraStillPromise,
+            screenStillPromise,
+          ]).then(async ([cameraStill, screenStill]) => {
+            if (cameraStill) stills.camera = cameraStill;
+            if (screenStill) stills.screen = screenStill;
+            if (!Object.keys(stills).length) {
+              return { clipNumber: null, uploaded: false };
+            }
+            try {
+              await savePendingStill(examId, startedAt, startCount, stills);
+            } catch (err) {
+              console.warn("Could not save backup still locally:", err);
+            }
+            return uploadCheatClip(
+              examId,
+              stills,
+              startedAt,
+              startCount,
+              startCount,
+            );
+          }).catch((err) => {
+            console.error("Could not prepare backup still:", err);
+            return { clipNumber: null, uploaded: false };
+          });
+
+          const [screenBlob, cameraBlob, stillResult] = await Promise.all([
             screenRecording,
             cameraRecording,
-            screenStillPromise,
+            stillUploadPromise,
           ]);
-
-          blobs = {};
           if (screenBlob) {
-            blobs.screen = screenBlob;
+            videoBlobs.screen = screenBlob;
           } else if (stills.screen) {
-            blobs.screen = stills.screen;
             console.warn("Screen clip failed, using photo.");
           }
           if (cameraBlob) {
-            blobs.camera = cameraBlob;
+            videoBlobs.camera = cameraBlob;
           } else if (stills.camera) {
-            blobs.camera = stills.camera;
             console.warn("Camera clip failed, using photo.");
           }
-          if (Object.keys(blobs).length === 0) return;
 
           endCount = Number(window.cheatingCount || startCount);
           window.lastClippedCount = endCount;
+          stillUpload = stillResult;
         } catch (err) {
           console.error("Cheat clip error:", err);
         } finally {
           window.cheatClipBusy = false;
         }
 
-        if (!blobs) return;
-
-        uploadCheatClip(examId, blobs, startedAt, startCount, endCount).then(
-          (ok) => {
-            if (ok) clearPendingStill(startedAt);
-          },
+        if (!Object.keys(videoBlobs).length) {
+          if (stillUpload.uploaded) clearPendingStill(startedAt);
+          return;
+        }
+        const videoUpload = await uploadCheatClip(
+          examId,
+          videoBlobs,
+          startedAt,
+          startCount,
+          endCount,
+          stillUpload.clipNumber,
         );
+        if (videoUpload.uploaded) clearPendingStill(startedAt);
       }
 
       async function uploadCheatClip(
@@ -1202,28 +1384,35 @@
         startedAt,
         startCount,
         endCount,
+        clipNumber = null,
       ) {
+        let data;
+        const parts = {};
+        for (const [kind, blob] of Object.entries(blobs)) {
+          parts[kind] = blob.type.startsWith("image/")
+            ? "image/jpeg"
+            : blob.type.startsWith("video/mp4")
+              ? "video/mp4"
+              : "video/webm";
+        }
         try {
-          const parts = {};
-          for (const [kind, blob] of Object.entries(blobs)) {
-            parts[kind] = blob.type.startsWith("image/")
-              ? "image/jpeg"
-              : blob.type.startsWith("video/mp4")
-                ? "video/mp4"
-                : "video/webm";
-          }
-
-          // ONE request = ONE clip number with both files
           const requestFn = httpsCallable(functions, "getCheatClipUploadUrl");
-          const { data } = await requestFn({
+          const response = await requestFn({
             examId,
             occurredAt: startedAt,
             cheatCount: endCount,
             startCheatCount: startCount,
             endCheatCount: endCount,
             parts,
+            clipNumber,
           });
+          data = response.data;
+        } catch (err) {
+          console.error("Cheat clip URL request failed:", err);
+          return { clipNumber: null, uploaded: false };
+        }
 
+        try {
           await Promise.all(
             Object.entries(blobs).map(async ([kind, blob]) => {
               const upload = data?.uploads?.[kind];
@@ -1246,11 +1435,28 @@
               console.log(`${kind} cheat clip uploaded:`, upload.filePath);
             }),
           );
-          return true;
         } catch (err) {
           console.error("Cheat clip upload error:", err);
-          return false;
+          return { clipNumber: data.clipNumber, uploaded: false };
         }
+
+        try {
+          const finalizeFn = httpsCallable(functions, "getCheatClipUploadUrl");
+          await finalizeFn({
+            examId,
+            occurredAt: startedAt,
+            cheatCount: endCount,
+            startCheatCount: startCount,
+            endCheatCount: endCount,
+            parts,
+            clipNumber: data.clipNumber,
+            finalize: true,
+          });
+        } catch (err) {
+          console.error("Cheat clip finalization failed:", err);
+          return { clipNumber: data.clipNumber, uploaded: false };
+        }
+        return { clipNumber: data.clipNumber, uploaded: true };
       }
 
       window.reportProctorEvent = function (type, durationMs = 0) {
@@ -1276,64 +1482,37 @@
 
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
+        const blocked = () =>
+          !window.allowStrikes ||
+          window.examFinished ||
+          window.hasSubmitted ||
+          window.submitting;
         return async function registerStrikeOnce() {
-          if (window.examFinished || window.hasSubmitted || window.submitting)
-            return;
+          if (blocked()) return;
           const now = Date.now();
           if (now - lastAway < 1200) return;
           lastAway = now;
 
           if (window.strikesLoadedPromise) await window.strikesLoadedPromise;
+          if (blocked()) return;
 
-          // Re-check after await: a strike that was waiting can't land after submit/time-up
-          if (window.examFinished || window.hasSubmitted || window.submitting)
-            return;
-
-          // Local counter (use cheatingCount consistently)
-          window.cheatingCount = (window.cheatingCount || 0) + 1;
-          localStorage.setItem("cheatingCount", window.cheatingCount);
-
-          document.getElementById("strikeBox").textContent =
-            `Strikes: ${window.cheatingCount}`;
-
-          // Update status metadata (no increment here)
-          await window.logCheatingEvent();
-
-          // Push increment to Firestore (atomic, never decreases)
           const examId = window.examData?.examId;
-          const studentId = window.examData?.studentId;
-          if (examId && studentId) {
-            const resultRef = getStudentDocRef(examId);
-            await safeSetDoc(
-              resultRef,
-              {
-                cheatingCount: increment(1),
-              },
-              { merge: true },
-            );
+          if (!examId) return;
 
-            try {
-              await recordCheatClip(examId);
-            } catch (clipErr) {
-              console.error("recordCheatClip failed:", clipErr);
-            }
+          window.renderStrikes((window.cheatingCount || 0) + 1);
+          const clipPromise = recordCheatClip(examId).catch((clipErr) =>
+            console.error("recordCheatClip failed:", clipErr),
+          );
+          try {
+            const data = await sendStrike(examId, crypto.randomUUID());
+            window.renderStrikes(data.cheatingCount);
+          } catch (err) {
+            console.warn("Strike not accepted:", err.code || err.message);
+            await syncStrikesFromServer(examId);
           }
-
-          console.log("Strike registered:", window.cheatingCount);
+          await clipPromise;
         };
       })();
-
-      async function pushStrikeToFirestore(examId, studentId) {
-        const resultRef = getStudentDocRef(examId);
-
-        await safeSetDoc(
-          resultRef,
-          {
-            cheatingCount: increment(1),
-          },
-          { merge: true },
-        );
-      }
 
       // Mark incomplete (keep this in module so beforeunload can call it safely)
       // window.markStoppedIfNeeded = function () {
@@ -1426,6 +1605,7 @@
           window.submitting = true;
           window.allowStrikes = false;
           window.disableGazeDetection = true;
+          window.stopRings?.();
 
           // CRITICAL: Stop camera and MediaPipe immediately to free up resources
           try {
@@ -1516,6 +1696,7 @@
       };
 
       function handleSuccessfulSubmission(examId, result) {
+        window.stopRings?.();
         clearExamStorage();
 
         window.examFinished = true;
@@ -1857,6 +2038,7 @@
         renderNextOrSubmitButton();
         window.fitExamContent?.();
       }
+      window.refreshExamQuestion = () => showQuestion(currentQuestionIndex);
       function renderNextOrSubmitButton() {
         const btn = document.getElementById("nextQuestion");
         if (!btn) return;
@@ -2085,45 +2267,21 @@
 
       async function loadExistingStrikes() {
         const examId = window.examData?.examId;
-        const studentId = window.examData?.studentId;
-        if (!examId || !studentId) return;
+        if (!examId || !window.authUid) return;
 
-        // Start from localStorage
-        window.cheatingCount = parseInt(
-          localStorage.getItem("cheatingCount") ?? "0",
-          10,
-        );
-
-        const resultRef = getStudentDocRef(examId);
-        const snap = await getDoc(resultRef);
-
-        let remote = 0;
-        if (snap.exists()) {
-          const saved = snap.data().cheatingCount;
-          if (typeof saved === "number") {
-            remote = saved;
-            // never lower local strikes
-            window.cheatingCount = Math.max(window.cheatingCount, saved);
-            localStorage.setItem("cheatingCount", window.cheatingCount);
+        if (!(await syncStrikesFromServer(examId))) {
+          try {
+            const snap = await getDoc(getStudentDocRef(examId));
+            const remote = snap.exists()
+              ? Number(snap.data().cheatingCount)
+              : 0;
+            window.renderStrikes(Number.isFinite(remote) ? remote : 0);
+          } catch (err) {
+            console.warn("Strike fallback read failed:", err);
           }
         }
 
         window.lastClippedCount = window.cheatingCount;
-
-        // If local is higher than remote, push absolute value
-        if (window.cheatingCount > remote) {
-          await safeSetDoc(
-            resultRef,
-            {
-              cheatingCount: window.cheatingCount,
-            },
-            { merge: true },
-          );
-          console.log("Synced strikes to Firestore:", window.cheatingCount);
-        }
-
-        document.getElementById("strikeBox").textContent =
-          `Strikes: ${window.cheatingCount}`;
       }
       // Handle the OK button in the answer required modal
       document.getElementById("answerOkBtn").onclick = function () {
@@ -3022,33 +3180,6 @@
         padding-top: 17px;
         border-top: 1px solid #e6e9e6;
       }
-      .footer-status-wrap {
-        min-width: 0;
-      }
-      .footer-label {
-        margin-bottom: 7px;
-        color: #85898d;
-        font:
-          500 8px/1.4 "DM Mono",
-          monospace;
-        letter-spacing: 0.9px;
-        text-transform: uppercase;
-      }
-      #strikeBox.strike-pill {
-        position: static !important;
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        margin: 0;
-        padding: 6px 9px;
-        border: 1px solid #e7bfc8;
-        border-radius: 4px;
-        background: #fff1f3;
-        color: #c5334e;
-        font:
-          700 10px/1.35 "DM Mono",
-          monospace;
-      }
       .footer-note {
         margin: 7px 0 0;
         max-width: 420px;
@@ -3611,9 +3742,6 @@
         margin-top: 16px;
         padding-top: 14px;
       }
-      .exam-footer .footer-status-wrap {
-        display: none;
-      }
       .camera-panel {
         height: 100%;
         min-height: 0;
@@ -3878,6 +4006,32 @@
           padding-right: 112px;
         }
       }
+      .hero-right {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #strikeBox.strike-pill {
+        display: inline-flex;
+        align-items: center;
+        white-space: nowrap;
+        padding: 8px 10px;
+        border-radius: 4px;
+        background: #25262d;
+        border: 1px solid #42444c;
+        color: #e0e1e5;
+        font: 500 9px/1.4 "DM Mono", monospace;
+      }
+      #strikeBox.strike-pill.has-strikes {
+        background: #fff1f3;
+        border-color: #e7bfc8;
+        color: #c5334e;
+        font-weight: 700;
+      }
     </style>
   </head>
 
@@ -3905,8 +4059,18 @@
               <h2>Answer Sheet</h2>
               <p>Choose the best answer for each question.</p>
             </div>
-            <div class="hero-status">
-              <span class="hero-status-dot"></span> Proctored session
+            <div class="hero-right">
+              <div
+                id="strikeBox"
+                class="strike-pill"
+                role="status"
+                aria-live="polite"
+              >
+                Strikes: –
+              </div>
+              <div class="hero-status">
+                <span class="hero-status-dot"></span> Proctored session
+              </div>
             </div>
           </div>
 
@@ -3940,9 +4104,6 @@
               </div>
 
               <div class="exam-footer">
-                <div class="footer-status-wrap" aria-hidden="true">
-                  <div id="strikeBox" style="display: none">Strikes: 0</div>
-                </div>
                 <button class="btn" id="nextQuestion" type="button">
                   Next
                 </button>
@@ -4127,7 +4288,6 @@
       const submitBtn = document.getElementById("submitBtn");
       const examCard = document.getElementById("examCard");
       const gazeBubble = document.getElementById("gazeBubble");
-      const strikeBox = document.getElementById("strikeBox");
 
       let totalSeconds = 60 * 60;
       window.allowStrikes = false;
@@ -4161,6 +4321,7 @@
         if (trackingDisposed) return;
         trackingDisposed = true;
         window.__examTrackingDisposed = true;
+        window.stopRings?.();
         if (animationFrameId !== null) {
           cancelAnimationFrame(animationFrameId);
           animationFrameId = null;
@@ -4234,31 +4395,85 @@
       let gateTimer = null;
       let gateDeadline = 0;
 
-      window.fitExamContent = function () {
-        const root = document.documentElement.style;
+      const MIN_FIT = 0.75;
+      let sharedFit = 1;
+      let examFitCalibrated = false;
+      let examFitCalibrating = false;
+
+      function fitIsActive() {
         const card = document.getElementById("examCard");
+        return window.innerWidth > 860 && card && card.offsetParent !== null;
+      }
+
+      function measureFit(start) {
+        const root = document.documentElement.style;
         const question = document.querySelector("#examContent .question");
-        if (
-          window.innerWidth <= 860 ||
-          !card ||
-          card.offsetParent === null ||
-          !question
-        ) {
-          root.setProperty("--fit", "1");
-          return;
-        }
-        let fit = 1;
+        if (!question) return start;
+        let fit = start;
         root.setProperty("--fit", fit);
         while (
           question.scrollHeight > question.clientHeight + 1 &&
-          fit > 0.75
+          fit > MIN_FIT
         ) {
           fit = Math.round((fit - 0.04) * 100) / 100;
           root.setProperty("--fit", fit);
         }
+        return fit;
+      }
+
+      window.calibrateExamFit = function () {
+        if (
+          examFitCalibrating ||
+          !fitIsActive() ||
+          !window.questions?.length
+        ) {
+          return;
+        }
+        const content = document.getElementById("examContent");
+        if (!content) return;
+
+        examFitCalibrating = true;
+        let worst = 1;
+        window.questions.forEach((q, i) => {
+          content.innerHTML = generateQuestionHtml(
+            q,
+            i,
+            window.answers,
+            window.matchingPool || [],
+          );
+          worst = measureFit(worst);
+        });
+        sharedFit = worst;
+        examFitCalibrated = true;
+        examFitCalibrating = false;
+        document.documentElement.style.setProperty("--fit", sharedFit);
+
+        window.refreshExamQuestion?.();
       };
-      window.addEventListener("resize", () => window.fitExamContent());
-      document.fonts?.ready.then(() => window.fitExamContent());
+
+      window.fitExamContent = function () {
+        const root = document.documentElement.style;
+        if (!fitIsActive()) {
+          examFitCalibrated = false;
+          root.setProperty("--fit", "1");
+          return;
+        }
+        if (!examFitCalibrated) window.calibrateExamFit();
+        root.setProperty("--fit", sharedFit);
+      };
+
+      let fitResizeTimer;
+      window.addEventListener("resize", () => {
+        clearTimeout(fitResizeTimer);
+        fitResizeTimer = setTimeout(() => {
+          examFitCalibrated = false;
+          window.fitExamContent();
+        }, 150);
+      });
+      document.fonts?.ready.then(() => {
+        examFitCalibrated = false;
+        window.fitExamContent();
+      });
       const examPanelBody = document.querySelector(".exam-panel-body");
       if (examPanelBody) {
         new ResizeObserver(() => window.fitExamContent()).observe(
@@ -4278,7 +4493,7 @@
         sessionStorage.setItem("examStarted", "1");
         document.getElementById("examGate").style.display = "none";
         document.getElementById("examCard").style.display = "block";
-        strikeBox.textContent = `Strikes: ${window.cheatingCount || 0}`;
+        window.startRings?.();
         window.fitExamContent();
         console.log("Face verified for 5s → starting exam…");
       }

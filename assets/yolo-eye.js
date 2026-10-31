@@ -36,7 +36,7 @@ const YoloEye = (() => {
     disagree: 0.10, // (non-fusion modes) ox difference above this: pick best eye instead of averaging
     minCut: 0.5, // 1-Euro min cutoff on the eye offset (lower = steadier when still)
     beta: 4, // 1-Euro speed coefficient (features are in eye-widths, so this needs to be SMALL; try 1)
-    headCompDelay: 150, // ms: align head compensation with delayed visual response
+    headCompDelay: 300, // ms: align head compensation with delayed visual response
     boxSmoothing: 0.85, // smoothing of the crop box position
     gpuRetries: 0, // 0 = go straight to CPU after GPU reset
 

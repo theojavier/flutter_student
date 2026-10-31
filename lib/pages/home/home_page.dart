@@ -151,44 +151,42 @@ class _HomePageState extends State<HomePage> {
     // RESULTS
     // ------------------------------------------------------------
 
-    final examResultsSnap = await db.collection("examResults").get();
-
-    final List<Map<String, dynamic>> results = [];
-
-    int completedCount = 0;
-
     final authUid = _authUid;
     if (authUid == null) {
       throw StateError('A signed-in student is required to load exam results.');
     }
 
-    for (final examResultDoc in examResultsSnap.docs) {
-      final studentSnap = await examResultDoc.reference
-          .collection("students")
-          .doc(authUid)
-          .get();
+    final List<Map<String, dynamic>> results = [];
+    int completedCount = 0;
 
+    final studentSnaps = await Future.wait(
+      examsSnap.docs.map(
+        (examDoc) => db
+            .collection("examResults")
+            .doc(examDoc.id)
+            .collection("students")
+            .doc(authUid)
+            .get(),
+      ),
+    );
+
+    for (var i = 0; i < examsSnap.docs.length; i++) {
+      final studentSnap = studentSnaps[i];
       if (!studentSnap.exists) continue;
 
+      final examDoc = examsSnap.docs[i];
+      final examData = examDoc.data();
       final data = studentSnap.data() as Map<String, dynamic>;
-
       final status = (data["status"] ?? "incomplete").toString();
-
-      final score = data["score"] ?? "—";
-
-      final submittedAt = _toDate(data["submittedAt"]);
-
-      if (status == "completed") {
-        completedCount++;
-      }
+      if (status == "completed") completedCount++;
 
       results.add({
-        "subject": data["subject"] ?? "—",
-        "score": score,
+        "subject": data["subject"] ?? examData["subject"] ?? "—",
+        "score": data["score"] ?? "—",
         "status": status,
-        "submittedAt": submittedAt,
+        "submittedAt": _toDate(data["submittedAt"]),
         "total": data["total"] ?? "—",
-        "examId": data["examId"] ?? examResultDoc.id,
+        "examId": data["examId"] ?? examDoc.id,
       });
     }
 

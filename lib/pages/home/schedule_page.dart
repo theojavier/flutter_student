@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import '../../helpers/SecureStorageHelper.dart';
+
+typedef _Docs = List<DocumentSnapshot<Map<String, dynamic>>>;
 
 class SchedulePage extends StatefulWidget {
   const SchedulePage({super.key});
@@ -34,13 +38,13 @@ String _text(dynamic v, [String fallback = '']) {
 String _norm(String s) => s.trim().toLowerCase();
 
 /// "08:30" -> 510
-int? _parseHm(dynamic v) {
-  final parts = _text(v).split(':');
-  if (parts.length < 2) return null;
-  final h = int.tryParse(parts[0]);
-  final m = int.tryParse(parts[1]);
-  if (h == null || m == null) return null;
-  return h * 60 + m;
+int? _parseHm(dynamic value) {
+  final match = RegExp(r'^(\d{1,2}):(\d{2})$').firstMatch(_text(value));
+  if (match == null) return null;
+  final hour = int.parse(match.group(1)!);
+  final minute = int.parse(match.group(2)!);
+  if (hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
 }
 
 DateTime _mondayOf(DateTime d) =>
@@ -49,8 +53,7 @@ DateTime _mondayOf(DateTime d) =>
 bool _sameDay(DateTime a, DateTime b) =>
     a.year == b.year && a.month == b.month && a.day == b.day;
 
-/// Reads class days from `days` (list) or `day` (string).
-/// Accepts "Mon", "Monday", "Mon, Wed", or numbers 1-7 (Mon = 1).
+/// Reads the canonical class schedule, with support for older day fields.
 Set<int> _classDays(Map<String, dynamic> d) {
   const names = {
     'mon': 1,
@@ -61,24 +64,104 @@ Set<int> _classDays(Map<String, dynamic> d) {
     'sat': 6,
     'sun': 7,
   };
-  final raw = d['days'] ?? d['day'] ?? d['dayOfWeek'];
+
+  int? weekdayOf(dynamic item) {
+    if (item is num && item >= 1 && item <= 7) return item.toInt();
+    final value = item.toString().trim().toLowerCase();
+    if (value.length < 3) return null;
+    return names[value.substring(0, 3)];
+  }
+
+  final out = <int>{};
+  final schedules = d['schedules'];
+  if (schedules is List) {
+    for (final rawSchedule in schedules) {
+      if (rawSchedule is! Map) continue;
+      final weekday = weekdayOf(rawSchedule['dayOfWeek']);
+      if (weekday != null) out.add(weekday);
+    }
+  }
+  if (out.isNotEmpty) return out;
+
+  final rawScheduleDays = d['scheduleDays'];
+  final raw = rawScheduleDays is List && rawScheduleDays.isNotEmpty
+      ? rawScheduleDays
+      : d['days'] ?? d['day'] ?? d['dayOfWeek'];
   final List items = raw is List
       ? raw
       : raw is String
       ? raw.split(RegExp(r'[,/;\s]+'))
       : const [];
-  final out = <int>{};
   for (final item in items) {
-    if (item is num && item >= 1 && item <= 7) {
-      out.add(item.toInt());
-      continue;
-    }
-    final s = item.toString().trim().toLowerCase();
-    if (s.length < 3) continue;
-    final wd = names[s.substring(0, 3)];
-    if (wd != null) out.add(wd);
+    final weekday = weekdayOf(item);
+    if (weekday != null) out.add(weekday);
   }
   return out;
+}
+
+/// Every (weekday, start, end) session of a class.
+List<({int weekday, int start, int end})> _classScheduleSlots(
+  Map<String, dynamic> data,
+) {
+  int? minutesOf(Map<dynamic, dynamic> source, String key, String labelKey) {
+    final value = source[key];
+    if (value is num) return value.toInt();
+    return _parseHm(source[labelKey]);
+  }
+
+  const weekdays = {
+    'mon': 1,
+    'tue': 2,
+    'wed': 3,
+    'thu': 4,
+    'fri': 5,
+    'sat': 6,
+    'sun': 7,
+  };
+
+  int? weekdayOf(dynamic item) {
+    if (item is num && item >= 1 && item <= 7) return item.toInt();
+    final value = item.toString().trim().toLowerCase();
+    if (value.length < 3) return null;
+    return weekdays[value.substring(0, 3)];
+  }
+
+  final slots = <({int weekday, int start, int end})>[];
+  final rawSchedules = data['schedules'];
+  if (rawSchedules is List && rawSchedules.isNotEmpty) {
+    for (final rawSchedule in rawSchedules) {
+      if (rawSchedule is! Map) continue;
+      final weekday = weekdayOf(rawSchedule['dayOfWeek']);
+      final start = minutesOf(rawSchedule, 'startMinutes', 'startLabel');
+      if (weekday == null || start == null) continue;
+      final duration = _intOf(rawSchedule['durationMin']);
+      final end =
+          minutesOf(rawSchedule, 'endMinutes', 'endLabel') ??
+          (duration == null || duration <= 0 ? null : start + duration);
+      if (end != null && end > start) {
+        slots.add((weekday: weekday, start: start, end: end));
+      }
+    }
+  } else {
+    // Old single-slot format
+    final start = minutesOf(data, 'startMinutes', 'startLabel');
+    final duration = _intOf(data['durationMin']);
+    final end =
+        minutesOf(data, 'endMinutes', 'endLabel') ??
+        (start == null || duration == null || duration <= 0
+            ? null
+            : start + duration);
+    if (start != null && end != null && end > start) {
+      for (final weekday in _classDays(data)) {
+        slots.add((weekday: weekday, start: start, end: end));
+      }
+    }
+  }
+  slots.sort((a, b) {
+    final byDay = a.weekday.compareTo(b.weekday);
+    return byDay != 0 ? byDay : a.start.compareTo(b.start);
+  });
+  return slots;
 }
 
 // ============================================================
@@ -88,6 +171,7 @@ Set<int> _classDays(Map<String, dynamic> d) {
 class _Entry {
   const _Entry({
     required this.title,
+    this.classId = '',
     required this.start,
     required this.end,
     required this.isExam,
@@ -98,6 +182,7 @@ class _Entry {
   });
 
   final String title;
+  final String classId;
   final DateTime start;
   final DateTime end;
   final bool isExam;
@@ -105,10 +190,10 @@ class _Entry {
   final String room;
   final String adviser;
 
-  /// True when an approved exam set this class's date/time.
+  /// True when an approved exam is linked to this class.
   final bool linked;
 
-  String get key => '$title|${start.toIso8601String()}|$isExam';
+  String get key => '$classId|$title|${start.toIso8601String()}|$isExam';
 
   /// Minutes from midnight (clamped to the start day).
   int get startMin => start.hour * 60 + start.minute;
@@ -290,10 +375,11 @@ class _SchedulePageState extends State<SchedulePage> {
 
   bool _loading = true;
   bool _missingInfo = false;
+  String? _loadError;
   String? _yearBlock;
 
-  Stream<QuerySnapshot<Map<String, dynamic>>>? _classesStream;
-  Stream<QuerySnapshot<Map<String, dynamic>>>? _examsStream;
+  Stream<_Docs>? _classesStream;
+  Stream<_Docs>? _examsStream;
 
   @override
   void initState() {
@@ -314,23 +400,75 @@ class _SchedulePageState extends State<SchedulePage> {
     final storedYearBlock = await SecureStorageHelper.read('yearBlock');
 
     String profileCode = '';
+    String profileYearBlock = '';
+    var classIds = <String>[];
+
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
       try {
         final profile = await db.collection('users').doc(uid).get();
-        profileCode = _text(profile.data()?['programCode']);
-      } catch (_) {}
+        final user = profile.data();
+        if (user != null) {
+          profileCode = _text(user['programCode']);
+          profileYearBlock = _text(user['yearBlock']);
+          final raw = user['classIds'];
+          if (raw is List) {
+            classIds = raw
+                .map((item) => item.toString().trim())
+                .where((value) => value.isNotEmpty)
+                .toSet()
+                .toList();
+          }
+        }
+      } catch (error) {
+        if (!mounted) return;
+        setState(() {
+          _loadError = 'Unable to load your student profile: $error';
+          _loading = false;
+        });
+        return;
+      }
     }
 
-    final programValues = <String>{
-      for (final v in [profileCode, storedCode, storedProgram])
-        if ((v ?? '').trim().isNotEmpty) v!.trim(),
-    }.toList();
-    final yearBlock = (storedYearBlock ?? '').trim();
+    final programValue = [
+      profileCode,
+      (storedCode ?? '').trim(),
+      (storedProgram ?? '').trim(),
+    ].firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    final yearBlock = [
+      profileYearBlock,
+      (storedYearBlock ?? '').trim(),
+    ].firstWhere((value) => value.isNotEmpty, orElse: () => '');
 
     if (!mounted) return;
 
-    if (programValues.isEmpty || yearBlock.isEmpty) {
+    // Irregular students are enrolled in specific classes rather than a block.
+    if (_norm(yearBlock) == 'irregular') {
+      final ids = classIds.take(30).toList();
+      setState(() {
+        _yearBlock = 'Irregular · ${classIds.length} classes';
+        _classesStream = _combine([
+          for (final id in ids)
+            db
+                .collection('classes')
+                .doc(id)
+                .snapshots()
+                .map(
+                  (snapshot) => <DocumentSnapshot<Map<String, dynamic>>>[
+                    snapshot,
+                  ],
+                ),
+        ]);
+        _examsStream = _combine([
+          for (final id in ids)
+            _docsOf(db.collection('exams').where('classId', isEqualTo: id)),
+        ]);
+        _loading = false;
+      });
+      return;
+    }
+
+    if (programValue.isEmpty || yearBlock.isEmpty) {
       setState(() {
         _missingInfo = true;
         _loading = false;
@@ -340,18 +478,62 @@ class _SchedulePageState extends State<SchedulePage> {
 
     setState(() {
       _yearBlock = yearBlock;
-      _classesStream = db
-          .collection('classes')
-          .where('program', whereIn: programValues)
-          .where('yearBlock', isEqualTo: yearBlock)
-          .snapshots();
-      _examsStream = db
-          .collection('exams')
-          .where('program', whereIn: programValues)
-          .where('yearBlock', isEqualTo: yearBlock)
-          .snapshots();
+      _classesStream = _docsOf(
+        db
+            .collection('classes')
+            .where('program', isEqualTo: programValue)
+            .where('yearBlock', isEqualTo: yearBlock),
+      );
+      _examsStream = _docsOf(
+        db
+            .collection('exams')
+            .where('program', isEqualTo: programValue)
+            .where('yearBlock', isEqualTo: yearBlock),
+      );
       _loading = false;
     });
+  }
+
+  Stream<_Docs> _docsOf(Query<Map<String, dynamic>> query) =>
+      query.snapshots().map(
+        (snapshot) =>
+            List<DocumentSnapshot<Map<String, dynamic>>>.from(snapshot.docs),
+      );
+
+  /// Merges several snapshot streams into one list (no extra packages).
+  Stream<_Docs> _combine(List<Stream<_Docs>> sources) {
+    if (sources.isEmpty) {
+      return Stream.value(<DocumentSnapshot<Map<String, dynamic>>>[]);
+    }
+
+    final latest = List<_Docs?>.filled(sources.length, null);
+    final subscriptions = <StreamSubscription<_Docs>>[];
+    late final StreamController<_Docs> controller;
+
+    void emit() {
+      if (latest.any((docs) => docs == null)) return;
+      controller.add([for (final docs in latest) ...docs!]);
+    }
+
+    controller = StreamController<_Docs>.broadcast(
+      onListen: () {
+        for (var i = 0; i < sources.length; i++) {
+          subscriptions.add(
+            sources[i].listen((docs) {
+              latest[i] = docs;
+              emit();
+            }, onError: controller.addError),
+          );
+        }
+      },
+      onCancel: () async {
+        for (final subscription in subscriptions) {
+          await subscription.cancel();
+        }
+        subscriptions.clear();
+      },
+    );
+    return controller.stream;
   }
 
   // ============================================================
@@ -359,22 +541,18 @@ class _SchedulePageState extends State<SchedulePage> {
   // ============================================================
   //
   // 1. Classes come from the `classes` collection (status == active).
-  // 2. A class repeats weekly on its `days` (if set).
-  // 3. If an APPROVED exam belongs to the same class (same classId, or same
-  //    subject in the same program/year-block), the exam's date and time
-  //    replace the class's regular session on that date.
-  // 4. A class with no `days` and an approved exam appears only on the
-  //    exam's date. With no days and no exam it goes in "Day not set".
+  // 2. Each class repeats weekly for every configured schedule slot.
+  // 3. An approved exam merges only with the matching class session it overlaps.
+  // 4. A class without a usable schedule and without an exam goes in the
+  //    "day or time not set" list.
   // 5. Exams can be anywhere. When anything overlaps in time, the cards
   //    are stacked (see _stackDay).
 
-  _ScheduleData _compose(
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> classDocs,
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> examDocs,
-  ) {
+  _ScheduleData _compose(_Docs classDocs, _Docs examDocs) {
     final exams = <_ExamInfo>[];
     for (final doc in examDocs) {
       final d = doc.data();
+      if (d == null) continue;
       if (_text(d['approvalStatus']) != 'approved') continue;
       final start = _toDate(d['startTime']);
       if (start == null) continue;
@@ -398,61 +576,48 @@ class _SchedulePageState extends State<SchedulePage> {
 
     final entries = <_Entry>[];
     final unplaced = <_Unplaced>[];
-    final examClassInfo = <String, ({String room, String adviser})>{};
+    final examClassInfo =
+        <String, ({String classId, String room, String adviser})>{};
 
     for (final doc in classDocs) {
       final d = doc.data();
+      if (d == null) continue;
       if (_text(d['status']) != 'active') continue;
 
       final subject = _text(d['subject'], 'Untitled class');
       final room = _text(d['roomDefault']);
       final adviser = _text(d['adviserName']);
 
-      final startMin = _intOf(d['startMinutes']) ?? _parseHm(d['startLabel']);
-      final endMin =
-          _intOf(d['endMinutes']) ??
-          _parseHm(d['endLabel']) ??
-          (startMin == null
-              ? null
-              : startMin + (_intOf(d['durationMin']) ?? 60));
-      final days = _classDays(d);
+      final slots = _classScheduleSlots(d);
 
-      final myExams = exams
-          .where(
-            (e) =>
-                e.classId == doc.id ||
-                (e.classId.isEmpty && _norm(e.subject) == _norm(subject)),
-          )
-          .toList();
+      final myExams = exams.where((e) => e.classId == doc.id).toList();
       for (final e in myExams) {
-        examClassInfo[e.id] = (room: room, adviser: adviser);
+        examClassInfo[e.id] = (classId: doc.id, room: room, adviser: adviser);
       }
 
-      if (startMin != null && endMin != null && days.isNotEmpty) {
-        for (final wd in days) {
+      if (slots.isNotEmpty) {
+        for (final slot in slots) {
           final date = DateTime(
             _weekStart.year,
             _weekStart.month,
-            _weekStart.day + (wd - 1),
+            _weekStart.day + (slot.weekday - 1),
           );
-  
           entries.add(
             _Entry(
               title: subject,
+              classId: doc.id,
               start: DateTime(
                 date.year,
                 date.month,
                 date.day,
-                startMin ~/ 60,
-                startMin % 60,
+                slot.start ~/ 60,
+                slot.start % 60,
               ),
               end: DateTime(
                 date.year,
                 date.month,
                 date.day,
-                endMin ~/ 60,
-                endMin % 60,
-              ),
+              ).add(Duration(minutes: slot.end)),
               isExam: false,
               room: room,
               adviser: adviser,
@@ -460,8 +625,19 @@ class _SchedulePageState extends State<SchedulePage> {
           );
         }
       } else if (myExams.isEmpty) {
-        final label = (startMin != null && endMin != null)
-            ? '${_minutesLabel(startMin)} – ${_minutesLabel(endMin)}'
+        final legacyStart =
+            _intOf(d['startMinutes']) ?? _parseHm(d['startLabel']);
+        final duration = _intOf(d['durationMin']);
+        final legacyEnd =
+            _intOf(d['endMinutes']) ??
+            _parseHm(d['endLabel']) ??
+            (legacyStart == null
+                ? null
+                : legacyStart +
+                      (duration != null && duration > 0 ? duration : 60));
+        final label =
+            legacyStart != null && legacyEnd != null && legacyEnd > legacyStart
+            ? '${_minutesLabel(legacyStart)} – ${_minutesLabel(legacyEnd)}'
             : 'Time not set';
         unplaced.add(
           _Unplaced(
@@ -481,36 +657,38 @@ class _SchedulePageState extends State<SchedulePage> {
       _weekStart.day + 7,
     );
     for (final e in exams) {
-  if (e.start.isBefore(_weekStart) || !e.start.isBefore(weekEnd)) continue;
-  final info = examClassInfo[e.id];
+      if (e.start.isBefore(_weekStart) || !e.start.isBefore(weekEnd)) continue;
+      final info = examClassInfo[e.id];
 
-  // Same-subject class that meets at the same time on the exam's day -> one "both" card.
-  final i = entries.indexWhere(
-    (c) =>
-        !c.isExam &&
-        _sameDay(c.start, e.start) &&
-        c.start.isBefore(e.end) &&
-        c.end.isAfter(e.start) &&
-        _norm(c.title) == _norm(e.subject),
-  );
+      // Merge only the matching class session that overlaps this exam.
+      final i = entries.indexWhere(
+        (c) =>
+            !c.isExam &&
+            _sameDay(c.start, e.start) &&
+            c.start.isBefore(e.end) &&
+            c.end.isAfter(e.start) &&
+            e.classId.isNotEmpty &&
+            c.classId == e.classId,
+      );
 
-  final merged = _Entry(
-    title: e.subject,
-    start: e.start,
-    end: e.end,
-    isExam: true,
-    both: i != -1,
-    room: info?.room ?? '',
-    adviser: info?.adviser ?? '',
-    linked: info != null,
-  );
+      final merged = _Entry(
+        title: e.subject,
+        classId: info?.classId ?? e.classId,
+        start: e.start,
+        end: e.end,
+        isExam: true,
+        both: i != -1,
+        room: info?.room ?? '',
+        adviser: info?.adviser ?? '',
+        linked: info != null,
+      );
 
-  if (i != -1) {
-    entries[i] = merged;
-  } else {
-    entries.add(merged);
-  }
-}
+      if (i != -1) {
+        entries[i] = merged;
+      } else {
+        entries.add(merged);
+      }
+    }
 
     entries.sort((a, b) => a.start.compareTo(b.start));
     unplaced.sort((a, b) => a.title.compareTo(b.title));
@@ -612,6 +790,17 @@ class _SchedulePageState extends State<SchedulePage> {
       );
     }
 
+    if (_loadError != null) {
+      return Scaffold(
+        backgroundColor: _bg,
+        body: _stateBox(
+          Icons.error_outline,
+          'Unable to load student profile',
+          _loadError!,
+        ),
+      );
+    }
+
     if (_missingInfo) {
       return Scaffold(
         backgroundColor: _bg,
@@ -708,6 +897,7 @@ class _SchedulePageState extends State<SchedulePage> {
 
   Widget _cardHeader() {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -810,7 +1000,7 @@ class _SchedulePageState extends State<SchedulePage> {
   // ============================================================
 
   Widget _scheduleBody() {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<_Docs>(
       stream: _classesStream,
       builder: (context, classSnap) {
         if (classSnap.hasError) {
@@ -821,7 +1011,7 @@ class _SchedulePageState extends State<SchedulePage> {
           );
         }
 
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        return StreamBuilder<_Docs>(
           stream: _examsStream,
           builder: (context, examSnap) {
             if (examSnap.hasError) {
@@ -835,15 +1025,18 @@ class _SchedulePageState extends State<SchedulePage> {
             if (!classSnap.hasData || !examSnap.hasData) {
               return const Padding(
                 padding: EdgeInsets.symmetric(vertical: 70),
-                child: Center(
-                  child: CircularProgressIndicator(color: _accent),
-                ),
+                child: Center(child: CircularProgressIndicator(color: _accent)),
               );
             }
 
-            final data = _compose(classSnap.data!.docs, examSnap.data!.docs);
+            final classDocs = classSnap.data!
+                .where((doc) => doc.exists)
+                .toList();
+            final examDocs = examSnap.data!;
+            final data = _compose(classDocs, examDocs);
 
             return Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _weeklyTable(data.entries),
@@ -936,15 +1129,15 @@ class _SchedulePageState extends State<SchedulePage> {
               border: Border(top: BorderSide(color: _line)),
             ),
             child: Wrap(
-  spacing: 20,
-  runSpacing: 10,
-  children: [
-    _tableLegend(color: _accent, label: 'CLASS'),
-    _tableLegend(color: _ink, label: 'EXAM'),
-    _tableLegend(color: _accentDark, label: 'CLASS + EXAM'),
-    _tableLegend(color: _todayTint, label: 'TODAY', outlined: true),
-  ],
-),
+              spacing: 20,
+              runSpacing: 10,
+              children: [
+                _tableLegend(color: _accent, label: 'CLASS'),
+                _tableLegend(color: _ink, label: 'EXAM'),
+                _tableLegend(color: _accentDark, label: 'CLASS + EXAM'),
+                _tableLegend(color: _todayTint, label: 'TODAY', outlined: true),
+              ],
+            ),
           ),
         ],
       ),
@@ -1107,12 +1300,11 @@ class _SchedulePageState extends State<SchedulePage> {
   /// The header row stays visible when another card covers the rest.
   Widget _eventCard(_Placed p, {required bool isHovered}) {
     final e = p.entry;
-   final Color color = e.both ? _accentDark : (e.isExam ? _ink : _accent);
-final Color fill = e.both
-    ? const Color(0xFFD3EBDD)
-    : (e.isExam ? _examSoft : _accentSoft);
-    final timeRange =
-        '${_timeFmt.format(e.start)} – ${_timeFmt.format(e.end)}';
+    final Color color = e.both ? _accentDark : (e.isExam ? _ink : _accent);
+    final Color fill = e.both
+        ? const Color(0xFFD3EBDD)
+        : (e.isExam ? _examSoft : _accentSoft);
+    final timeRange = '${_timeFmt.format(e.start)} – ${_timeFmt.format(e.end)}';
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
@@ -1285,7 +1477,7 @@ final Color fill = e.both
                         Padding(
                           padding: const EdgeInsets.only(top: 9),
                           child: Text(
-                            'CLASS DATE SET BY APPROVED EXAM',
+                            'LINKED TO APPROVED EXAM',
                             style: _monoStyle(8, color: _accentDark),
                           ),
                         ),
@@ -1340,12 +1532,12 @@ final Color fill = e.both
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            "WEEKLY CLASSES · DAY NOT SET",
+            "WEEKLY CLASSES · DAY OR TIME NOT SET",
             style: _monoStyle(10, color: _ink),
           ),
           const SizedBox(height: 5),
           const Text(
-            "These classes have a time but no day assigned yet.",
+            "These classes are missing a day or a time, so they cannot be placed on the grid.",
             style: TextStyle(color: _muted, fontSize: 11),
           ),
           const SizedBox(height: 10),

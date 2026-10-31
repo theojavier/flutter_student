@@ -57,13 +57,19 @@ class _ExamResultPageState extends State<ExamResultPage> {
     final user = docs[0];
     final result = docs[1];
 
-    if (!user.exists || user.data()?['studentId'] == null) {
+        if (!user.exists || user.data()?['studentId'] == null) {
       throw StateError('Student not found.');
     }
     if (!result.exists) {
       throw StateError('Result not found.');
     }
-    return result.data() ?? {};
+
+    // The result doc's studentId holds the auth uid, so use the one
+    // from the user's profile for display.
+    return {
+      ...?result.data(),
+      'studentId': user.data()!['studentId'].toString(),
+    };
   }
 
   // ============================================================
