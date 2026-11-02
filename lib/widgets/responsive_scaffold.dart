@@ -86,6 +86,9 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   }
 
   StreamSubscription<DocumentSnapshot>? _profileSubscription;
+  List<StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>
+  _examNotificationSubscriptions = [];
+  String? _examNotificationWatchKey;
 
   Future<void> _loadUserProfile() async {
     final userId = widget.userId ?? await _getUserIdFromPrefs();
@@ -159,6 +162,33 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
 
   void _updateProfileUI(Map<String, dynamic> data) {
     if (!mounted) return;
+
+    final notificationWatchKey = [
+      _userId ?? '',
+      data['role'] ?? '',
+      data['program'] ?? '',
+      data['programCode'] ?? '',
+      data['yearBlock'] ?? '',
+      if (data['classIds'] is List)
+        ...(data['classIds'] as List).map((value) => value.toString()),
+      data['classId'] ?? '',
+    ].join('\u0000');
+    if (notificationWatchKey != _examNotificationWatchKey) {
+      _examNotificationWatchKey = notificationWatchKey;
+      for (final subscription in _examNotificationSubscriptions) {
+        unawaited(subscription.cancel());
+      }
+      _examNotificationSubscriptions = [];
+      if (data['role'] == 'student' && _userId != null) {
+        _examNotificationSubscriptions = watchApprovedExamNotifications(
+          userId: _userId!,
+          userData: data,
+          onError: (error) {
+            debugPrint('Could not watch approved exams for notifications: $error');
+          },
+        );
+      }
+    }
 
     var url = (data['profileImage'] as String?) ?? '';
     if (url.isNotEmpty &&
@@ -267,6 +297,9 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   void dispose() {
     _classLoadGeneration++;
     _profileSubscription?.cancel();
+    for (final subscription in _examNotificationSubscriptions) {
+      subscription.cancel();
+    }
     _classListScrollController.dispose();
     super.dispose();
   }
@@ -304,7 +337,8 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
         break;
       case 4:
         context.go('/profile');
-        break;}
+        break;
+    }
   }
 
   Future<void> _onSelectClass(String classId) async {
@@ -603,9 +637,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(9),
-            border: Border.all(
-              color: highlight ? _kNotificationGreen : _kLine,
-            ),
+            border: Border.all(color: highlight ? _kNotificationGreen : _kLine),
           ),
           child: Icon(
             icon,
@@ -615,22 +647,6 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
         ),
       ),
     );
-  }
-
-  Future<void> _markNotificationRead(String notificationId) async {
-    final userId = _userId;
-    if (userId == null) return;
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
-          .collection('notifications')
-          .doc(notificationId)
-          .update({'viewed': true});
-    } catch (error) {
-      debugPrint('Could not mark notification $notificationId as read: $error');
-    }
   }
 
   // Unread badge on the bell
@@ -657,19 +673,19 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     );
   }
 
-Widget _profileTrigger() {
-  return ProfileMenuTrigger(
-    avatarUrl: profileImageUrl,
-    name: headerName,
-    idNumber: _studentId,
-    onViewProfile: () {
-      _refreshProfile();
-      _classesExpanded = false;
-      context.go('/profile');
-    },
-    onLogout: _handleLogout,
-  );
-}
+  Widget _profileTrigger() {
+    return ProfileMenuTrigger(
+      avatarUrl: profileImageUrl,
+      name: headerName,
+      idNumber: _studentId,
+      onViewProfile: () {
+        _refreshProfile();
+        _classesExpanded = false;
+        context.go('/profile');
+      },
+      onLogout: _handleLogout,
+    );
+  }
 
   List<Widget> _buildActions(BuildContext context) {
     return [
@@ -693,11 +709,10 @@ Widget _profileTrigger() {
               .snapshots(),
           builder: (context, snap) {
             final unread = snap.hasData
-                ? snap.data!.docs.where((d) => !(d['viewed'] ?? false)).length
+                ? snap.data!.docs
+                      .where((d) => !(d['read'] ?? d['viewed'] ?? false))
+                      .length
                 : 0;
-
-            // Optional: ensure notifications exist
-            ensureUserNotifications(userId: _userId!);
 
             return Center(
               child: Padding(
@@ -723,7 +738,8 @@ Widget _profileTrigger() {
                                     title: data['subject'] ?? 'New Exam',
                                     createdAt: (data['createdAt'] as Timestamp)
                                         .toDate(),
-                                    viewed: data['viewed'] ?? false,
+                                    viewed:
+                                        data['read'] ?? data['viewed'] ?? false,
                                   );
                                 }).toList()
                               : <NotificationItem>[];
@@ -763,7 +779,6 @@ Widget _profileTrigger() {
                                   },
                                   onTapItem: (item) {
                                     Navigator.of(ctx).pop();
-                                    unawaited(_markNotificationRead(item.id));
                                     context.go(
                                       '/take-exam/${Uri.encodeComponent(item.id)}',
                                     );
@@ -787,8 +802,8 @@ Widget _profileTrigger() {
             );
           },
         ),
-         const SizedBox(width: 8),
-    Center(child: _profileTrigger()),
+      const SizedBox(width: 8),
+      Center(child: _profileTrigger()),
     ];
   }
 
@@ -953,8 +968,6 @@ Widget _profileTrigger() {
               ],
             ),
           ),
-
-      
         ],
       ),
     );

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../helpers/SecureStorageHelper.dart';
+import '../../helpers/notifications_helper.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/gaze_calibration_overlay.dart';
 import '../../helpers/screen_share.dart';
@@ -63,12 +64,7 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   final _screen = ScreenShare();
 
-  // Realtime: streams are created ONCE. Creating them inside build() would
-  // resubscribe (and flash "Loading...") every time the page rebuilds.
-  late final Stream<DocumentSnapshot> _examStream = db
-      .collection("exams")
-      .doc(widget.examId)
-      .snapshots();
+  late Stream<DocumentSnapshot> _examStream;
   Stream<DocumentSnapshot>? _resultStream;
 
   // Ticks once a second, but only rebuilds when the exam crosses a boundary
@@ -88,6 +84,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _bindExam();
     _loadStudentId();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
@@ -97,6 +94,24 @@ class _TakeExamPageState extends State<TakeExamPage>
         setState(() {}); // re-evaluates Not started / Start / Ended
       }
     });
+  }
+
+  void _bindExam() {
+    _examStream = db.collection("exams").doc(widget.examId).snapshots();
+    _resultStream = null;
+    start = widget.startMillis;
+    end = widget.endMillis;
+    _monitoringEnabled = false;
+    _lastPhase = -1;
+    unawaited(markExamNotificationViewed(widget.examId));
+  }
+
+  @override
+  void didUpdateWidget(covariant TakeExamPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.examId != widget.examId) {
+      _bindExam();
+    }
   }
 
   @override
@@ -595,12 +610,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   ]) {
     return StreamBuilder<DocumentSnapshot>(
       initialData: initial,
-      stream: db
-          .collection("examResults")
-          .doc(widget.examId)
-          .collection("students")
-          .doc(FirebaseAuth.instance.currentUser!.uid)
-          .snapshots(),
+      stream: _resultStream,
       builder: (context, resultSnap) {
         if (resultSnap.hasError) {
           return _actionButton(

@@ -25,7 +25,7 @@ class NotificationItem {
       examId: id,
       title: map['subject'] ?? 'New Exam',
       createdAt: (map['createdAt'] as Timestamp).toDate(), // convert Firestore Timestamp to DateTime
-      viewed: map['viewed'] ?? false,
+      viewed: map['read'] ?? map['viewed'] ?? false,
     );
   }
 
@@ -34,7 +34,7 @@ class NotificationItem {
     return {
       'subject': title,
       'createdAt': createdAt,
-      'viewed': viewed,
+      'read': viewed,
     };
   }
 }

@@ -82,7 +82,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                   createdAt: timestamp is Timestamp
                       ? timestamp.toDate()
                       : DateTime.now(),
-                  viewed: data['viewed'] ?? false,
+                  viewed: data['read'] ?? data['viewed'] ?? false,
                 ),
               );
             }
@@ -106,22 +106,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   void _onNotificationClick(NotificationItem item) {
-    final ref = _notifRef;
-    if (ref != null) {
-      unawaited(_markNotificationRead(ref, item.examId));
-    }
     context.go('/take-exam/${Uri.encodeComponent(item.examId)}');
-  }
-
-  Future<void> _markNotificationRead(
-    CollectionReference ref,
-    String notificationId,
-  ) async {
-    try {
-      await ref.doc(notificationId).update({'viewed': true});
-    } catch (error) {
-      debugPrint('Could not mark notification $notificationId as read: $error');
-    }
   }
 
   Future<void> _markAllRead() async {
@@ -133,7 +118,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
     try {
       final batch = FirebaseFirestore.instance.batch();
       for (final n in unread) {
-        batch.update(ref.doc(n.examId), {'viewed': true});
+        batch.update(ref.doc(n.examId), {
+          'read': true,
+          'readAt': FieldValue.serverTimestamp(),
+        });
       }
       await batch.commit();
     } catch (e) {

@@ -144,9 +144,11 @@ final GoRouter router = GoRouter(
           path: '/take-exam/:examId',
           pageBuilder: (context, state) {
             final args = state.extra as Map<String, dynamic>?;
+            final examId = state.pathParameters['examId']!;
             return NoTransitionPage(
               child: TakeExamPage(
-                examId: args?['examId'] ?? state.pathParameters['examId']!,
+                key: ValueKey(examId),
+                examId: examId,
                 startMillis: args?['startMillis'],
                 endMillis: args?['endMillis'],
               ),

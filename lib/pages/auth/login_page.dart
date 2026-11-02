@@ -1,8 +1,6 @@
-import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -35,13 +33,11 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController studentIdController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
   final FocusNode _passwordFocus = FocusNode();
-  final FirebaseFirestore db = FirebaseFirestore.instance;
   final FirebaseAuth auth = FirebaseAuth.instance;
 
   bool isLoading = false;
   bool _isPasswordVisible = false;
   String _loginError = "";
-  StreamSubscription? _examListener;
 
   // ---------------- LOGIC (unchanged) ----------------
 
@@ -98,10 +94,6 @@ class _LoginPageState extends State<LoginPage> {
           await SecureStorageHelper.write("yearBlock", yearBlock);
         }
 
-        if (program != null && yearBlock != null) {
-          startExamListener(userCredential.user!.uid, program, yearBlock);
-        }
-
         if (mounted) context.go('/home');
       } else {
         _showError("Access denied (not a student)");
@@ -117,35 +109,6 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  // Real-time exam notifications listener
-  void startExamListener(String userId, String program, String yearBlock) {
-    _examListener = db
-        .collection('exams')
-        .where('program', isEqualTo: program)
-        .where('yearBlock', isEqualTo: yearBlock)
-        .snapshots()
-        .listen((snapshot) async {
-          final userRef = db.collection('users').doc(userId);
-
-          for (var examDoc in snapshot.docs) {
-            final examId = examDoc.id;
-            final notifRef = userRef.collection('notifications').doc(examId);
-
-            final notifSnap = await notifRef.get();
-            if (!notifSnap.exists) {
-              await notifRef.set({
-                'viewed': false,
-                'subject': examDoc['subject'],
-                'createdAt': examDoc.data().containsKey('createdAt')
-                    ? examDoc['createdAt']
-                    : Timestamp.now(),
-              });
-              debugPrint("Created notif for $userId -> exam $examId");
-            }
-          }
-        });
-  }
-
   void _showError(String message) {
     if (!mounted) return;
     setState(() => _loginError = message);
@@ -153,7 +116,6 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   void dispose() {
-    _examListener?.cancel();
     studentIdController.dispose();
     passwordController.dispose();
     _passwordFocus.dispose();
