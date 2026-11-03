@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/exam_model.dart';
+import '../../widgets/pull_to_refresh_shell.dart';
 
 class ClassExamPage extends StatefulWidget {
   const ClassExamPage({super.key, required this.classId});
@@ -234,7 +235,18 @@ class _ClassExamPageState extends State<ClassExamPage> {
   @override
   void initState() {
     super.initState();
+    AppRefresh.tick.addListener(_refreshClass);
     _setupForClass();
+  }
+
+  @override
+  void dispose() {
+    AppRefresh.tick.removeListener(_refreshClass);
+    super.dispose();
+  }
+
+  void _refreshClass() {
+    if (mounted) setState(_setupForClass);
   }
 
   @override
@@ -809,7 +821,7 @@ class _ClassExamPageState extends State<ClassExamPage> {
                     return a.exam.startTime!.compareTo(b.exam.startTime!);
                   });
 
-            return _examsCard(entries, _text(classData['subject'], 'Class'));
+            return _examsCard(entries, classData);
           },
         );
       },
@@ -850,7 +862,12 @@ class _ClassExamPageState extends State<ClassExamPage> {
     return _takenExamIdsFuture!;
   }
 
-  Widget _examsCard(List<_ClassExamEntry> exams, String course) {
+  Widget _examsCard(
+    List<_ClassExamEntry> exams,
+    Map<String, dynamic> classData,
+  ) {
+    final course = _text(classData['subject'], 'Class');
+    final room = _text(classData['roomDefault'], '—');
     return _card(
       Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -932,7 +949,12 @@ class _ClassExamPageState extends State<ClassExamPage> {
                       for (var index = 0; index < exams.length; index++)
                         SizedBox(
                           width: cardWidth,
-                          child: _assessmentCard(exams[index], course, index),
+                          child: _assessmentCard(
+                            exams[index],
+                            course,
+                            room,
+                            index,
+                          ),
                         ),
                     ],
                   );
@@ -944,22 +966,39 @@ class _ClassExamPageState extends State<ClassExamPage> {
     );
   }
 
-  Widget _assessmentCard(_ClassExamEntry entry, String course, int index) {
+  Widget _assessmentCard(
+    _ClassExamEntry entry,
+    String course,
+    String room,
+    int index,
+  ) {
     final exam = entry.exam;
     final start = exam.startTime!.toDate();
     final end = exam.endTime?.toDate();
     final minutes = end?.difference(start).inMinutes;
     final durationLabel = (minutes ?? 0) <= 0 ? 'Not set' : '$minutes min';
-    final title = exam.subject?.trim().isNotEmpty == true
-        ? exam.subject!.trim()
-        : 'Untitled assessment';
+    final title = _text(exam.subject);
+    final showTitle =
+        title.isNotEmpty && title.toLowerCase() != course.toLowerCase();
     final assessmentType =
         RegExp(r'\bquiz\b', caseSensitive: false).hasMatch(title)
         ? 'QUIZ'
         : 'EXAM';
+    final timeFormat = DateFormat('h:mm a');
+    final timeLabel = end == null
+        ? timeFormat.format(start)
+        : '${timeFormat.format(start)} – ${timeFormat.format(end)}';
     final dark = index.isOdd;
     final foreground = dark ? Colors.white : _ink;
     final secondary = dark ? const Color(0xFFD0D0D5) : _muted;
+    final statusLabel = entry.status == 'completed'
+        ? 'COMPLETED'
+        : entry.taken
+        ? 'IN PROGRESS'
+        : 'NOT TAKEN';
+    final statusColor = entry.taken
+        ? (dark ? _muted2 : _muted)
+        : (dark ? const Color(0xFF4CC38A) : _accent);
     final borderColor = dark
         ? const Color(0xFF34343B)
         : entry.taken
@@ -997,41 +1036,58 @@ class _ClassExamPageState extends State<ClassExamPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                course,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: _monoStyle(10, color: dark ? _accentSoft : _accent),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: foreground,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '$assessmentType scheduled for this week.',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: secondary, fontSize: 12, height: 1.5),
-              ),
-              const SizedBox(height: 14),
               Row(
                 children: [
-                  Expanded(
-                    child: _assessmentMeta(
-                      'SCHEDULE',
-                      DateFormat('EEE, MMM d · h:mm a').format(start),
-                      dark: dark,
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: dark ? const Color(0xFF25252B) : _accentSoft,
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: Text(
+                      assessmentType,
+                      style: _monoStyle(9, color: dark ? _accentSoft : _accent),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const Spacer(),
+                  Icon(Icons.circle, size: 6, color: statusColor),
+                  const SizedBox(width: 6),
+                  Text(statusLabel, style: _monoStyle(9, color: statusColor)),
+                ],
+              ),
+              if (showTitle) ...[
+                const SizedBox(height: 14),
+                Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              Text(
+                DateFormat('EEE, MMM d').format(start),
+                style: _display(24, color: foreground, h: 1.1),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                timeLabel,
+                style: TextStyle(
+                  color: secondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
                   Expanded(
                     child: _assessmentMeta(
                       'DURATION',
@@ -1039,30 +1095,19 @@ class _ClassExamPageState extends State<ClassExamPage> {
                       dark: dark,
                     ),
                   ),
+                  const SizedBox(width: 10),
+                  Expanded(child: _assessmentMeta('ROOM', room, dark: dark)),
                 ],
               ),
               const SizedBox(height: 14),
               Row(
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  Expanded(
-                    child: Text(
-                      entry.status == 'completed'
-                          ? 'COMPLETED'
-                          : entry.taken
-                          ? 'IN PROGRESS'
-                          : 'NOT TAKEN',
-                      style: _monoStyle(
-                        9,
-                        color: entry.taken
-                            ? (dark ? _muted2 : _muted)
-                            : _accent,
-                      ),
-                    ),
-                  ),
                   Icon(
                     entry.status == 'completed'
                         ? Icons.assessment_outlined
                         : Icons.arrow_forward_rounded,
+                    size: 18,
                     color: dark ? Colors.white : _accent,
                   ),
                   const SizedBox(width: 5),

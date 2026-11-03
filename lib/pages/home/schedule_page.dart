@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import '../../widgets/pull_to_refresh_shell.dart';
 import '../../helpers/SecureStorageHelper.dart';
+import '../../utils/student_class_ids.dart';
 
 typedef _Docs = List<DocumentSnapshot<Map<String, dynamic>>>;
 
@@ -385,14 +387,18 @@ class _SchedulePageState extends State<SchedulePage> {
   void initState() {
     super.initState();
     _weekStart = _mondayOf(DateTime.now());
+    AppRefresh.tick.addListener(_refreshSchedule);
     _loadPrefs();
   }
 
   @override
   void dispose() {
+    AppRefresh.tick.removeListener(_refreshSchedule);
     _hover.dispose();
     super.dispose();
   }
+
+  void _refreshSchedule() => _loadPrefs();
 
   Future<void> _loadPrefs() async {
     final storedProgram = await SecureStorageHelper.read('program');
@@ -411,14 +417,7 @@ class _SchedulePageState extends State<SchedulePage> {
         if (user != null) {
           profileCode = _text(user['programCode']);
           profileYearBlock = _text(user['yearBlock']);
-          final raw = user['classIds'];
-          if (raw is List) {
-            classIds = raw
-                .map((item) => item.toString().trim())
-                .where((value) => value.isNotEmpty)
-                .toSet()
-                .toList();
-          }
+          classIds = studentClassIdsFromProfile(user);
         }
       } catch (error) {
         if (!mounted) return;
@@ -442,32 +441,6 @@ class _SchedulePageState extends State<SchedulePage> {
 
     if (!mounted) return;
 
-    // Irregular students are enrolled in specific classes rather than a block.
-    if (_norm(yearBlock) == 'irregular') {
-      final ids = classIds.take(30).toList();
-      setState(() {
-        _yearBlock = 'Irregular · ${classIds.length} classes';
-        _classesStream = _combine([
-          for (final id in ids)
-            db
-                .collection('classes')
-                .doc(id)
-                .snapshots()
-                .map(
-                  (snapshot) => <DocumentSnapshot<Map<String, dynamic>>>[
-                    snapshot,
-                  ],
-                ),
-        ]);
-        _examsStream = _combine([
-          for (final id in ids)
-            _docsOf(db.collection('exams').where('classId', isEqualTo: id)),
-        ]);
-        _loading = false;
-      });
-      return;
-    }
-
     if (programValue.isEmpty || yearBlock.isEmpty) {
       setState(() {
         _missingInfo = true;
@@ -477,19 +450,25 @@ class _SchedulePageState extends State<SchedulePage> {
     }
 
     setState(() {
-      _yearBlock = yearBlock;
-      _classesStream = _docsOf(
-        db
-            .collection('classes')
-            .where('program', isEqualTo: programValue)
-            .where('yearBlock', isEqualTo: yearBlock),
-      );
-      _examsStream = _docsOf(
-        db
-            .collection('exams')
-            .where('program', isEqualTo: programValue)
-            .where('yearBlock', isEqualTo: yearBlock),
-      );
+      _yearBlock = _norm(yearBlock) == 'irregular'
+          ? 'Irregular · ${classIds.length} classes'
+          : yearBlock;
+      _classesStream = _combine([
+        for (final id in classIds)
+          db
+              .collection('classes')
+              .doc(id)
+              .snapshots()
+              .map(
+                (snapshot) => <DocumentSnapshot<Map<String, dynamic>>>[
+                  snapshot,
+                ],
+              ),
+      ]);
+      _examsStream = _combine([
+        for (final id in classIds)
+          _docsOf(db.collection('exams').where('classId', isEqualTo: id)),
+      ]);
       _loading = false;
     });
   }

@@ -3,6 +3,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../widgets/pull_to_refresh_shell.dart';
+
 class ExamResultPage extends StatefulWidget {
   final String examId;
 
@@ -30,13 +32,25 @@ class _ExamResultPageState extends State<ExamResultPage> {
 
   String? _authUid;
 
-  // Created once so rebuilds don't refetch
-  late final Future<Map<String, dynamic>> _future = _load();
+  late Future<Map<String, dynamic>> _future;
 
   @override
   void initState() {
     super.initState();
     _authUid = FirebaseAuth.instance.currentUser?.uid;
+    _future = _load();
+    AppRefresh.tick.addListener(_refreshResult);
+  }
+
+  @override
+  void dispose() {
+    AppRefresh.tick.removeListener(_refreshResult);
+    super.dispose();
+  }
+
+  void _refreshResult() {
+    if (!mounted) return;
+    setState(() => _future = _load());
   }
 
   Future<Map<String, dynamic>> _load() async {
@@ -142,7 +156,10 @@ class _ExamResultPageState extends State<ExamResultPage> {
             final score = ((data['score'] ?? 0) as num).toDouble();
             final total = ((data['total'] ?? 0) as num).toDouble();
             final studentId = (data['studentId'] ?? 'Unknown').toString();
-            final subject = (data['subject'] ?? 'Unknown subject').toString();
+            final storedSubject = data['subject']?.toString().trim();
+            final subject = storedSubject == null || storedSubject.isEmpty
+                ? 'Exam ${widget.examId}'
+                : storedSubject;
 
             // Adjusted percent
             final rawPercent = total > 0 ? (score / total) * 100 : 0.0;

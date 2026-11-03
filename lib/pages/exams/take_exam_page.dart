@@ -10,6 +10,7 @@ import '../../helpers/SecureStorageHelper.dart';
 import '../../helpers/notifications_helper.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/gaze_calibration_overlay.dart';
+import '../../widgets/pull_to_refresh_shell.dart';
 import '../../helpers/screen_share.dart';
 import '../../helpers/platform_utils.dart';
 
@@ -66,6 +67,7 @@ class _TakeExamPageState extends State<TakeExamPage>
 
   late Stream<DocumentSnapshot> _examStream;
   Stream<DocumentSnapshot>? _resultStream;
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _resultMetadataStream;
 
   // Ticks once a second, but only rebuilds when the exam crosses a boundary
   // (not started -> open -> ended).
@@ -84,6 +86,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    AppRefresh.tick.addListener(_refreshExamDetails);
     _bindExam();
     _loadStudentId();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -99,11 +102,20 @@ class _TakeExamPageState extends State<TakeExamPage>
   void _bindExam() {
     _examStream = db.collection("exams").doc(widget.examId).snapshots();
     _resultStream = null;
+    _resultMetadataStream = db
+        .collection("examResults")
+        .doc(widget.examId)
+        .snapshots();
     start = widget.startMillis;
     end = widget.endMillis;
     _monitoringEnabled = false;
     _lastPhase = -1;
     unawaited(markExamNotificationViewed(widget.examId));
+  }
+
+  void _refreshExamDetails() {
+    if (!mounted || _starting) return;
+    setState(_bindExam);
   }
 
   @override
@@ -117,6 +129,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   @override
   void dispose() {
     _ticker?.cancel();
+    AppRefresh.tick.removeListener(_refreshExamDetails);
     WidgetsBinding.instance.removeObserver(this);
     if (!_screen.handedOff) {
       _screen.stop();
@@ -482,49 +495,15 @@ class _TakeExamPageState extends State<TakeExamPage>
 
                 final resultData =
                     resultSnap.data!.data() as Map<String, dynamic>? ?? {};
-
-                final subject = resultData["subject"];
-                final startedAt = resultData["startedAt"];
-                final submittedAt = resultData["submittedAt"];
-                final status = resultData["status"];
-
-                final fmt = DateFormat("MMM d, yyyy h:mm a");
-                final rows = <_DetailRow>[
-                  if (startedAt != null)
-                    _DetailRow(
-                      Icons.play_circle_outline,
-                      "Started",
-                      fmt.format(startedAt.toDate()),
-                    ),
-                  if (submittedAt != null)
-                    _DetailRow(
-                      Icons.task_alt_outlined,
-                      "Submitted",
-                      fmt.format(submittedAt.toDate()),
-                    ),
-                ];
-
-                return _pageBody(
-                  showSteps: status?.toString().toLowerCase() != "completed",
-                  card: _detailsCard(
-                    subject: (subject ?? "Exam").toString(),
-                    status: status?.toString(),
-                    rows: rows,
-                    action: status == "completed"
-                        ? _actionButton(
-                            label: "View Result",
-                            icon: Icons.assessment_outlined,
-                            color: _btnResult,
-                            hint: "Exam completed.",
-                            onPressed: () {
-                              context.goNamed(
-                                'examResult',
-                                pathParameters: {'examId': widget.examId},
-                              );
-                            },
-                          )
-                        : null,
-                  ),
+                return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                  stream: _resultMetadataStream,
+                  builder: (context, metadataSnap) {
+                    return _deletedExamDetails(
+                      resultData,
+                      metadataSnap.data?.data() ?? const {},
+                      metadataError: metadataSnap.hasError,
+                    );
+                  },
                 );
               },
             );
@@ -588,16 +567,118 @@ class _TakeExamPageState extends State<TakeExamPage>
                         fmt.format(submittedAt.toDate()),
                       ),
                   ],
-                  action: _buildExamAction(
-                    subject.toString(),
-                    uid,
-                    resSnap.data,
-                  ),
+                  action: _buildExamAction(subject, uid, resSnap.data),
                 ),
               );
             },
           );
         },
+      ),
+    );
+  }
+
+  Widget _deletedExamDetails(
+    Map<String, dynamic> result,
+    Map<String, dynamic> metadata, {
+    required bool metadataError,
+  }) {
+    String? value(Map<String, dynamic> data, String key) {
+      final text = data[key]?.toString().trim();
+      return text == null || text.isEmpty ? null : text;
+    }
+
+    final subject = value(result, "subject") ?? "Exam ${widget.examId}";
+    final teacher = value(result, "teacher") ?? "Unknown";
+    final teacherId = value(metadata, "teacherId");
+    final classId = value(metadata, "classId");
+    final program = value(metadata, "program");
+    final yearBlock = value(metadata, "yearBlock");
+    final startTime = result["startTime"];
+    final endTime = result["endTime"];
+    final startedAt = result["startedAt"];
+    final submittedAt = result["submittedAt"];
+    final status = result["status"]?.toString();
+    final score = result["score"];
+    final total = result["total"];
+    final monitoringEnabled = result["monitoringEnabled"];
+    final fmt = DateFormat("MMM d, yyyy h:mm a");
+
+    final rows = <_DetailRow>[
+      if (startTime is Timestamp)
+        _DetailRow(
+          Icons.play_circle_outline,
+          "Start",
+          formatDate(startTime.millisecondsSinceEpoch),
+        ),
+      _DetailRow(Icons.person_outline, "Teacher", teacher),
+      if (startTime is Timestamp && endTime is Timestamp)
+        _DetailRow(
+          Icons.schedule_outlined,
+          "Schedule",
+          "${formatDate(startTime.millisecondsSinceEpoch)} - ${DateFormat("h:mm a").format(endTime.toDate())}",
+        ),
+      if (classId != null) _DetailRow(Icons.class_outlined, "Class", classId),
+      if (program != null) _DetailRow(Icons.school_outlined, "Program", program),
+      if (yearBlock != null)
+        _DetailRow(
+          Icons.calendar_view_week_outlined,
+          "Year / Block",
+          yearBlock,
+        ),
+      if (teacherId != null)
+        _DetailRow(Icons.badge_outlined, "Teacher ID", teacherId),
+      if (metadataError)
+        const _DetailRow(
+          Icons.info_outline,
+          "Class details",
+          "Could not load saved exam metadata",
+        ),
+      if (monitoringEnabled is bool)
+        _DetailRow(
+          Icons.visibility_outlined,
+          "Monitoring",
+          monitoringEnabled ? "Enabled" : "Disabled",
+        ),
+      if (startedAt is Timestamp)
+        _DetailRow(
+          Icons.play_circle_outline,
+          "Started",
+          fmt.format(startedAt.toDate()),
+        ),
+      if (submittedAt is Timestamp)
+        _DetailRow(
+          Icons.task_alt_outlined,
+          "Submitted",
+          fmt.format(submittedAt.toDate()),
+        ),
+      if (score is num && total is num)
+        _DetailRow(
+          Icons.assessment_outlined,
+          "Score",
+          "${score.toString()} / ${total.toString()}",
+        ),
+    ];
+
+    return _pageBody(
+      showSteps: status?.toLowerCase() != "completed",
+      card: _detailsCard(
+        subject: subject,
+        status: status,
+        rows: rows,
+        action: status?.toLowerCase() == "completed"
+            ? _actionButton(
+                label: "View Result",
+                icon: Icons.assessment_outlined,
+                color: _btnResult,
+                hint: "Exam completed.",
+                onPressed: () {
+                  context.goNamed(
+                    "examResult",
+                    pathParameters: {"examId": widget.examId},
+                  );
+                },
+              )
+            : null,
       ),
     );
   }

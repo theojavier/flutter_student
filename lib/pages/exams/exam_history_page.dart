@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/exam_history_model.dart';
+import '../../widgets/pull_to_refresh_shell.dart';
 
 String _text(dynamic v, [String fallback = '']) {
   final s = (v ?? '').toString().trim();
@@ -47,6 +48,19 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
       loading = false;
       return;
     }
+    AppRefresh.tick.addListener(_refreshHistory);
+    _loadStudentData();
+  }
+
+  @override
+  void dispose() {
+    AppRefresh.tick.removeListener(_refreshHistory);
+    super.dispose();
+  }
+
+  void _refreshHistory() {
+    if (!mounted) return;
+    setState(() => loading = true);
     _loadStudentData();
   }
 

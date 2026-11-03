@@ -179,6 +179,7 @@
 
       window.answers = {};
       window.db = db; // make db global so your exam code can access it
+      window.waitForExamWrites = () => waitForPendingWrites(db);
       window.strikes = window.strikes ?? 0;
       window.examFinished = window.examFinished ?? false;
       window.disableGazeDetection = false;
@@ -346,8 +347,11 @@
 
         window.__examDocListener = onSnapshot(
           doc(db, "exams", examId),
+          { includeMetadataChanges: true },
           (snap) => {
             if (!snap.exists()) {
+              if (snap.metadata.fromCache) return;
+
               const error = new Error(`Exam ${examId} does not exist.`);
               console.error("Could not read exam device mode:", error);
               if (!initialSnapshotReceived) {
@@ -460,22 +464,53 @@
         }
       }
 
-      // Shared function
+      let startingExam = false;
+
       async function restoreOrStartExam() {
+        if (startingExam || window.examReady) return;
+        startingExam = true;
+        try {
+          await runExamStartup();
+        } catch (err) {
+          console.error("Exam startup failed:", err);
+          showQuestionsError();
+        } finally {
+          startingExam = false;
+        }
+      }
+
+      async function runExamStartup() {
         if (!authReady) {
           console.log("Auth not ready yet, delaying exam start...");
           return;
         }
-        const { examId, studentId } = window.examData;
+        const { examId, studentId } = window.examData || {};
+        if (!examId) return;
         const wasUnloading = sessionStorage.getItem("is_unloading");
         listenForStatusChanges(examId, studentId);
+        let deviceModeTimeout;
         try {
-          await listenForExamDeviceMode(examId);
-        } catch {
+          await Promise.race([
+            listenForExamDeviceMode(examId),
+            new Promise((_, reject) => {
+              deviceModeTimeout = setTimeout(
+                () => reject(new Error("Timed out reaching the exam.")),
+                20000,
+              );
+            }),
+          ]);
+        } catch (err) {
           console.error(
             "Exam startup stopped because device mode is unavailable.",
+            err,
           );
+          window.__examDocListener?.();
+          window.__examDocListener = null;
+          window.__examDeviceModeReady = null;
+          showQuestionsError();
           return;
+        } finally {
+          clearTimeout(deviceModeTimeout);
         }
 
         if (wasUnloading) {
@@ -513,11 +548,11 @@
         if (!window.examToken && auth.currentUser) {
           window.examToken = await getCurrentIdToken();
         }
-        await setExamPresence(examId, window.authUid, true);
+        void setExamPresence(examId, window.authUid, true);
         startExamHeartbeat();
         startCountdownFromFirestore(examId);
         window.strikesLoadedPromise = loadExistingStrikes();
-        await loadExamQuestions(examId);
+        await window.reloadExamQuestions();
         await window.strikesLoadedPromise;
         flushPendingStill(examId).catch((err) =>
           console.warn("Pending still upload failed:", err),
@@ -629,12 +664,17 @@
         }
       }
 
+      function isHealthyScreenStream(stream) {
+        const track = stream?.getVideoTracks?.()[0];
+        return !!stream?.active && track?.readyState === "live";
+      }
+
       window.receiveScreenStream = function receiveScreenStream(stream) {
         if (!stream) return false;
         const tracks = stream.getVideoTracks ? stream.getVideoTracks() : [];
-        if (!tracks || tracks.length === 0) {
+        if (!tracks || tracks.length === 0 || !isHealthyScreenStream(stream)) {
           console.warn(
-            "Received screen stream is invalid or has no video tracks.",
+            "Received screen stream is inactive or has no live video track.",
           );
           return false;
         }
@@ -681,7 +721,7 @@
 
       function tryInheritParentScreenStream() {
         if (!isPcExam()) return false;
-        if (window.cheatCaptureStream && window.cheatCaptureStream.active)
+        if (isHealthyScreenStream(window.cheatCaptureStream))
           return true;
         try {
           const parentStream =
@@ -711,7 +751,7 @@
       async function startScreenCapture() {
         if (!isPcExam()) return false;
         if (tryInheritParentScreenStream()) return true;
-        if (window.cheatCaptureStream && window.cheatCaptureStream.active) {
+        if (isHealthyScreenStream(window.cheatCaptureStream)) {
           return true;
         }
 
@@ -767,6 +807,20 @@
           return false;
         }
       }
+
+      window.startScreenCapture = startScreenCapture;
+      const reshareButton = document.getElementById("reshareBtn");
+      const reshareError = document.getElementById("reshareErr");
+      reshareButton.addEventListener("click", async () => {
+        reshareButton.disabled = true;
+        reshareError.style.display = "none";
+        try {
+          const restored = await startScreenCapture();
+          if (!restored) reshareError.style.display = "block";
+        } finally {
+          reshareButton.disabled = false;
+        }
+      });
 
       function getCheatGroupRange() {
         const currentCount = Number(window.cheatingCount || 0);
@@ -1775,6 +1829,7 @@
       }
 
       async function startCountdownFromFirestore(examId) {
+        if (window.__countdownTimer) return;
         const examRef = doc(db, "exams", examId);
         const examSnap = await getDoc(examRef);
 
@@ -1795,12 +1850,13 @@
           return;
         }
 
-        const timer = setInterval(() => {
+        window.__countdownTimer = setInterval(() => {
           const durationMs = endTime - startTime;
           const elapsedMs = Date.now() - startTime;
           const remainingMs = Math.max(durationMs - elapsedMs, 0);
           if (remainingMs <= 0) {
-            clearInterval(timer);
+            clearInterval(window.__countdownTimer);
+            window.__countdownTimer = null;
             countdownEl.textContent = "Time's up!";
             window.examFinished = true; // prevent late strikes
             window.allowStrikes = false; // prevent late strikes
@@ -2139,7 +2195,7 @@
       async function loadExamQuestions(examId) {
         if (!examId) {
           console.error("loadExamQuestions called with null examId");
-          return;
+          return false;
         }
 
         // Reset UI placeholders
@@ -2155,9 +2211,8 @@
 
           if (snapshot.empty) {
             console.error("No questions found in Firestore for exam:", examId);
-            document.getElementById("examContent").innerHTML =
-              "<p>No questions found.</p>";
-            return;
+            showQuestionsError();
+            return false;
           }
 
           const rawQuestions = snapshot.docs.map((doc) => ({
@@ -2225,6 +2280,13 @@
             })
             .filter(Boolean);
 
+          if (!orderedQuestions.length) {
+            console.error("No questions matched the saved question order.");
+            window.questions = [];
+            showQuestionsError();
+            return false;
+          }
+
           window.questions = orderedQuestions;
           window.answers = window.answers || {};
 
@@ -2254,15 +2316,79 @@
             renderNextOrSubmitButton();
           } catch (err) {
             console.error("showQuestion/render failed:", err);
-            document.getElementById("examContent").innerHTML =
-              `<p>Error rendering question: ${err.message}</p>`;
+            window.questions = [];
+            showQuestionsError();
+            return false;
           }
+          return true;
         } catch (err) {
           console.error("loadExamQuestions failed:", err);
-          document.getElementById("examContent").innerHTML =
-            `<p>Error loading questions: ${err.message}</p>`;
+          showQuestionsError();
+          return false;
         }
       }
+
+      function showQuestionsError() {
+        const content = document.getElementById("examContent");
+        if (!content) return;
+        content.innerHTML = `
+          <h2>Couldn't load the questions</h2>
+          <div class="question">
+            <p>The questions couldn't be loaded right now. Your saved answers are not affected.</p>
+            <button class="btn btn-try-again" type="button"
+              data-reload-questions>
+              Try again
+            </button>
+          </div>`;
+      }
+
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      let questionsLoading = false;
+
+      window.reloadExamQuestions = async function ({ manual = false } = {}) {
+        const examId = window.examData?.examId;
+        if (
+          !examId ||
+          questionsLoading ||
+          window.submitting ||
+          window.examFinished
+        ) {
+          return false;
+        }
+
+        if (manual && !window.examReady) {
+          void restoreOrStartExam();
+          return true;
+        }
+
+        if (window.questions?.length) {
+          if (manual) {
+            try {
+              showQuestion(currentQuestionIndex);
+              renderNextOrSubmitButton();
+            } catch (err) {
+              console.error("Could not redraw the current question:", err);
+              showQuestionsError();
+              return false;
+            }
+          }
+          return true;
+        }
+
+        questionsLoading = true;
+        try {
+          for (let attempt = 1; attempt <= 4; attempt++) {
+            if (await loadExamQuestions(examId)) return true;
+            if (attempt < 4) {
+              const backoff = Math.min(1000 * 2 ** attempt, 8000);
+              await sleep(backoff + Math.random() * 1000);
+            }
+          }
+          return false;
+        } finally {
+          questionsLoading = false;
+        }
+      };
       window.strikesLoadedPromise = null;
 
       async function loadExistingStrikes() {
@@ -2330,6 +2456,11 @@
 
       #stopModal {
         z-index: 10000;
+      }
+
+      #screenShareModal .modal-content {
+        width: min(420px, 92vw);
+        margin: 20vh auto;
       }
 
       .stop-card {
@@ -2433,6 +2564,59 @@
         -webkit-font-smoothing: antialiased;
         position: relative;
         min-height: 100vh;
+      }
+
+      html {
+        overscroll-behavior-y: contain;
+      }
+
+      #ptrIndicator {
+        position: fixed;
+        top: 0;
+        left: 50%;
+        z-index: 10001;
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: #fff;
+        border: 1px solid #dfe2df;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+        transform: translate(-50%, -50px);
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .ptr-spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid #d2eadc;
+        border-top-color: #087b4f;
+        border-radius: 50%;
+      }
+
+      #ptrIndicator.error .ptr-spinner {
+        width: auto;
+        height: auto;
+        border: 0;
+        color: #bd2942;
+        font-size: 22px;
+        font-weight: 800;
+      }
+
+      #ptrIndicator.error .ptr-spinner::after {
+        content: "!";
+      }
+
+      #ptrIndicator.loading .ptr-spinner {
+        animation: ptr-spin 0.8s linear infinite;
+      }
+
+      @keyframes ptr-spin {
+        to {
+          transform: rotate(360deg);
+        }
       }
 
       .topbar {
@@ -3173,12 +3357,38 @@
 
       .exam-footer {
         display: flex;
-        justify-content: space-between;
+        justify-content: flex-end;
         align-items: center;
         gap: 16px;
         margin-top: 20px;
         padding-top: 17px;
         border-top: 1px solid #e6e9e6;
+      }
+
+      .btn-ghost {
+        min-height: 44px;
+        padding: 0 14px;
+        border: 1px solid #dfe3df;
+        border-radius: 6px;
+        background: #fff;
+        color: #555961;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .btn-ghost:hover:not(:disabled) {
+        border-color: #087b4f;
+        color: #087b4f;
+      }
+
+      .btn-ghost:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .btn-try-again {
+        margin-top: 8px;
       }
       .footer-note {
         margin: 7px 0 0;
@@ -3926,19 +4136,6 @@
           overflow: hidden;
         }
 
-        body:has(#examCard:not([style*="none"])) .exam-hero {
-          min-height: 0;
-          padding: 12px clamp(18px, 2vw, 30px);
-        }
-
-        body:has(#examCard:not([style*="none"])) .exam-hero p {
-          display: none;
-        }
-
-        body:has(#examCard:not([style*="none"])) .exam-hero h2 {
-          font-size: 18px;
-        }
-
         .page-heading p {
           display: none;
         }
@@ -4001,11 +4198,6 @@
           font-size: calc(13px * var(--fit));
         }
       }
-      @media (min-width: 861px) {
-        body:has(#examCard:not([style*="none"])) .exam-hero {
-          padding-right: 112px;
-        }
-      }
       .hero-right {
         position: relative;
         z-index: 1;
@@ -4031,6 +4223,108 @@
         border-color: #e7bfc8;
         color: #c5334e;
         font-weight: 700;
+      }
+
+      :root {
+        --min-opt-font: 14px;
+        --min-q-font: 16px;
+      }
+
+      #examContent .question:has(
+        .options[data-qtype="multiple-choice"]
+      ) {
+        overflow: visible;
+      }
+
+      #examContent .question:has(
+        .options[data-qtype="multiple-choice"]
+      ) > p {
+        max-height: 30vh;
+        overflow-y: auto;
+        font-size: max(var(--min-q-font), calc(16px * var(--fit))) !important;
+      }
+
+      #examContent .options[data-qtype="multiple-choice"] {
+        --opt-font: max(var(--min-opt-font), calc(15px * var(--fit)));
+        --opt-lines: 2;
+        --opt-pad: 10px;
+        --opt-height: calc(
+          var(--opt-font) * 1.4 * var(--opt-lines) + var(--opt-pad) * 2 + 2px
+        );
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-rows: var(--opt-height);
+        gap: 10px;
+      }
+
+      #examContent .options[data-qtype="multiple-choice"] > .opt {
+        position: relative;
+        min-width: 0;
+      }
+
+      #examContent .options[data-qtype="multiple-choice"] > .opt > label {
+        position: absolute;
+        inset: 0;
+        height: 100%;
+        min-height: 0;
+        margin: 0;
+        padding: var(--opt-pad) 12px;
+        align-items: center;
+        font-size: var(--opt-font);
+        line-height: 1.4;
+      }
+
+      #examContent .options[data-qtype="multiple-choice"] .opt-text {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: var(--opt-lines);
+        line-clamp: var(--opt-lines);
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+
+      #examContent .options[data-qtype="multiple-choice"]
+        > .opt
+        > label:hover,
+      #examContent .options[data-qtype="multiple-choice"]
+        > .opt
+        > label:focus-within {
+        height: auto;
+        min-height: 100%;
+        z-index: 20;
+        border-color: #087b4f;
+        box-shadow: 0 14px 30px rgba(17, 18, 23, 0.2);
+      }
+
+      #examContent .options[data-qtype="multiple-choice"]
+        > .opt
+        > label:hover
+        .opt-text,
+      #examContent .options[data-qtype="multiple-choice"]
+        > .opt
+        > label:focus-within
+        .opt-text {
+        display: block;
+        -webkit-line-clamp: unset;
+        line-clamp: unset;
+        max-height: 45vh;
+        overflow-y: auto;
+      }
+
+      #examContent .options[data-qtype="multiple-choice"]
+        > .opt:last-child
+        > label,
+      #examContent .options[data-qtype="multiple-choice"]
+        > .opt:nth-last-child(2):nth-child(odd):not(:first-child)
+        > label {
+        inset: auto 0 0;
+      }
+
+      @media (max-width: 599px) {
+        #examContent .options[data-qtype="multiple-choice"] {
+          grid-template-columns: minmax(0, 1fr);
+        }
       }
     </style>
   </head>
@@ -4245,6 +4539,28 @@
         </div>
       </div>
     </div>
+    <div
+      id="screenShareModal"
+      class="modal"
+      role="alertdialog"
+      aria-modal="true"
+      aria-hidden="true"
+      aria-labelledby="screenShareTitle"
+      aria-describedby="screenShareMessage"
+    >
+      <div class="modal-content">
+        <h3 id="screenShareTitle">Screen sharing stopped</h3>
+        <p id="screenShareMessage">
+          Share your entire screen again to continue the exam.
+        </p>
+        <p>Auto-submit in <b id="reshareLeft">45</b> seconds.</p>
+        <button id="reshareBtn" class="btn">Share screen again</button>
+        <p id="reshareErr" style="display: none; color: #ff6b6b">
+          Screen sharing was not restored. Choose your entire screen and allow
+          sharing.
+        </p>
+      </div>
+    </div>
 
     <!-- Gaze bubble must stay OUTSIDE wrap -->
     <div
@@ -4317,7 +4633,7 @@
       let trackingDisposed = false;
       let animationFrameId = null;
 
-      function disposeExamTracking() {
+      function disposeExamTracking({ preserveParentScreen = false } = {}) {
         if (trackingDisposed) return;
         trackingDisposed = true;
         window.__examTrackingDisposed = true;
@@ -4337,11 +4653,13 @@
           track.stop();
         }
         videoElement.srcObject = null;
-        for (const stream of [
-          window.cameraCaptureStream,
-          window.cheatCaptureStream,
-        ]) {
-          for (const track of stream?.getTracks?.() ?? []) track.stop();
+        for (const track of window.cameraCaptureStream?.getTracks?.() ?? []) {
+          track.stop();
+        }
+        if (!(preserveParentScreen && window.__inheritedParentScreen)) {
+          for (const track of window.cheatCaptureStream?.getTracks?.() ?? []) {
+            track.stop();
+          }
         }
         window.cameraCaptureStream = null;
         window.cheatCaptureStream = null;
@@ -4356,7 +4674,14 @@
       }
 
       window.disposeExamTracking = disposeExamTracking;
-      window.addEventListener("pagehide", disposeExamTracking, { once: true });
+      window.addEventListener(
+        "pagehide",
+        () =>
+          disposeExamTracking({
+            preserveParentScreen: window.isPageReload === true,
+          }),
+        { once: true },
+      );
       window.addEventListener("message", (event) => {
         if (event.data?.action === "dispose") disposeExamTracking();
       });
@@ -4637,6 +4962,13 @@
         // Save helper
         const save = () =>
           `onchange="handleAnswerChange(${currentQuestionIndex})"`;
+        const optionHtml = (opt, checked) => `
+          <div class="opt">
+            <label>
+              <input type="radio" name="${q.id}" value="${opt}" ${checked} ${save()}>
+              <span class="opt-text">${opt}</span>
+            </label>
+          </div>`;
 
         let html = `
           <h2>Question ${currentQuestionIndex + 1}</h2>
@@ -4649,11 +4981,7 @@
         if (qType === "multiple-choice") {
           (q.options ?? []).forEach((opt) => {
             const checked = opt === selectedAnswer ? "checked" : "";
-            html += `
-              <label>
-                <input type="radio" name="${q.id}" value="${opt}" ${checked} ${save()}>
-                ${opt}
-              </label>`;
+            html += optionHtml(opt, checked);
           });
         }
 
@@ -4723,6 +5051,195 @@
       console.log(
         "Eye-bubble exam loaded. Run via localhost or allow camera access.",
       );
+    </script>
+    <script>
+      (() => {
+        const trigger = 60;
+        const maxPull = 90;
+        const indicator = document.createElement("div");
+        indicator.id = "ptrIndicator";
+        indicator.setAttribute("role", "status");
+        indicator.setAttribute("aria-label", "Reloading exam");
+        indicator.setAttribute("aria-live", "polite");
+        const spinner = document.createElement("div");
+        spinner.className = "ptr-spinner";
+        indicator.appendChild(spinner);
+        document.body.appendChild(indicator);
+
+        let startY = 0;
+        let pull = 0;
+        let tracking = false;
+        let busy = false;
+        let activePointerId = null;
+
+        const atTop = (target) => {
+          let element =
+            target instanceof Element ? target : target?.parentElement;
+          while (
+            element &&
+            element !== document.body &&
+            element !== document.documentElement
+          ) {
+            const style = window.getComputedStyle(element);
+            const scrollable = /(auto|scroll|overlay)/.test(style.overflowY);
+            if (
+              scrollable &&
+              element.scrollHeight > element.clientHeight &&
+              element.scrollTop > 0
+            ) {
+              return false;
+            }
+            element = element.parentElement;
+          }
+          return (document.scrollingElement?.scrollTop ?? 0) <= 0;
+        };
+
+        const setPull = (pixels) => {
+          indicator.style.transition = "none";
+          indicator.style.opacity = Math.min(pixels / trigger, 1);
+          indicator.style.transform = `translate(-50%, ${pixels - 50}px)`;
+          spinner.style.transform = `rotate(${pixels * 5}deg)`;
+        };
+
+        const release = (show) => {
+          indicator.style.transition = "transform .2s, opacity .2s";
+          indicator.style.transform = show
+            ? "translate(-50%, 18px)"
+            : "translate(-50%, -50px)";
+          indicator.style.opacity = show ? 1 : 0;
+          spinner.style.transform = "";
+          indicator.classList.toggle("loading", show);
+        };
+
+        const runReload = async () => {
+          if (
+            busy ||
+            window.submitting ||
+            window.examFinished ||
+            !window.examData?.examId ||
+            typeof window.waitForExamWrites !== "function"
+          ) {
+            return;
+          }
+          busy = true;
+          release(true);
+          let timeoutId;
+          try {
+            const writesFlushed = await Promise.race([
+              window.waitForExamWrites().then(() => true),
+              new Promise((resolve) => {
+                timeoutId = window.setTimeout(() => resolve(false), 3000);
+              }),
+            ]);
+            if (timeoutId) window.clearTimeout(timeoutId);
+            if (!writesFlushed) {
+              throw new Error("Timed out waiting for saved answers to sync.");
+            }
+            window.skipIncompleteOnNextUnload = true;
+            window.setTimeout(() => window.location.reload(), 650);
+          } catch (error) {
+            if (timeoutId) window.clearTimeout(timeoutId);
+            console.error("Could not prepare the exam for reload:", error);
+            window.skipIncompleteOnNextUnload = false;
+            busy = false;
+            indicator.classList.remove("loading");
+            indicator.classList.add("error");
+            indicator.setAttribute(
+              "aria-label",
+              "Could not sync answers. Exam was not reloaded.",
+            );
+            indicator.style.transition = "transform .2s, opacity .2s";
+            indicator.style.transform = "translate(-50%, 18px)";
+            indicator.style.opacity = 1;
+            window.setTimeout(() => {
+              indicator.classList.remove("error");
+              indicator.setAttribute("aria-label", "Reloading exam");
+              release(false);
+            }, 1600);
+          }
+        };
+
+        document.addEventListener("click", (event) => {
+          const target = event.target;
+          if (
+            target instanceof Element &&
+            target.closest("[data-reload-questions]")
+          ) {
+            if (
+              !busy &&
+              !window.submitting &&
+              !window.examFinished &&
+              typeof window.reloadExamQuestions === "function"
+            ) {
+              void window.reloadExamQuestions({ manual: true });
+            }
+          }
+        });
+
+        document.addEventListener("pointerdown", (event) => {
+          const target = event.target;
+          const interactive =
+            target instanceof Element &&
+            target.closest(
+              "button, input, select, textarea, a, label, [contenteditable='true']",
+            );
+          tracking =
+            !busy &&
+            !window.submitting &&
+            !window.examFinished &&
+            event.isPrimary &&
+            event.button === 0 &&
+            !interactive &&
+            atTop(target);
+          if (tracking) {
+            activePointerId = event.pointerId;
+            startY = event.clientY;
+            pull = 0;
+          }
+        });
+
+        document.addEventListener(
+          "pointermove",
+          (event) => {
+            if (!tracking || event.pointerId !== activePointerId) return;
+            if (!atTop(event.target)) {
+              tracking = false;
+              activePointerId = null;
+              release(false);
+              return;
+            }
+            const deltaY = event.clientY - startY;
+            if (deltaY <= 0) {
+              pull = 0;
+              release(false);
+              return;
+            }
+            if (event.cancelable) event.preventDefault();
+            pull = Math.min(deltaY * 0.65, maxPull);
+            setPull(pull);
+          },
+          { passive: false },
+        );
+
+        const finishPull = (event) => {
+          if (!tracking || event.pointerId !== activePointerId) return;
+          tracking = false;
+          activePointerId = null;
+          if (pull < trigger) {
+            release(false);
+            return;
+          }
+          void runReload();
+        };
+
+        document.addEventListener("pointerup", finishPull);
+        document.addEventListener("pointercancel", (event) => {
+          if (event.pointerId !== activePointerId) return;
+          tracking = false;
+          activePointerId = null;
+          release(false);
+        });
+      })();
     </script>
   </body>
 </html>

@@ -726,13 +726,73 @@ function isPcExam() {
 }
 
 const SCREEN_LOSS_GRACE_MS = 3000;
+const SCREEN_RESHARE_MS = 45000;
 let screenBadSince = 0;
+let screenTimer = null;
+let screenDeadline = 0;
+let screenLostAt = 0;
+
+function showReshare(show) {
+  const modal = document.getElementById("screenShareModal");
+  if (modal) {
+    modal.style.display = show ? "block" : "none";
+    modal.setAttribute("aria-hidden", show ? "false" : "true");
+  }
+}
+
+function stopScreenCountdown() {
+  if (screenTimer !== null) {
+    clearInterval(screenTimer);
+    screenTimer = null;
+  }
+  screenDeadline = 0;
+  screenLostAt = 0;
+  showReshare(false);
+}
+
+function restoreScreenShare() {
+  if (screenTimer === null) return;
+  const durationMs = Math.max(0, performance.now() - screenLostAt);
+  stopScreenCountdown();
+  if (window.examStarted && !window.examFinished && !window.submitting) {
+    window.reportProctorEvent?.("screen_share_restored", durationMs);
+  }
+}
+
+function startScreenCountdown() {
+  if (screenTimer !== null) return;
+  screenLostAt = performance.now();
+  screenDeadline = performance.now() + SCREEN_RESHARE_MS;
+  window.reportProctorEvent?.("screen_share_lost");
+  showReshare(true);
+  screenTimer = setInterval(() => {
+    if (!window.examStarted || window.examFinished || window.submitting) {
+      stopScreenCountdown();
+      return;
+    }
+
+    const secondsLeft = Math.max(
+      0,
+      Math.ceil((screenDeadline - performance.now()) / 1000),
+    );
+    const countdown = document.getElementById("reshareLeft");
+    if (countdown) countdown.textContent = String(secondsLeft);
+
+    if (secondsLeft === 0) {
+      console.warn("[auto-submit] screen share was not restored");
+      stopScreenCountdown();
+      window.submitExam(true);
+    }
+  }, 250);
+}
 
 function checkScreenShare() {
-  const REASON = "Screen recording stopped or blocked";
   if (!window.examStarted || !isPcExam()) {
     screenBadSince = 0;
-    if (screenLossActive) { screenLossActive = false; clearFaceLossCountdown(REASON); }
+    if (screenLossActive || screenTimer !== null) {
+      screenLossActive = false;
+      stopScreenCountdown();
+    }
     return;
   }
 
@@ -742,7 +802,8 @@ function checkScreenShare() {
 
   if (healthy) {
     screenBadSince = 0;
-    if (screenLossActive) { screenLossActive = false; clearFaceLossCountdown(REASON); }
+    screenLossActive = false;
+    restoreScreenShare();
     return;
   }
 
@@ -752,7 +813,7 @@ function checkScreenShare() {
 
   screenLossActive = true;
   console.warn("[screen] lost:", { hasStream: !!stream, state: track?.readyState, muted: track?.muted });
-  startFaceLossCountdown(REASON);
+  startScreenCountdown();
   if (strikesActive()) registerStrikeOnce().catch(console.error);
 }
 

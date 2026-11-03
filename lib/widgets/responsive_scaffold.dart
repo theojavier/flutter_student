@@ -12,6 +12,7 @@ import '../helpers/SecureStorageHelper.dart';
 import '../helpers/class_short_code.dart';
 import 'notification_bubble.dart';
 import 'profile_menu.dart';
+import 'pull_to_refresh_shell.dart';
 // Platform + Web detection
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
@@ -184,7 +185,9 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
           userId: _userId!,
           userData: data,
           onError: (error) {
-            debugPrint('Could not watch approved exams for notifications: $error');
+            debugPrint(
+              'Could not watch approved exams for notifications: $error',
+            );
           },
         );
       }
@@ -464,9 +467,20 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   }
 
   Widget _buildContent() {
+    final path = GoRouterState.of(context).uri.path;
+    final inExamHtml = path.startsWith('/examhtml');
+    final inTakeExam = path.startsWith('/take-exam');
+
     return Stack(
       children: [
-        IgnorePointer(ignoring: _isDrawerOpen, child: widget.child),
+        IgnorePointer(
+          ignoring: _isDrawerOpen,
+          child: PullToRefreshShell(
+            enabled: !inExamHtml,
+            reloadPageOnWeb: !inTakeExam,
+            child: widget.child,
+          ),
+        ),
         if (_isDrawerOpen)
           PointerInterceptor(
             child: GestureDetector(

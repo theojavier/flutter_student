@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../helpers/SecureStorageHelper.dart';
+import '../../widgets/pull_to_refresh_shell.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -28,13 +29,17 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   void initState() {
     super.initState();
+    AppRefresh.tick.addListener(_refreshProfile);
     _loadProfile();
   }
 
   @override
   void dispose() {
+    AppRefresh.tick.removeListener(_refreshProfile);
     super.dispose();
   }
+
+  void _refreshProfile() => _loadProfile();
 
   Future<void> _loadProfile() async {
     try {
@@ -528,7 +533,6 @@ else ...[
                     );
                   },
                 ),
-
               ],
             ),
           ),

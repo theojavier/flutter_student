@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
 import '../../helpers/SecureStorageHelper.dart';
+import '../../utils/student_class_ids.dart';
+import '../../widgets/pull_to_refresh_shell.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -17,6 +19,20 @@ DateTime? _toDate(dynamic value) {
   if (value is String) return DateTime.tryParse(value);
   if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
   return null;
+}
+
+bool _isMonitoredOngoingExam(Map<String, dynamic> data, DateTime now) {
+  final startTime = _toDate(data['startTime']);
+  final endTime = _toDate(data['endTime']);
+  return (data['approvalStatus'] ?? '').toString().trim().toLowerCase() ==
+          'approved' &&
+      (data['status'] ?? '').toString().trim().toLowerCase() == 'ongoing' &&
+      data['monitoringEnabled'] == true &&
+      data['monitoringStoppedAt'] == null &&
+      startTime != null &&
+      !startTime.isAfter(now) &&
+      endTime != null &&
+      endTime.isAfter(now);
 }
 
 class _HomePageState extends State<HomePage> {
@@ -44,16 +60,28 @@ class _HomePageState extends State<HomePage> {
   String? yearBlock;
   String? _authUid;
   String? _prefsError;
+  List<String> _classIds = [];
 
   @override
   void initState() {
     super.initState();
 
+    AppRefresh.tick.addListener(_refreshDashboard);
     _authUid = FirebaseAuth.instance.currentUser?.uid;
 
     if (_authUid != null) {
       _loadPrefs();
     }
+  }
+
+  @override
+  void dispose() {
+    AppRefresh.tick.removeListener(_refreshDashboard);
+    super.dispose();
+  }
+
+  void _refreshDashboard() {
+    if (_authUid != null) _loadPrefs();
   }
 
   Future<void> _loadPrefs() async {
@@ -99,6 +127,7 @@ class _HomePageState extends State<HomePage> {
           ? savedProgramCode
           : null;
       yearBlock = storedYearBlock;
+      _classIds = studentClassIdsFromProfile(profile.data());
     });
   }
 
@@ -113,38 +142,53 @@ class _HomePageState extends State<HomePage> {
     // EXAMS
     // ------------------------------------------------------------
 
-    final examsSnap = await db
-        .collection("exams")
-        .where(
-          "program",
-          isEqualTo: programCode?.isNotEmpty == true ? programCode : program,
-        )
-        .where("yearBlock", isEqualTo: yearBlock)
-        .get();
+    final examsById = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    final examSnapshots = await Future.wait(
+      _classIds.map(
+        (classId) =>
+            db.collection("exams").where("classId", isEqualTo: classId).get(),
+      ),
+    );
+    for (final snapshot in examSnapshots) {
+      for (final exam in snapshot.docs) {
+        examsById[exam.id] = exam;
+      }
+    }
+    final examDocs = examsById.values.toList();
 
-    final List<QueryDocumentSnapshot> upcomingExams = [];
+    final List<QueryDocumentSnapshot<Map<String, dynamic>>> activeExams = [];
 
-    for (final examDoc in examsSnap.docs) {
+    for (final examDoc in examDocs) {
       final data = examDoc.data();
+      if ((data["approvalStatus"] ?? '').toString().trim().toLowerCase() !=
+          'approved') {
+        continue;
+      }
 
       final startTime = _toDate(data["startTime"]);
       final endTime = _toDate(data["endTime"]);
-      final notEnded = endTime == null || endTime.isAfter(now);
+      final isOngoing = _isMonitoredOngoingExam(data, now);
+      final isUpcoming =
+          startTime != null &&
+          startTime.isAfter(now) &&
+          (endTime == null || endTime.isAfter(now));
 
-      if (startTime != null && startTime.isAfter(now) && notEnded) {
-        upcomingExams.add(examDoc);
+      if (isOngoing || isUpcoming) {
+        activeExams.add(examDoc);
       }
     }
 
-    upcomingExams.sort((a, b) {
-      final aData = a.data() as Map<String, dynamic>;
-      final bData = b.data() as Map<String, dynamic>;
+    activeExams.sort((a, b) {
+      final aData = a.data();
+      final bData = b.data();
 
-      final aTime = _toDate(aData["startTime"]) ?? DateTime(9999);
+      final aStart = _toDate(aData["startTime"]) ?? DateTime(9999);
+      final bStart = _toDate(bData["startTime"]) ?? DateTime(9999);
+      final aOngoing = _isMonitoredOngoingExam(aData, now);
+      final bOngoing = _isMonitoredOngoingExam(bData, now);
+      if (aOngoing != bOngoing) return aOngoing ? -1 : 1;
 
-      final bTime = _toDate(bData["startTime"]) ?? DateTime(9999);
-
-      return aTime.compareTo(bTime);
+      return aStart.compareTo(bStart);
     });
 
     // ------------------------------------------------------------
@@ -156,37 +200,34 @@ class _HomePageState extends State<HomePage> {
       throw StateError('A signed-in student is required to load exam results.');
     }
 
-    final List<Map<String, dynamic>> results = [];
-    int completedCount = 0;
+    final resultSnapshot = await db
+        .collectionGroup("students")
+        .where("uid", isEqualTo: authUid)
+        .get();
+    final results = <Map<String, dynamic>>[];
+    var completedCount = 0;
 
-    final studentSnaps = await Future.wait(
-      examsSnap.docs.map(
-        (examDoc) => db
-            .collection("examResults")
-            .doc(examDoc.id)
-            .collection("students")
-            .doc(authUid)
-            .get(),
-      ),
-    );
+    for (final resultDoc in resultSnapshot.docs) {
+      final examResultDoc = resultDoc.reference.parent.parent;
+      if (examResultDoc == null || examResultDoc.parent.id != "examResults") {
+        continue;
+      }
 
-    for (var i = 0; i < examsSnap.docs.length; i++) {
-      final studentSnap = studentSnaps[i];
-      if (!studentSnap.exists) continue;
-
-      final examDoc = examsSnap.docs[i];
-      final examData = examDoc.data();
-      final data = studentSnap.data() as Map<String, dynamic>;
-      final status = (data["status"] ?? "incomplete").toString();
+      final data = resultDoc.data();
+      final examId = examResultDoc.id;
+      final status = (data["status"] ?? "incomplete").toString().toLowerCase();
       if (status == "completed") completedCount++;
 
+      final subject = data["subject"]?.toString().trim();
       results.add({
-        "subject": data["subject"] ?? examData["subject"] ?? "—",
+        "subject": subject == null || subject.isEmpty
+            ? (examId.isEmpty ? "—" : "Exam $examId")
+            : subject,
         "score": data["score"] ?? "—",
         "status": status,
         "submittedAt": _toDate(data["submittedAt"]),
         "total": data["total"] ?? "—",
-        "examId": data["examId"] ?? examDoc.id,
+        "examId": examId,
       });
     }
 
@@ -211,9 +252,9 @@ class _HomePageState extends State<HomePage> {
     final int readiness = accountReady ? 100 : 0;
 
     return {
-      "availableExams": upcomingExams.length,
+      "activeExamCount": activeExams.length,
       "completedCount": completedCount,
-      "upcomingExams": upcomingExams,
+      "activeExams": activeExams,
       "results": results,
       "readiness": readiness,
       "strikes": 0,
@@ -271,7 +312,7 @@ class _HomePageState extends State<HomePage> {
 
           final data = snapshot.data!;
 
-          final int availableExams = data["availableExams"] as int;
+          final int activeExamCount = data["activeExamCount"] as int;
 
           final int completedCount = data["completedCount"] as int;
 
@@ -281,8 +322,8 @@ class _HomePageState extends State<HomePage> {
 
           final bool ready = data["ready"] as bool;
 
-          final List<QueryDocumentSnapshot> upcomingExams =
-              data["upcomingExams"] as List<QueryDocumentSnapshot>;
+          final List<QueryDocumentSnapshot> activeExams =
+              data["activeExams"] as List<QueryDocumentSnapshot>;
 
           final List<Map<String, dynamic>> results =
               data["results"] as List<Map<String, dynamic>>;
@@ -323,7 +364,7 @@ class _HomePageState extends State<HomePage> {
                         // FOUR STAT CARDS
                         // ==================================================
                         _statsGrid(
-                          availableExams,
+                          activeExamCount,
                           completedCount,
                           readiness,
                           strikes,
@@ -334,7 +375,7 @@ class _HomePageState extends State<HomePage> {
                         // ==================================================
                         // UPCOMING + READINESS
                         // ==================================================
-                        _dashboardGrid(upcomingExams, readiness, ready),
+                        _dashboardGrid(activeExams, readiness, ready),
 
                         const SizedBox(height: 30),
 
@@ -636,9 +677,9 @@ class _HomePageState extends State<HomePage> {
 
           children: [
             _statCard(
-              title: "Available exams",
+              title: "Active exams",
               value: "$available",
-              caption: "Upcoming sessions",
+              caption: "In progress or upcoming",
               icon: Icons.assignment_outlined,
               background: Colors.white,
             ),
@@ -766,7 +807,7 @@ class _HomePageState extends State<HomePage> {
         if (constraints.maxWidth < 850) {
           return Column(
             children: [
-              _upcomingExamsCard(exams),
+              _activeExamsCard(exams),
 
               const SizedBox(height: 14),
 
@@ -779,7 +820,7 @@ class _HomePageState extends State<HomePage> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(flex: 7, child: _upcomingExamsCard(exams)),
+              Expanded(flex: 7, child: _activeExamsCard(exams)),
               const SizedBox(width: 15),
               Expanded(flex: 3, child: _readinessCard(readiness, ready)),
             ],
@@ -790,11 +831,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ============================================================
-  // UPCOMING EXAMS
+  // ACTIVE EXAMS
   // ============================================================
 
-  Widget _upcomingExamsCard(List<QueryDocumentSnapshot> exams) {
-    // Soonest 5 upcoming exams (list is already sorted by startTime)
+  Widget _activeExamsCard(List<QueryDocumentSnapshot> exams) {
+    // Ongoing exams appear first, followed by the soonest upcoming exams.
     final visibleExams = exams.take(5).toList();
 
     return Container(
@@ -818,7 +859,7 @@ class _HomePageState extends State<HomePage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        "Upcoming exams",
+                        "In progress & upcoming",
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w800,
@@ -827,7 +868,7 @@ class _HomePageState extends State<HomePage> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        "Closest deadlines and available sessions",
+                        "Ongoing exams first, then scheduled",
                         style: _monoStyle(9),
                       ),
                     ],
@@ -864,7 +905,7 @@ class _HomePageState extends State<HomePage> {
               padding: const EdgeInsets.symmetric(vertical: 40),
               child: Center(
                 child: Text(
-                  "NO UPCOMING EXAMS",
+                  "NO ACTIVE EXAMS",
                   style: _monoStyle(10, color: _muted2),
                 ),
               ),
@@ -883,13 +924,17 @@ class _HomePageState extends State<HomePage> {
     final classId = (data['classId'] ?? '').toString().trim();
 
     final DateTime? startTime = _toDate(data["startTime"]);
+    final isOngoing = _isMonitoredOngoingExam(data, DateTime.now());
 
-    final String dateText = startTime == null ? "—" : _formatDate(startTime);
+    final String dateText = startTime == null ? "" : _formatDate(startTime);
 
-    final String timeText = startTime == null ? "—" : _formatTime(startTime);
+    final String timeText = startTime == null
+        ? "Schedule to be announced"
+        : _formatTime(startTime);
 
-    final String duration = (data["duration"] ?? data["durationMinutes"] ?? "—")
-        .toString();
+    final duration = (data["duration"] ?? data["durationMinutes"] ?? '')
+        .toString()
+        .trim();
 
     return Material(
       color: Colors.white,
@@ -945,7 +990,7 @@ class _HomePageState extends State<HomePage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      dateText,
+                      dateText.isEmpty ? timeText : dateText,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -954,31 +999,29 @@ class _HomePageState extends State<HomePage> {
                         color: _ink,
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(timeText, maxLines: 1, style: _monoStyle(8)),
+                    if (dateText.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(timeText, maxLines: 1, style: _monoStyle(8)),
+                    ],
                   ],
                 ),
               ),
-              _statusPill("Available", Icons.circle),
-              const SizedBox(width: 12),
-              SizedBox(
-                width: 55,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      duration == "—" ? "—" : "$duration min",
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: _ink,
-                      ),
+              _statusPill(isOngoing ? "In progress" : "Upcoming", null),
+              if (duration.isNotEmpty) ...[
+                const SizedBox(width: 12),
+                SizedBox(
+                  width: 55,
+                  child: Text(
+                    "$duration min",
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: _ink,
                     ),
-                    const SizedBox(height: 3),
-                    Text("Secure", style: _monoStyle(8)),
-                  ],
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -1162,7 +1205,7 @@ class _HomePageState extends State<HomePage> {
   // HELPERS
   // ============================================================
 
-  Widget _statusPill(String text, IconData icon) {
+  Widget _statusPill(String text, IconData? icon) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
 
@@ -1176,9 +1219,10 @@ class _HomePageState extends State<HomePage> {
         mainAxisSize: MainAxisSize.min,
 
         children: [
-          Icon(icon, size: 6, color: _accent),
-
-          const SizedBox(width: 6),
+          if (icon != null) ...[
+            Icon(icon, size: 6, color: _accent),
+            const SizedBox(width: 6),
+          ],
 
           Text(
             text,

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -223,6 +224,18 @@ class MyApp extends StatelessWidget {
 }
 
 class MyScrollBehavior extends MaterialScrollBehavior {
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.stylus,
+    PointerDeviceKind.trackpad,
+  };
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      AlwaysScrollableScrollPhysics(parent: super.getScrollPhysics(context));
+
   @override
   Widget buildScrollbar(
     BuildContext context,
