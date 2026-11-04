@@ -148,11 +148,12 @@ const STALL_STRIKE_INTERVAL_MS = 5000; // at most one camera-loss strike per int
 const WATCHDOG_INTERVAL_MS = 1000;
 
 // Allow a second face to be reported so it can be detected (exam.html sets 1).
+const FACE_MIN_CONF = 0.55; // MediaPipe only returns a face whose confidence is at or above this
 faceMesh.setOptions({
   maxNumFaces: 2,
   refineLandmarks: true,
-  minDetectionConfidence: 0.55,
-  minTrackingConfidence: 0.55,
+  minDetectionConfidence: FACE_MIN_CONF,
+  minTrackingConfidence: FACE_MIN_CONF,
 });
 
 const calData = GazeCore.loadCalibration(); // null if missing or from an older version
@@ -241,7 +242,7 @@ let lastGazeT = performance.now();
 let awayMs = 0;       // leaky "time spent outside": jitter in and out cancels, real looking away builds up
 let gazeWasOk = true;
 const Y_BLIP_PX = 90;
-const Y_CONFIRM_FRAMES = 2;
+const Y_CONFIRM_FRAMES = 3;
 const Y_CONFIRM_WINDOW_MS = 350;
 let yStable = null;
 let yCandidate = null;
@@ -396,7 +397,7 @@ function learnFromGate(now) {
         console.warn("Could not persist gate gaze samples:", err);
       }
     }
-    console.debug("gate gaze samples:", firstResult, secondResult);
+    if (YoloEye.debugEnabled) console.debug("gate gaze samples:", firstResult, secondResult);
   }
 
   gateFrames.length = 0;
@@ -587,7 +588,7 @@ document.addEventListener(
       firstExamClick,
     );
     learnBias(e.clientX, performance.now());
-    console.debug("gaze online click:", result);
+    if (YoloEye.debugEnabled) console.debug("gaze online click:", result);
     if (result === "ok") {
       firstExamClick = false;
       model = online.getModel();
@@ -621,6 +622,7 @@ function strikesActive() {
 
 // Mark the student as "away" for a given reason; strike once it lasts longer than `ms`.
 function flagAway(reason, ms) {
+  window.GazeMetrics?.onFlag(reason, ms);
   examCard.classList.add("alert");
   gazeBubble.classList.add("alert");
   setVerification(false, reason);
@@ -877,6 +879,55 @@ setInterval(() => {
 // Main per-frame handler
 // ---------------------------------------------------------------------------
 
+// Camera pixels -> overlay canvas pixels, respecting the <video> object-fit. null until the video size is known.
+function overlayMap(vw, vh) {
+  const cw = videoElement.videoWidth, ch = videoElement.videoHeight;
+  if (!cw || !ch) return null;
+  const fit = getComputedStyle(videoElement).objectFit;
+  let sx, sy, ox = 0, oy = 0;
+  if (fit === "cover" || fit === "contain") {
+    const k = fit === "cover" ? Math.max(vw / cw, vh / ch) : Math.min(vw / cw, vh / ch);
+    sx = sy = k; ox = (vw - cw * k) / 2; oy = (vh - ch * k) / 2;
+  } else { sx = vw / cw; sy = vh / ch; }
+  const mirrored = /^matrix\(-1/.test(getComputedStyle(canvasElement).transform);
+  return { cw, ch, sx, sy, ox, oy, mirrored };
+}
+
+// YOLO eye overlay is available only while YoloEye debug mode is enabled.
+function drawYoloOverlay(vw, vh) {
+  const m = overlayMap(vw, vh);
+  if (!m || typeof YoloEye.drawYolo !== "function") return;
+  YoloEye.drawYolo(canvasCtx, YoloEye.lastGaze, { sx: m.sx, sy: m.sy, ox: m.ox, oy: m.oy, mirrored: m.mirrored });
+}
+
+// Small button on the camera preview: hides / shows the face mesh.
+// (Set window.GAZE_DEBUG_BUTTON = false before this script loads to not create it.)
+function addOverlayToggle() {
+  if (window.GAZE_DEBUG_BUTTON === false) return;
+  const host = videoElement.parentElement;
+  if (!host || document.getElementById("overlayToggleBtn")) return;
+  if (getComputedStyle(host).position === "static") host.style.position = "relative";
+  const btn = document.createElement("button");
+  btn.id = "overlayToggleBtn";
+  btn.type = "button";
+  btn.style.cssText =
+    "position:absolute;top:6px;right:6px;z-index:5;padding:3px 8px;font:600 11px system-ui,sans-serif;" +
+    "color:#fff;background:rgba(17,18,23,.78);border:1px solid #66c192;border-radius:4px;cursor:pointer;";
+  const paint = () => {
+    const on = window.SHOW_FACEMESH !== false;
+    btn.textContent = on ? "Hide mesh" : "Show mesh";
+    btn.setAttribute("aria-pressed", String(on));
+  };
+  btn.addEventListener("click", () => {
+    const next = window.SHOW_FACEMESH === false;
+    window.SHOW_FACEMESH = next;
+    paint();
+  });
+  paint();
+  host.appendChild(btn);
+}
+addOverlayToggle();
+
 async function onResults(results) {
   // CRITICAL: Exit immediately if submitting to avoid blocking submission
   if (window.submitting || window.examFinished || window.__examTrackingDisposed) return;
@@ -896,13 +947,26 @@ async function onResults(results) {
   canvasCtx.clearRect(0, 0, vw, vh);
 
   const faces = results.multiFaceLandmarks;
+  window.GazeMetrics?.onModelMetrics({ faceMeshMinConfidence: FACE_MIN_CONF });
   
   // Draw FaceMesh if faces detected
   if (faces && faces.length > 0) {
     for (const landmarks of faces) {
-      drawFaceMesh(canvasCtx, landmarks, vw, vh);
+      if (window.SHOW_FACEMESH !== false) {
+        const m = overlayMap(vw, vh);
+        if (m) {
+          // same cover-aware mapping as the camera preview
+          canvasCtx.save();
+          canvasCtx.translate(m.ox, m.oy);
+          drawFaceMesh(canvasCtx, landmarks, m.cw * m.sx, m.ch * m.sy);
+          canvasCtx.restore();
+        } else drawFaceMesh(canvasCtx, landmarks, vw, vh);
+      }
     }
   }
+
+  // Keep the YOLO visualization out of the normal camera preview.
+  if (YoloEye.debugEnabled && window.SHOW_YOLO_OVERLAY !== false && faces && faces.length > 0) drawYoloOverlay(vw, vh);
 
   // (1) No face: left the frame, hand/cover over the lens, etc.
   if (!faces || faces.length === 0) {
@@ -938,6 +1002,7 @@ async function onResults(results) {
   const now = performance.now();
   const head = GazeCore.extract(lm, W, H);
   const blinkish = blinkGuard(now, head.ear);
+  window.GazeMetrics?.onEye(head.ear, blinkish, head.ear < BLINK_EAR);
   if (head.ear < BLINK_EAR) {
     if (!eyesClosedSince) eyesClosedSince = now;
     if (now - eyesClosedSince <= BLINK_MAX_MS) {
@@ -976,6 +1041,7 @@ async function onResults(results) {
   // CRITICAL: Check again after async operation completes
   if (window.submitting || window.examFinished || window.__examTrackingDisposed) return;
   
+  window.GazeMetrics?.onRaw(raw);
   if (!raw) {
     if (!window.examStarted) faceText.textContent = "Starting eye tracker…";
     return;
@@ -1051,6 +1117,7 @@ async function onResults(results) {
     targetX = allowed.x;
     targetY = allowed.y;
   }
+  window.GazeMetrics?.onGaze(tNow, estimateX, estimateY, targetX, targetY);
  
   // Strike rule: judged on what the student SEES (the eased bubble position and radius).
   // The more the raw estimate jumps, the more of the bubble has to be outside before it counts.
@@ -1082,7 +1149,7 @@ async function onResults(results) {
       gateFrames.length = 0;
     }
   } else if (!gateLearned) {
-    console.debug("gate learning:", learnFromGate(tNow));
+    if (YoloEye.debugEnabled) console.debug("gate learning:", learnFromGate(tNow));
   }
  
   // Leaky timer instead of "reset on every good frame": a few jittery frames can't build a strike
@@ -1091,6 +1158,7 @@ async function onResults(results) {
   awayMs = gazeOk
     ? Math.max(0, awayMs - dtG * AWAY_DECAY)
     : Math.min(awayMs + dtG, AWAY_MS * 1.6);
+  window.GazeMetrics?.onState(gazeOk, awayMs);
  
   if (awayMs >= AWAY_MS) {
     flagAway("Looking away detected", 0); // alert + strike (registerStrikeOnce rate-limits to one per 1.2 s)
@@ -1103,4 +1171,3 @@ async function onResults(results) {
   }
   updateBubble();
 }
- 

@@ -82,7 +82,11 @@
       const registerStrikeFn = httpsCallable(functions, "registerExamStrike");
       const getStrikeCountFn = httpsCallable(functions, "getExamStrikeCount");
 
-      window.renderStrikes = function (count) {
+      const MAX_STRIKES = 50;
+      const STRIKE_LIMIT_DELAY_S = 5;
+      let strikeLimitTriggered = false;
+
+      window.renderStrikes = function (count, confirmed = true) {
         const el = document.getElementById("strikeBox");
         if (!el) return;
         const n = Number(count);
@@ -93,6 +97,7 @@
         window.cheatingCount = n;
         el.textContent = `Strikes: ${n}`;
         el.classList.toggle("has-strikes", n > 0);
+        if (confirmed && n > MAX_STRIKES) triggerStrikeLimit();
       };
 
       async function syncStrikesFromServer(examId) {
@@ -327,6 +332,65 @@
           ? "block"
           : "none";
       }
+
+      function showStrikeLimitState(state) {
+        document.getElementById("confirmModal").style.display = "none";
+        document.getElementById("answermodelneeded").style.display = "none";
+        document.getElementById("strikeLimitModal").style.display = "block";
+        document.getElementById("strikeLimitCountdown").style.display =
+          state === "countdown" ? "flex" : "none";
+        document.getElementById("strikeLimitSubmitting").style.display =
+          state === "submitting" ? "flex" : "none";
+        document.getElementById("strikeLimitFailed").style.display =
+          state === "failed" ? "block" : "none";
+      }
+
+      async function submitForStrikeLimit() {
+        showStrikeLimitState("submitting");
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          if (await window.submitExam(true, { silent: true })) return;
+          if (attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+          }
+        }
+        showStrikeLimitState("failed");
+      }
+
+      function triggerStrikeLimit() {
+        if (
+          strikeLimitTriggered ||
+          window.examFinished ||
+          window.submitting ||
+          window.hasSubmitted
+        ) {
+          return;
+        }
+        strikeLimitTriggered = true;
+
+        window.hasSubmitted = true;
+        window.examFinished = true;
+        window.allowStrikes = false;
+        window.disableGazeDetection = true;
+        window.skipIncompleteOnNextUnload = true;
+
+        let secondsLeft = STRIKE_LIMIT_DELAY_S;
+        const secondsEl = document.getElementById("strikeLimitSeconds");
+        secondsEl.textContent = secondsLeft;
+        showStrikeLimitState("countdown");
+
+        const timer = setInterval(() => {
+          secondsLeft--;
+          if (secondsLeft > 0) {
+            secondsEl.textContent = secondsLeft;
+            return;
+          }
+          clearInterval(timer);
+          submitForStrikeLimit();
+        }, 1000);
+      }
+
+      document.getElementById("strikeLimitRetryBtn").onclick =
+        submitForStrikeLimit;
 
       document.getElementById("stopRetryBtn").onclick = async () => {
         showStopModal("submitting");
@@ -1553,7 +1617,7 @@
           const examId = window.examData?.examId;
           if (!examId) return;
 
-          window.renderStrikes((window.cheatingCount || 0) + 1);
+          window.renderStrikes((window.cheatingCount || 0) + 1, false);
           const clipPromise = recordCheatClip(examId).catch((clipErr) =>
             console.error("recordCheatClip failed:", clipErr),
           );
@@ -2454,7 +2518,8 @@
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
       }
 
-      #stopModal {
+      #stopModal,
+      #strikeLimitModal {
         z-index: 10000;
       }
 
@@ -3670,6 +3735,9 @@
         border-color: #f1d8dc;
         color: #bd2942;
       }
+      .stop-card .stop-status {
+        color: #17181d;
+      }
 
       @media (max-width: 1040px) {
         .wrap {
@@ -4540,6 +4608,34 @@
       </div>
     </div>
     <div
+      id="strikeLimitModal"
+      class="modal"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="strikeLimitTitle"
+      aria-describedby="strikeLimitMsg"
+    >
+      <div class="modal-content stop-card">
+        <div class="stop-icon" aria-hidden="true">!</div>
+        <h3 id="strikeLimitTitle">Strike limit exceeded</h3>
+        <p id="strikeLimitMsg">
+          You have gone over the maximum of 50 strikes. Your exam will be
+          submitted automatically and marked as incomplete.
+        </p>
+        <div id="strikeLimitCountdown" class="stop-status">
+          <span>Submitting in <b id="strikeLimitSeconds">5</b> seconds…</span>
+        </div>
+        <div id="strikeLimitSubmitting" class="stop-status" style="display: none">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Submitting your answers…</span>
+        </div>
+        <div id="strikeLimitFailed" style="display: none">
+          <p>We couldn't submit yet. Check your connection and try again.</p>
+          <button id="strikeLimitRetryBtn" class="btn">Try Again</button>
+        </div>
+      </div>
+    </div>
+    <div
       id="screenShareModal"
       class="modal"
       role="alertdialog"
@@ -4713,6 +4809,7 @@
     <script src="gaze-core.js"></script>
     <script src="yolo-eye.js"></script>
     <script src="exam-gaze-block.js"></script>
+    <script src="gaze-metrics.js"></script>
     <script>
       const GATE_DELAY_MS = 5000;
       const GATE_DEFAULT_TEXT =

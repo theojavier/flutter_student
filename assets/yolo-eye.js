@@ -24,6 +24,7 @@
 //   const s = smooth(raw, performance.now());               // s.ox/s.oy are already head + distance corrected
 
 const YoloEye = (() => {
+  const DEBUG = false; // Enables model logs and keypoint/box overlays only when debugging.
   const cfg = {
     modelUrl: "./model_1024/best_w8a32_640.tflite", // w8a32: balanced speed + accuracy
     jsonUrl: "./model_1024/eye_keypoint_names.json",
@@ -78,6 +79,16 @@ const YoloEye = (() => {
 
   let S = 128, J = null, eyeModel = null, LTensor = null, NHWC = false, V = null;
   let lastScore = 0, why = "", initPromise = null, error = null, info = "", usedAccel = "", lastGaze = null;
+
+  // ---- metrics (read by gaze-metrics.js) ----
+  const stats = { runs: 0, ok: 0, miss: 0, err: 0, recent: [], eye: { L: { tried: 0, found: 0, closed: 0, miss: 0 }, R: { tried: 0, found: 0, closed: 0, miss: 0 } } };
+  let lastGazeAt = 0; // performance.now() when the last YOLO run finished
+  const noteRun = (ms, found) => {
+    stats.runs++;
+    if (found) stats.ok++; else stats.miss++;
+    stats.recent.push(ms);
+    if (stats.recent.length > 300) stats.recent.shift();
+  };
 
   // GPU-reset recovery state
   let recovering = null;   // Promise while the model is being rebuilt
@@ -173,7 +184,7 @@ const YoloEye = (() => {
     } catch (e) {
       console.warn("YoloEye: could not read model details:", e);
     }
-    console.log(info);
+    if (DEBUG) console.log(info);
   }
 
   // Called when the GPU resets mid-exam: drop the dead model, rebuild in the background.
@@ -258,7 +269,8 @@ const YoloEye = (() => {
     else for (let i = 0; i < n; i++) { t[i] = d[4 * i] / 255; t[n + i] = d[4 * i + 1] / 255; t[2 * n + i] = d[4 * i + 2] / 255; }
     return t;
   }
-  async function infer(t) {
+  let inferenceSeq = 0;
+  async function infer(t, lab, M) {
     if (!eyeModel) throw new GpuLost("model not available");
 
     const inp = new LTensor(t, NHWC ? [1, S, S, 3] : [1, 3, S, S]);
@@ -283,15 +295,43 @@ const YoloEye = (() => {
     let bi = 0, bs = -1;
     for (let r = 0; r < rows; r++) { const s = get(r, 4); if (s > bs) { bs = s; bi = r; } }
     lastScore = bs;
-    if (bs < CONF) return null;
+    if (bs < CONF) {
+      if (DEBUG) console.info(`[YOLO-eye #${++inferenceSeq}] ${lab} inference`, {
+          confidence: Number.isFinite(bs) ? `${(bs * 100).toFixed(1)}%` : "unavailable",
+          threshold: `${(CONF * 100).toFixed(1)}%`,
+          detected: false,
+          accelerator: usedAccel,
+        });
+      return null;
+    }
     const k = [];
     for (let j = 0; j < NK; j++) k.push([get(bi, ks + 3 * j), get(bi, ks + 3 * j + 1), get(bi, ks + 3 * j + 2)]);
-    if (Math.max(...k.map((p) => Math.max(Math.abs(p[0]), Math.abs(p[1])))) <= 2) k.forEach((p) => { p[0] *= S; p[1] *= S; });
-    return { score: bs, k };
+    const normalized = Math.max(...k.map((p) => Math.max(Math.abs(p[0]), Math.abs(p[1])))) <= 2;
+    if (normalized) k.forEach((p) => { p[0] *= S; p[1] *= S; });
+    // detection box in crop pixels as [x1, y1, x2, y2]. 5+NC layout = cx,cy,w,h ; 6+NC layout = x1,y1,x2,y2
+    let b = [get(bi, 0), get(bi, 1), get(bi, 2), get(bi, 3)];
+    if (normalized) b = b.map((v) => v * S);
+    const box = ks === 5 ? [b[0] - b[2] / 2, b[1] - b[3] / 2, b[0] + b[2] / 2, b[1] + b[3] / 2] : b;
+    if (DEBUG) {
+      const corners = [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]]
+        .map(([x, y]) => unmap(M, x, y));
+      const xs = corners.map((point) => point.x), ys = corners.map((point) => point.y);
+      const kpConfidence = k.reduce((total, point) => total + clamp(point[2], 0, 1), 0) / k.length;
+      const left = Math.min(...xs), top = Math.min(...ys);
+      console.info(`[YOLO-eye #${++inferenceSeq}] ${lab} inference`, {
+        confidence: `${(bs * 100).toFixed(1)}%`,
+        keypointConfidence: `${(kpConfidence * 100).toFixed(1)}%`,
+        detected: true,
+        cropBox: { x: box[0], y: box[1], width: box[2] - box[0], height: box[3] - box[1] },
+        cameraBox: { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top },
+        accelerator: usedAccel,
+      });
+    }
+    return { score: bs, k, box };
   }
   async function runEye(lab, A, B) {
     const { M, w, ang } = eyeM(A, B, FLIP[lab]);
-    const res = await infer(cropTensor(M));
+    const res = await infer(cropTensor(M), lab, M);
     return res && { ...res, M, w, ang, flip: FLIP[lab], A, B };
   }
   // same eye, crop nudged by v = [shift x, shift y (eye-widths), zoom]
@@ -442,16 +482,19 @@ const YoloEye = (() => {
   async function yoloEye(lab, [a, b, u, l], lm, W, H) {
     const P = (i) => ({ x: lm[i].x * W, y: lm[i].y * H });
     const ear = earOf(lab, lm, W, H);
-    if (ear < cfg.blinkEar) { why += `${lab}: eye closed (ear ${ear.toFixed(2)}) `; return null; }
+    stats.eye[lab].tried++;
+    if (ear < cfg.blinkEar) { stats.eye[lab].closed++; why += `${lab}: eye closed (ear ${ear.toFixed(2)}) `; return null; }
     const nowT = performance.now();
     const { A, B } = lockBox(lab, P(a), P(b), nowT); // stays put until the eye really moves
     let r = await runEye(lab, A, B);
     if (!r) {
+      stats.eye[lab].miss++;
       why += `${lab}: model score ${lastScore.toFixed(3)} < ${CONF} `;
       if (trk[lab] && ++trk[lab].miss >= cfg.boxMissMax) delete trk[lab]; // lost the eye: re-find it from the face landmarks
       return null;
     }
     if (trk[lab]) trk[lab].miss = 0;
+    stats.eye[lab].found++;
     recenterBox(lab, r, A, B, nowT); // eye drifted off-centre in the box: re-centre on what YOLO found
     if (cfg.refine) {
       const p1 = unmap(r.M, ...r.k[J.idx.corner_left].slice(0, 2)), p2 = unmap(r.M, ...r.k[J.idx.corner_right].slice(0, 2));
@@ -487,7 +530,14 @@ const YoloEye = (() => {
     if (!per.length) return null;
     let use = per, note = per.length > 1 ? "eyes agree" : "one eye";
     // (non-fusion modes only matter here; in fusion mode the per-eye bias is already updated above)
-    if (per.length === 2 && Math.abs(per[0].ox - per[1].ox) > cfg.disagree) { use = [per[0].q >= per[1].q ? per[0] : per[1]]; note = "DISAGREE -> " + use[0].lab; }
+    if (per.length === 2) {
+      const dx = Math.abs(per[0].ox - per[1].ox);
+      const dy = Math.abs(per[0].oy - per[1].oy);
+      if (dx > cfg.disagree || dy > cfg.disagree) {
+        use = [per[0].q >= per[1].q ? per[0] : per[1]];
+        note = `DISAGREE ${dx > cfg.disagree ? "x" : ""}${dx > cfg.disagree && dy > cfg.disagree ? "+" : ""}${dy > cfg.disagree ? "y" : ""} -> ${use[0].lab}`;
+      }
+    }
     const ws = use.map((p) => Math.max(p.q, 1e-3)), sw = ws.reduce((a, b) => a + b, 0);
     const avg = (k) => use.reduce((s, p, i) => s + p[k] * ws[i], 0) / sw;
     return { ox: avg("ox"), oy: avg("oy"), eyePx: avg("eyePx"), per, note };
@@ -521,9 +571,10 @@ const YoloEye = (() => {
       snapCtx.drawImage(video, 0, 0);
       V = snap;
       runMaxSpeed = headSpeed;
+      const tRun = performance.now();
       yoloGaze(lm, W, H)
-        .then((g) => { if (!disposed) lastGaze = g; })
-        .catch((e) => { if (!(e instanceof GpuLost)) console.error("YOLO eye failed:", e); })
+        .then((g) => { if (!disposed) { lastGaze = g; lastGazeAt = performance.now(); noteRun(lastGazeAt - tRun, !!g); } })
+        .catch((e) => { stats.err++; if (!(e instanceof GpuLost)) console.error("YOLO eye failed:", e); })
         .finally(() => {
           busy = false;
           if (disposePending) releaseModel();
@@ -544,8 +595,11 @@ const YoloEye = (() => {
     busy = true;
     try {
       V = video;
+      const tRun = performance.now();
       const g = await yoloGaze(lm, W, H);
       lastGaze = g;
+      lastGazeAt = performance.now();
+      noteRun(lastGazeAt - tRun, !!g);
       if (!g) return lastResult;
       const h = GazeCore.extract(lm, W, H);
       lastResult = { ear: h.ear, ox: g.ox, oy: g.oy, yaw: h.yaw, pitch: h.pitch, roll: h.roll, cx: h.cx, cy: h.cy, scale: h.scale, eyePx: g.eyePx };
@@ -653,8 +707,62 @@ const YoloEye = (() => {
     }));
   }
 
+  // RED debug overlay: the model's eye box (solid) + its keypoints, per eye.
+  // o: { sx, sy, ox, oy }  canvas px = camera px * s + o   (set these from the video's object-fit)
+  //    mirrored: true when the canvas is CSS-flipped (scaleX(-1)) so the label text is flipped back
+  //    maxAgeMs: hide when the last YOLO result is older than this (so it disappears while the eye is closed)
+  //    showCrop: also draw the dashed square that is fed to the model
+  function drawYolo(ctx, g = lastGaze, o = {}) {
+    const { sx = 1, sy = 1, ox = 0, oy = 0, mirrored = false, maxAgeMs = 400, showCrop = false, color = "#ff1a1a" } = o;
+    if (!g || !g.per || !lastGazeAt || performance.now() - lastGazeAt > maxAgeMs) return;
+    const P = (M, x, y) => { const q = unmap(M, x, y); return [q.x * sx + ox, q.y * sy + oy]; };
+    const poly = (pts) => { ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.stroke(); };
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = color;
+    for (const p of g.per) {
+      const r = p.r;
+      if (showCrop) {
+        ctx.setLineDash([4, 3]); ctx.lineWidth = 1; ctx.globalAlpha = 0.6;
+        poly([[0, 0], [S, 0], [S, S], [0, S]].map(([x, y]) => P(r.M, x, y)));
+        ctx.setLineDash([]); ctx.globalAlpha = 1;
+      }
+      let tag = null;
+      if (r.box) {
+        const [x1, y1, x2, y2] = r.box;
+        const c = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]].map(([x, y]) => P(r.M, x, y));
+        ctx.lineWidth = 2; poly(c);
+        tag = c.reduce((a, b) => (b[1] < a[1] ? b : a)); // top-most corner
+      }
+      r.k.forEach((k) => {
+        if (k[2] < KCONF) return;
+        const [x, y] = P(r.M, k[0], k[1]);
+        ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 7);
+        ctx.fillStyle = color; ctx.fill();
+        ctx.lineWidth = 1; ctx.strokeStyle = "#fff"; ctx.stroke(); ctx.strokeStyle = color;
+      });
+      if (tag) {
+        const kp = r.k.reduce((a, k) => a + clamp(k[2], 0, 1), 0) / r.k.length;
+        const text = `YOLO-${p.lab} ${Math.round(r.score * 100)}% · kp ${Math.round(kp * 100)}%`; // box confidence · mean keypoint confidence
+        ctx.save();
+        ctx.translate(tag[0], tag[1] - 4);
+        if (mirrored) ctx.scale(-1, 1);
+        ctx.font = "bold 10px sans-serif";
+        ctx.fillStyle = "rgba(0,0,0,.65)";
+        ctx.fillRect(-2, -10, ctx.measureText(text).width + 4, 13);
+        ctx.fillStyle = color;
+        ctx.fillText(text, 0, 0);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
   return {
-    cfg, init, dispose, extract, reset, makeSmoother, exportCfg, applyCfg, drawKeypoints,
+    cfg, init, dispose, extract, reset, makeSmoother, exportCfg, applyCfg, drawKeypoints, drawYolo,
+    get debugEnabled() { return DEBUG; },
+    get stats() { return stats; },
+    get lastGazeAt() { return lastGazeAt; },
     get ready() { return !!eyeModel; },
     isReady() { return !!eyeModel; }, // alias
     isBusy() { return busy; }, // YOLO is processing a frame (in fusion mode this does NOT block features)

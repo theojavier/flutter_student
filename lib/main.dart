@@ -21,6 +21,7 @@ import 'pages/exams/exam_result_page.dart';
 import 'pages/auth/forgot_page.dart';
 import 'pages/exams/exam_html.dart';
 import 'pages/notifications/notifications_page.dart';
+import 'helpers/session_guard.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -69,6 +70,13 @@ final GoRouter router = GoRouter(
         path.startsWith('/exam-result');
 
     var user = FirebaseAuth.instance.currentUser;
+
+    if (user != null && await SessionGuard.signOutIfExpired()) {
+      return '/login';
+    }
+    if (user == null && !loggingIn && SessionGuard.expired) {
+      return '/login';
+    }
 
     if (user == null && !loggingIn) {
       if (inExam) return null;
@@ -192,8 +200,47 @@ final GoRouter router = GoRouter(
   ],
 );
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  late final StreamSubscription<User?> _authSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user == null) {
+        SessionGuard.cancelTimer();
+      } else {
+        unawaited(
+          SessionGuard.watch(onExpired: () => router.go('/login')),
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _authSubscription.cancel();
+    SessionGuard.cancelTimer();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      SessionGuard.signOutIfExpired().then((didExpire) {
+        if (didExpire) router.go('/login');
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

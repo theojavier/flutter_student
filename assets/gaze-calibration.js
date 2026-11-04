@@ -3,7 +3,7 @@
 //   face_mesh.js, camera_utils.js, gaze-core.js, yolo-eye.js
 // Same element ids as before.
 // MediaPipe = face + head pose.  YOLO eye model = eyelid/iris keypoints (the ox/oy features).
-console.log("Gaze calibration (head-aware, YOLO eyes) loaded");
+if (YoloEye.debugEnabled) console.log("Gaze calibration (head-aware, YOLO eyes) loaded");
 
 // Bridge function for cross-platform communication
 window.sendToHost = window.sendToHost || function (data) {
@@ -588,7 +588,7 @@ fm.onResults(async (res) => {
 
     const raw = await YoloEye.extract(lm, W, H, video); // returns last valid result if busy/failed
     if (!raw) return; // only skip if never had a valid result
-    YoloEye.drawKeypoints(ctx, YoloEye.lastGaze, canvas.width / W, canvas.height / H);
+    if (YoloEye.debugEnabled) YoloEye.drawKeypoints(ctx, YoloEye.lastGaze, canvas.width / W, canvas.height / H);
 
     if (raw.ear < BLINK_EAR) return;
     const s = smooth(raw, performance.now());

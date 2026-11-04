@@ -1,9 +1,9 @@
 // responsive_scaffold.dart  (STUDENT)
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../helpers/session_guard.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
 import '../helpers/notifications_helper.dart';
 import '../pages/notifications/notification_item.dart';
@@ -25,6 +25,7 @@ const Color _kInk = Color(0xFF121217);
 const Color _kRed = Color(0xFFDF2D45);
 const Color _kRedDark = Color(0xFFB81935);
 const Color _kNotificationGreen = Color(0xFF087B4F);
+const Color _kAccessGreen = Color(0xFF22C55E);
 const Color _kPillBg = Color(0xFFFFF3F5);
 const Color _kPillBorder = Color(0xFFEDCCD1);
 const Color _kLine = Color(0xFFDFE0DE);
@@ -389,7 +390,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
 
   Future<void> _handleLogout() async {
     try {
-      await FirebaseAuth.instance.signOut();
+      await SessionGuard.signOut();
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
@@ -946,11 +947,11 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                   width: 8,
                   height: 8,
                   decoration: BoxDecoration(
-                    color: _kRed,
+                    color: _kAccessGreen,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: _kRed.withValues(alpha: 0.18),
+                        color: _kAccessGreen.withValues(alpha: 0.18),
                         spreadRadius: 4,
                       ),
                     ],

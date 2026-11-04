@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Detection viewer</title>
+<style>
+  :root {
+    --bg: #101114;
+    --panel: #181a1f;
+    --line: #262a32;
+    --text: #e7e9ee;
+    --muted: #8d93a1;
+    --face: #00e676;
+    --yolo: #ff3b4e;
+    --iris: #4dd0ff;
+    --on: #58d49b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+
+  .bar {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 8px 18px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+  }
+  .bar h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+  .bar h1 span { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  .toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+  .toggles button {
+    font: inherit; font-size: 13px; color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  .toggles button:hover { color: var(--text); border-color: #3a3f4a; }
+  .toggles button[aria-pressed="true"] { color: #c9f5de; background: #17332a; border-color: var(--on); }
+  .toggles button:focus-visible { outline: 2px solid var(--on); outline-offset: 2px; }
+
+  main { display: flex; gap: 14px; padding: 14px 16px 8px; align-items: flex-start; }
+  .stage-wrap { flex: 1 1 0; min-width: 0; display: flex; justify-content: center; }
+  .stage {
+    position: relative; background: #000; border-radius: 8px; overflow: hidden;
+    aspect-ratio: var(--ar, 1.7778);
+    width: min(100%, calc((100dvh - 150px) * var(--ar, 1.7778)));
+  }
+  .stage video, .stage canvas {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill;
+  }
+  .stage.mirror video, .stage.mirror canvas { transform: scaleX(-1); }
+
+  .msg {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    padding: 24px; color: var(--muted); background: rgba(0,0,0,.55); z-index: 3;
+  }
+  .msg.hidden { display: none; }
+  .msg p { margin: 0; max-width: 460px; }
+
+  .warn {
+    margin: 0 16px; padding: 9px 12px; border: 1px solid #5b2a31; background: #2a1519;
+    color: #ffb3bb; border-radius: 6px; font-size: 13px;
+  }
+  .warn.hidden { display: none; }
+
+  .eyes { flex: 0 0 min(340px, 30%); display: grid; gap: 12px; }
+  .eyes.hidden { display: none; }
+  .eye { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .eye header {
+    display: flex; justify-content: space-between; gap: 8px; padding: 8px 10px;
+    border-bottom: 1px solid var(--line); font-size: 13px;
+  }
+  .eye header small { color: var(--muted); }
+  .eye canvas { display: block; width: 100%; aspect-ratio: 1; background: #0a0b0d; }
+
+  .hud { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 16px 16px; }
+  .chip {
+    display: inline-flex; gap: 8px; align-items: baseline; padding: 5px 10px;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+    font: 12.5px ui-monospace, Menlo, Consolas, monospace;
+  }
+  .chip b { font-weight: 500; color: var(--muted); font-family: system-ui, sans-serif; }
+  .chip.face { border-color: #14543a; }
+  .chip.face i { color: var(--face); }
+  .chip.yolo { border-color: #6a2630; }
+  .chip.yolo i { color: var(--yolo); }
+  .chip i { font-style: normal; }
+
+  @media (max-width: 900px) {
+    main { flex-direction: column; }
+    .stage-wrap { width: 100%; }
+    .stage { width: 100%; }
+    .eyes { flex: none; width: 100%; grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <h1>Detection viewer <span>face mesh and YOLO eye keypoints</span></h1>
+    <div class="toggles" id="toggles">
+      <button type="button" data-opt="mesh" aria-pressed="true">Face mesh</button>
+      <button type="button" data-opt="box" aria-pressed="false">Face box</button>
+      <button type="button" data-opt="yolo" aria-pressed="false">YOLO eyes</button>
+      <button type="button" data-opt="eyes" aria-pressed="false">Eye close-ups</button>
+      <button type="button" data-opt="labels" aria-pressed="false">Keypoint names</button>
+      <button type="button" data-opt="mirror" aria-pressed="true">Mirror</button>
+    </div>
+  </div>
+
+  <p class="warn hidden" id="warn" role="status"></p>
+
+  <main>
+    <div class="stage-wrap">
+      <div class="stage mirror" id="stage">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="msg" id="msg"><p>Starting camera…</p></div>
+      </div>
+    </div>
+
+    <aside class="eyes hidden" id="eyes" aria-label="Eye crops fed to the YOLO model">
+      <section class="eye">
+        <header><span>Eye L</span><small id="capL">waiting</small></header>
+        <canvas id="insetL" width="384" height="384"></canvas>
+      </section>
+      <section class="eye">
+        <header><span>Eye R <small>(flipped, as the model sees it)</small></span><small id="capR">waiting</small></header>
+        <canvas id="insetR" width="384" height="384"></canvas>
+      </section>
+    </aside>
+  </main>
+
+  <div class="hud" id="hud"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script>
+  // =====================================================================
+  // Settings. Keep this file next to the model_1024 folder, or change the paths.
+  // =====================================================================
+  const CFG = {
+    modelUrl: "./model_1024/best_w8a32_640.tflite",
+    jsonUrl: "./model_1024/eye_keypoint_names.json",
+    litertBase: "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3",
+    accelerators: ["webgpu", "wasm"],  // tried in order
+    camera: { width: 1280, height: 720 },
+    faceMinConf: 0.55,   // FaceMesh detection / tracking confidence
+    yoloConf: 0.05,      // YOLO box confidence needed to count as a detection
+    kpConf: 0.30,        // keypoints below this are drawn hollow (close-ups) or hidden (camera view)
+    blinkEar: 0.14,      // eye aspect ratio below this = eye closed, YOLO is skipped
+    staleMs: 600,        // hide a YOLO result when it is older than this
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const stage = $("stage"), video = $("video"), canvas = $("overlay"), ctx = canvas.getContext("2d");
+  const insets = { L: $("insetL"), R: $("insetR") };
+  const caps = { L: $("capL"), R: $("capR") };
+  const COLORS = { face: "#00e676", yolo: "#ff3b4e", iris: "#4dd0ff", mesh: "88,212,155" };
+
+  const opts = { mesh: true, box: false, yolo: false, eyes: false, labels: false, mirror: true };
+  document.getElementById("toggles").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-opt]");
+    if (!b) return;
+    const key = b.dataset.opt;
+    opts[key] = !opts[key];
+    b.setAttribute("aria-pressed", String(opts[key]));
+    if (key === "mirror") stage.classList.toggle("mirror", opts.mirror);
+    if (key === "eyes") $("eyes").classList.toggle("hidden", !opts.eyes);
+  });
+
+  const showMsg = (t) => { $("msg").innerHTML = `<p>${t}</p>`; $("msg").classList.remove("hidden"); };
+  const hideMsg = () => $("msg").classList.add("hidden");
+  const showWarn = (t) => { const w = $("warn"); w.textContent = t; w.classList.remove("hidden"); };
+  const hideWarn = () => $("warn").classList.add("hidden");
+
+  // =====================================================================
+  // Face detector: gives a real face confidence (FaceMesh itself has none)
+  // =====================================================================
+  let faceDetector = null, faceScore = null, lastDetectAt = 0, lastDetectVideoTime = -1;
+  (async () => {
+    try {
+      const V = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+      const { FilesetResolver, FaceDetector } = await import(`${V}/+esm`);
+      const fileset = await FilesetResolver.forVisionTasks(`${V}/wasm`);
+      faceDetector = await FaceDetector.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+        },
+        runningMode: "VIDEO",
+        minDetectionConfidence: 0.3,
+      });
+    } catch (err) {
+      console.warn("Face confidence detector unavailable:", err);
+    }
+  })();
+
+  function updateFaceScore(now) {
+    if (!faceDetector || now - lastDetectAt < 150) return;
+    if (video.readyState < 2 || video.currentTime === lastDetectVideoTime) return;
+    lastDetectAt = now;
+    lastDetectVideoTime = video.currentTime;
+    try {
+      const res = faceDetector.detectForVideo(video, now);
+      const scores = (res.detections || []).map((d) => d.categories?.[0]?.score ?? 0);
+      faceScore = scores.length ? Math.max(...scores) : null;
+    } catch (err) {
+      console.warn("Face score failed:", err);
+    }
+  }
+
+  // =====================================================================
+  // YOLO eye model (LiteRT)
+  // =====================================================================
+  const NK = 13;
+  const EYES = { L: [33, 133, 159, 145], R: [362, 263, 386, 374] }; // [corner a, corner b, lid up, lid low]
+  const IRIS = { L: 468, R: 473 };
+  const FLIP = { L: false, R: true };
+  const BOX = { move: 0.08, scale: 0.08, angle: 0.06, missMax: 3 };
+
+  let J = null, S = 128, model = null, LT = null, NHWC = false, usedAccel = "", litert = null;
+  let recovering = null, busy = false, modelReady = false;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  const cc = document.createElement("canvas");
+  cc.width = cc.height = S;
+  const cctx = cc.getContext("2d", { willReadFrequently: true });
+  const snap = document.createElement("canvas");
+  const snapCtx = snap.getContext("2d");
+
+  class GpuLost extends Error {}
+  const isGpuLoss = (e) => {
+    const m = String((e && e.message) || e || "");
+    return (m.includes("Device") && m.includes("lost")) || m.includes("mapAsync") || m.includes("DXGI") || (e && e.name === "OperationError");
+  };
+
+  async function getLiteRt() {
+    if (!litert) {
+      const m = await import(CFG.litertBase + "/+esm");
+      await m.loadLiteRt(CFG.litertBase + "/wasm/");
+      litert = m;
+    }
+    return litert;
+  }
+
+  async function compile(accels) {
+    const m = await getLiteRt();
+    let lastErr = null;
+    for (const accel of accels) {
+      try {
+        if (accel === "webgpu") {
+          if (!navigator.gpu) throw new Error("WebGPU is unavailable");
+          if (!(await navigator.gpu.requestAdapter())) throw new Error("no WebGPU adapter");
+        }
+        model = await m.loadAndCompile(CFG.modelUrl, { accelerator: accel });
+        usedAccel = accel;
+        LT = m.Tensor;
+        return;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`YOLO eye model: ${accel} failed:`, e);
+      }
+    }
+    throw lastErr || new Error("Eye model could not be loaded");
+  }
+
+  async function loadYolo() {
+    const jr = await fetch(CFG.jsonUrl);
+    if (!jr.ok) throw new Error(`Could not load ${CFG.jsonUrl} (HTTP ${jr.status})`);
+    J = await jr.json();
+    S = J.imgsz || 128;
+    cc.width = cc.height = S;
+    await compile(CFG.accelerators);
+    const inS = model.getInputDetails?.()[0]?.shape;
+    if (inS && inS.length === 4) {
+      const s = Array.from(inS);
+      NHWC = s[3] === 3 && s[1] !== 3;
+    }
+    modelReady = true;
+  }
+
+  function recoverOnCpu(err) {
+    if (recovering) return;
+    console.warn("GPU device lost, rebuilding the eye model on CPU", err);
+    const old = model;
+    model = null;
+    try { old?.delete?.(); } catch (_) {}
+    for (const k of Object.keys(trk)) delete trk[k];
+    recovering = compile(["wasm"])
+      .catch((e) => { modelReady = false; showWarn("Eye model stopped: " + e.message); })
+      .finally(() => { recovering = null; });
+  }
+
+  // ---- crop geometry ----
+  function eyeM(A, B, flip) {
+    const cx = (A.x + B.x) / 2, cy = (A.y + B.y) / 2;
+    const w = Math.hypot(B.x - A.x, B.y - A.y), ang = Math.atan2(B.y - A.y, B.x - A.x);
+    const s = S / (w * J.K), c = Math.cos(-ang), n = Math.sin(-ang), f = flip ? -1 : 1;
+    const a = s * f * c, b = -s * f * n, d = s * n, e = s * c;
+    return { M: [a, b, J.center_px[0] - (a * cx + b * cy), d, e, J.center_px[1] - (d * cx + e * cy)], w, ang };
+  }
+  function unmap(M, x, y) {
+    const det = M[0] * M[4] - M[1] * M[3], dx = x - M[2], dy = y - M[5];
+    return { x: (M[4] * dx - M[1] * dy) / det, y: (-M[3] * dx + M[0] * dy) / det };
+  }
+  function cropTensor(M) {
+    cctx.setTransform(1, 0, 0, 1, 0, 0);
+    cctx.fillStyle = "#727272";
+    cctx.fillRect(0, 0, S, S);
+    cctx.setTransform(M[0], M[3], M[1], M[4], M[2], M[5]);
+    cctx.drawImage(snap, 0, 0, snap.width, snap.height);
+    const d = cctx.getImageData(0, 0, S, S).data, n = S * S, t = new Float32Array(3 * n);
+    if (NHWC) {
+      for (let i = 0; i < n; i++) { t[3 * i] = d[4 * i] / 255; t[3 * i + 1] = d[4 * i + 1] / 255; t[3 * i + 2] = d[4 * i + 2] / 255; }
+    } else {
+      for (let i = 0; i < n; i++) { t[i] = d[4 * i] / 255; t[n + i] = d[4 * i + 1] / 255; t[2 * n + i] = d[4 * i + 2] / 255; }
+    }
+    return t;
+  }
+
+  // ---- inference ----
+  async function infer(t) {
+    if (!model) throw new GpuLost("model not available");
+    const inp = new LT(t, NHWC ? [1, S, S, 3] : [1, 3, S, S]);
+    let out, f;
+    try {
+      out = await model.run([inp]);
+      f = Float32Array.from(await out[0].data());
+    } catch (e) {
+      if (usedAccel === "webgpu" && isGpuLoss(e)) { recoverOnCpu(e); throw new GpuLost("GPU device lost"); }
+      throw e;
+    } finally {
+      try { inp.delete(); } catch (_) {}
+      try { out && out.forEach((o) => o.delete()); } catch (_) {}
+    }
+    const NC = NK * 3;
+    let rows, get, ks;
+    if (f.length % (5 + NC) === 0 && f.length % (6 + NC) !== 0) { rows = f.length / (5 + NC); get = (r, c) => f[c * rows + r]; ks = 5; }
+    else { rows = f.length / (6 + NC); get = (r, c) => f[r * (6 + NC) + c]; ks = 6; }
+    let bi = 0, bs = -1;
+    for (let r = 0; r < rows; r++) { const s = get(r, 4); if (s > bs) { bs = s; bi = r; } }
+    if (bs < CFG.yoloConf) return null;
+    const k = [];
+    for (let j = 0; j < NK; j++) k.push([get(bi, ks + 3 * j), get(bi, ks + 3 * j + 1), get(bi, ks + 3 * j + 2)]);
+    const normalized = Math.max(...k.map((p) => Math.max(Math.abs(p[0]), Math.abs(p[1])))) <= 2;
+    if (normalized) k.forEach((p) => { p[0] *= S; p[1] *= S; });
+    let b = [get(bi, 0), get(bi, 1), get(bi, 2), get(bi, 3)];
+    if (normalized) b = b.map((v) => v * S);
+    const box = ks === 5 ? [b[0] - b[2] / 2, b[1] - b[3] / 2, b[0] + b[2] / 2, b[1] + b[3] / 2] : b;
+    const kp = k.reduce((s, p) => s + clamp(p[2], 0, 1), 0) / k.length;
+    return { score: bs, kp, k, box };
+  }
+
+  const earOf = (lab, lm, W, H) => {
+    const [a, b, u, l] = EYES[lab];
+    return Math.hypot((lm[u].x - lm[l].x) * W, (lm[u].y - lm[l].y) * H) /
+      (Math.hypot((lm[b].x - lm[a].x) * W, (lm[b].y - lm[a].y) * H) || 1);
+  };
+
+  // The crop box stays put until the eye really moves, so the keypoints do not jitter with the landmarks.
+  const trk = {};
+  function lockBox(lab, A, B, now) {
+    const L = trk[lab];
+    if (!L || now - L.t > 500) return (trk[lab] = { A, B, cA: A, cB: B, t: now, miss: 0 });
+    const k = 0.3;
+    L.cA = { x: L.cA.x + (A.x - L.cA.x) * k, y: L.cA.y + (A.y - L.cA.y) * k };
+    L.cB = { x: L.cB.x + (B.x - L.cB.x) * k, y: L.cB.y + (B.y - L.cB.y) * k };
+    L.t = now;
+    const lw = Math.hypot(L.B.x - L.A.x, L.B.y - L.A.y) || 1;
+    const cw = Math.hypot(L.cB.x - L.cA.x, L.cB.y - L.cA.y) || 1;
+    const shift = Math.hypot((L.cA.x + L.cB.x - L.A.x - L.B.x) / 2, (L.cA.y + L.cB.y - L.A.y - L.B.y) / 2) / lw;
+    let da = Math.atan2(L.cB.y - L.cA.y, L.cB.x - L.cA.x) - Math.atan2(L.B.y - L.A.y, L.B.x - L.A.x);
+    da = Math.atan2(Math.sin(da), Math.cos(da));
+    if (shift > BOX.move || Math.abs(cw / lw - 1) > BOX.scale || Math.abs(da) > BOX.angle) { L.A = L.cA; L.B = L.cB; }
+    return L;
+  }
+
+  const eyes = { L: null, R: null };          // last good YOLO result per eye
+  const eyeState = { L: "waiting", R: "waiting" };
+  const yoloStats = { ms: 0, runs: 0, fps: 0, lastEnd: 0 };
+
+  async function yoloEye(lab, lm, W, H) {
+    const [a, b] = EYES[lab];
+    const P = (i) => ({ x: lm[i].x * W, y: lm[i].y * H });
+    const ear = earOf(lab, lm, W, H);
+    if (ear < CFG.blinkEar) { eyeState[lab] = "closed"; eyes[lab] = null; return; }
+    const { A, B } = lockBox(lab, P(a), P(b), performance.now());
+    const { M, w, ang } = eyeM(A, B, FLIP[lab]);
+    const res = await infer(cropTensor(M));
+    if (!res) {
+      eyeState[lab] = "not detected";
+      eyes[lab] = null;
+      if (trk[lab] && ++trk[lab].miss >= BOX.missMax) delete trk[lab];
+      return;
+    }
+    if (trk[lab]) trk[lab].miss = 0;
+    eyeState[lab] = "ok";
+    eyes[lab] = { r: { ...res, M, w, ang }, t: performance.now() };
+    drawInset(lab, res); // cc still holds this eye's crop
+  }
+
+  async function kickYolo(lm, W, H) {
+    if (busy || !model || recovering) return;
+    busy = true;
+    try {
+      if (snap.width !== video.videoWidth || snap.height !== video.videoHeight) {
+        snap.width = video.videoWidth;
+        snap.height = video.videoHeight;
+      }
+      snapCtx.drawImage(video, 0, 0);
+      const t0 = performance.now();
+      for (const lab of ["L", "R"]) await yoloEye(lab, lm, W, H);
+      const t1 = performance.now();
+      yoloStats.ms = yoloStats.ms ? yoloStats.ms * 0.8 + (t1 - t0) * 0.2 : t1 - t0;
+      if (yoloStats.lastEnd) {
+        const f = 1000 / Math.max(t1 - yoloStats.lastEnd, 1);
+        yoloStats.fps = yoloStats.fps ? yoloStats.fps * 0.8 + f * 0.2 : f;
+      }
+      yoloStats.lastEnd = t1;
+      yoloStats.runs++;
+    } catch (e) {
+      if (!(e instanceof GpuLost)) console.error("YOLO eye failed:", e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // =====================================================================
+  // Drawing
+  // =====================================================================
+  let k = 1; // canvas px per on-screen px, keeps lines and text the same size at any window size
+
+  // Label above a box. When the view is mirrored the canvas is flipped by CSS, so the text is flipped back.
+  function tag(text, xMin, xMax, y, color) {
+    ctx.save();
+    ctx.font = `600 ${12 * k}px ui-monospace, Menlo, Consolas, monospace`;
+    const w = ctx.measureText(text).width, h = 17 * k, pad = 5 * k;
+    let ty = y - 4 * k;
+    if (ty - h < 0) ty = y + h + 2 * k;
+    ctx.translate(opts.mirror ? xMax : xMin, ty);
+    if (opts.mirror) ctx.scale(-1, 1);
+    ctx.fillStyle = "rgba(0,0,0,.75)";
+    ctx.fillRect(0, -h + 4 * k, w + pad * 2, h);
+    ctx.fillStyle = color;
+    ctx.fillText(text, pad, 0);
+    ctx.restore();
+  }
+
+  function strokeConns(conns, lm, W, H, style, lw) {
+    if (!conns) return;
+    ctx.strokeStyle = style;
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    for (const c of conns) {
+      const a = lm[c[0] ?? c.start], b = lm[c[1] ?? c.end];
+      if (!a || !b) continue;
+      ctx.moveTo(a.x * W, a.y * H);
+      ctx.lineTo(b.x * W, b.y * H);
+    }
+    ctx.stroke();
+  }
+
+  function drawMesh(lm, W, H) {
+    ctx.strokeStyle = "rgba(8, 123, 79, 0.25)";
+    ctx.lineWidth = k;
+    for (const [start, end] of window.FACEMESH_TESSELATION || []) {
+      const a = lm[start], b = lm[end];
+      if (!a || !b) continue;
+      ctx.beginPath();
+      ctx.moveTo(a.x * W, a.y * H);
+      ctx.lineTo(b.x * W, b.y * H);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "rgba(8, 123, 79, 0.5)";
+    for (const landmark of lm) {
+      ctx.beginPath();
+      ctx.arc(landmark.x * W, landmark.y * H, k, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }
+
+  function drawFaceBox(lm, W, H) {
+    let x1 = 1, y1 = 1, x2 = 0, y2 = 0;
+    for (const p of lm) { x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x); y2 = Math.max(y2, p.y); }
+    const px = (x2 - x1) * 0.04, py = (y2 - y1) * 0.04;
+    const L = (x1 - px) * W, T = (y1 - py) * H, R = (x2 + px) * W, B = (y2 + py) * H;
+    ctx.strokeStyle = COLORS.face;
+    ctx.lineWidth = 2 * k;
+    ctx.strokeRect(L, T, R - L, B - T);
+    const label = faceScore == null ? `FACE ≥${Math.round(CFG.faceMinConf * 100)}%` : `FACE ${Math.round(faceScore * 100)}%`;
+    tag(label, L, R, T, COLORS.face);
+  }
+
+  function drawYolo(now) {
+    for (const lab of ["L", "R"]) {
+      const e = eyes[lab];
+      if (!e || now - e.t > CFG.staleMs) continue;
+      const r = e.r;
+      const P = (x, y) => { const q = unmap(r.M, x, y); return [q.x, q.y]; };
+      const [x1, y1, x2, y2] = r.box;
+      const c = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]].map(([x, y]) => P(x, y));
+      ctx.save();
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = COLORS.yolo;
+      ctx.lineWidth = 2 * k;
+      ctx.beginPath();
+      c.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.closePath();
+      ctx.stroke();
+      r.k.forEach((p, j) => {
+        if (p[2] < CFG.kpConf) return;
+        const [x, y] = P(p[0], p[1]);
+        ctx.beginPath();
+        ctx.arc(x, y, 2.8 * k, 0, 7);
+        ctx.fillStyle = `hsl(${j * 27},90%,60%)`;
+        ctx.fill();
+        ctx.lineWidth = 1 * k;
+        ctx.strokeStyle = "#fff";
+        ctx.stroke();
+      });
+      ctx.restore();
+      const xs = c.map((q) => q[0]), ys = c.map((q) => q[1]);
+      tag(`YOLO-${lab} ${Math.round(r.score * 100)}% · kp ${Math.round(r.kp * 100)}%`, Math.min(...xs), Math.max(...xs), Math.min(...ys), COLORS.yolo);
+    }
+  }
+
+  // Close-up of the exact crop the model saw, with every keypoint, its name and its confidence.
+  function drawInset(lab, r) {
+    const c = insets[lab], z = 3, n = S * z;
+    if (c.width !== n) c.width = c.height = n;
+    const x = c.getContext("2d");
+    x.drawImage(cc, 0, 0, n, n);
+    x.lineWidth = 2;
+    x.strokeStyle = COLORS.yolo;
+    const [x1, y1, x2, y2] = r.box;
+    x.strokeRect(x1 * z, y1 * z, (x2 - x1) * z, (y2 - y1) * z);
+    x.font = "600 12px ui-monospace, Menlo, Consolas, monospace";
+    x.textBaseline = "middle";
+    r.k.forEach((p, j) => {
+      const px = p[0] * z, py = p[1] * z, ok = p[2] >= CFG.kpConf, col = `hsl(${j * 27},90%,60%)`;
+      x.beginPath();
+      x.arc(px, py, 4, 0, 7);
+      if (ok) { x.fillStyle = col; x.fill(); }
+      x.lineWidth = 1.5;
+      x.strokeStyle = ok ? "#fff" : col;
+      x.stroke();
+      if (!opts.labels) return;
+      const name = String(J.names?.[j] ?? j).replace(/_/g, " ");
+      const t = `${name} ${Math.round(p[2] * 100)}%`;
+      const w = x.measureText(t).width;
+      const tx = px + 8 + w < n ? px + 8 : px - 8 - w;
+      x.fillStyle = "rgba(0,0,0,.72)";
+      x.fillRect(tx - 3, py - 8, w + 6, 16);
+      x.fillStyle = ok ? "#fff" : "#9aa0ad";
+      x.fillText(t, tx, py);
+    });
+  }
+
+  // =====================================================================
+  // FaceMesh loop
+  // =====================================================================
+  const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: CFG.faceMinConf,
+    minTrackingConfidence: CFG.faceMinConf,
+  });
+
+  const meshStats = { fps: 0, last: 0, face: false };
+  let firstFrame = true;
+
+  faceMesh.onResults((results) => {
+    const W = video.videoWidth, H = video.videoHeight;
+    if (!W || !H) return;
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width = W;
+      canvas.height = H;
+      stage.style.setProperty("--ar", W / H);
+    }
+    if (firstFrame) { firstFrame = false; hideMsg(); }
+
+    const now = performance.now();
+    if (meshStats.last) {
+      const f = 1000 / Math.max(now - meshStats.last, 1);
+      meshStats.fps = meshStats.fps ? meshStats.fps * 0.9 + f * 0.1 : f;
+    }
+    meshStats.last = now;
+    updateFaceScore(now);
+
+    k = W / (canvas.getBoundingClientRect().width || W);
+    ctx.clearRect(0, 0, W, H);
+
+    const lm = results.multiFaceLandmarks && results.multiFaceLandmarks[0];
+    meshStats.face = !!lm;
+    if (!lm) {
+      eyes.L = eyes.R = null;
+      eyeState.L = eyeState.R = "no face";
+      return;
+    }
+    if (opts.mesh) drawMesh(lm, W, H);
+    if (opts.box) drawFaceBox(lm, W, H);
+    if (opts.yolo) drawYolo(now);
+    kickYolo(lm, W, H);
+  });
+
+  async function startCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showMsg("This browser blocks camera access here. Open the page through <b>http://localhost</b>, not as a file.");
+      return;
+    }
+    try {
+      const camera = new Camera(video, {
+        onFrame: async () => { await faceMesh.send({ image: video }); },
+        facingMode: "user",
+        width: CFG.camera.width,
+        height: CFG.camera.height,
+      });
+      await camera.start();
+    } catch (err) {
+      console.error(err);
+      showMsg("The camera could not start. Allow camera access in the browser and reload the page.");
+    }
+  }
+
+  // =====================================================================
+  // Status strip
+  // =====================================================================
+  function eyeText(lab, now) {
+    const e = eyes[lab];
+    if (e && now - e.t <= CFG.staleMs) return `${Math.round(e.r.score * 100)}% · kp ${Math.round(e.r.kp * 100)}%`;
+    return eyeState[lab];
+  }
+
+  setInterval(() => {
+    const now = performance.now();
+    const chip = (cls, label, value) => `<span class="chip ${cls}"><b>${label}</b><i>${value}</i></span>`;
+    const model = modelReady ? `${usedAccel}${recovering ? ", rebuilding" : ""}` : "loading";
+    $("hud").innerHTML = [
+      chip("", "Camera", `${video.videoWidth || "–"}×${video.videoHeight || "–"}`),
+      chip("face", "Face", meshStats.face ? "tracked" : "not found"),
+      chip("", "Face mesh", `${meshStats.fps.toFixed(0)} fps`),
+      chip("yolo", "Eye L", eyeText("L", now)),
+      chip("yolo", "Eye R", eyeText("R", now)),
+      chip("", "YOLO", `${model} · ${yoloStats.ms.toFixed(0)} ms · ${yoloStats.fps.toFixed(1)}/s`),
+    ].join("");
+    for (const lab of ["L", "R"]) caps[lab].textContent = eyeText(lab, now);
+  }, 250);
+
+  // =====================================================================
+  // Start
+  // =====================================================================
+  startCamera();
+  loadYolo()
+    .then(hideWarn)
+    .catch((e) => {
+      console.error(e);
+      showWarn(`YOLO eye model not loaded: ${e.message}. Check that ${CFG.modelUrl} and ${CFG.jsonUrl} exist next to this page. The face mesh still works.`);
+    });
+  </script>
+</body>
+</html>

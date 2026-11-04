@@ -1,4 +1,4 @@
-
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
@@ -29,16 +29,18 @@ class _ForgotPageState extends State<ForgotPage> {
 
   static const double _breakpoint = 790;
 
-  final TextEditingController studentIdController =
-      TextEditingController();
-  final TextEditingController emailController =
-      TextEditingController();
+  final TextEditingController studentIdController = TextEditingController();
+  final TextEditingController emailController = TextEditingController();
 
   final FocusNode _emailFocus = FocusNode();
   final FirebaseAuth auth = FirebaseAuth.instance;
 
   bool isLoading = false;
   bool _emailSent = false;
+  int? _resetAttemptsRemaining;
+  String? _attemptsForAccount;
+  int? _lockoutRemainingSeconds;
+  Timer? _lockoutTimer;
 
   String _errorMessage = '';
   String _successMessage = '';
@@ -70,10 +72,14 @@ class _ForgotPageState extends State<ForgotPage> {
         region: 'asia-southeast1',
       ).httpsCallable('resetPasswordById');
 
-      await callable.call({
-        'id': studentId,
-        'email': email,
-      });
+      final result = await callable.call({'id': studentId, 'email': email});
+
+      final response = result.data;
+      if (response is Map && response['remainingAttempts'] is num && mounted) {
+        final remaining = (response['remainingAttempts'] as num).toInt();
+        _setAttemptStatus(studentId, email, remaining);
+        if (remaining == 0) _startLockoutCountdown(60 * 60);
+      }
 
       await auth.sendPasswordResetEmail(email: email);
 
@@ -81,19 +87,42 @@ class _ForgotPageState extends State<ForgotPage> {
 
       setState(() {
         _emailSent = true;
-        _successMessage =
-            'A password reset link has been sent to $email.';
+        _successMessage = 'A password reset link has been sent to $email.';
       });
     } on FirebaseFunctionsException catch (e) {
-      _showError(e.message ?? 'Unable to verify your account.');
+      if (mounted) {
+        final details = e.details;
+        final remaining = details is Map ? details['attemptsRemaining'] : null;
+        final retryAfter = details is Map ? details['retryAfterSeconds'] : null;
+
+        if (remaining is num) {
+          final attemptsLeft = remaining.toInt();
+          _setAttemptStatus(studentId, email, attemptsLeft);
+          if (attemptsLeft == 0) {
+            _startLockoutCountdown(
+              retryAfter is num && retryAfter > 0
+                  ? retryAfter.toInt()
+                  : 60 * 60,
+            );
+          }
+        } else if (e.code == 'resource-exhausted') {
+          _setAttemptStatus(studentId, email, 0);
+          _startLockoutCountdown(
+            retryAfter is num && retryAfter > 0
+                ? retryAfter.toInt()
+                : 60 * 60,
+          );
+        }
+      }
+      _showError(
+        e.code == 'resource-exhausted'
+            ? ''
+            : 'Student ID or email is incorrect. Please check your details and try again.',
+      );
     } on FirebaseAuthException catch (e) {
-      _showError(
-        e.message ?? 'Unable to send the password reset email.',
-      );
+      _showError(e.message ?? 'Unable to send the password reset email.');
     } catch (_) {
-      _showError(
-        'Something went wrong. Please try again later.',
-      );
+      _showError('Something went wrong. Please try again later.');
     } finally {
       if (mounted) {
         setState(() => isLoading = false);
@@ -110,8 +139,68 @@ class _ForgotPageState extends State<ForgotPage> {
     });
   }
 
+  void _setAttemptStatus(String studentId, String email, int remaining) {
+    _attemptsForAccount = _attemptKey(studentId, email);
+    setState(() {
+      _resetAttemptsRemaining = remaining;
+    });
+  }
+
+  String _attemptKey(String studentId, String email) =>
+      '${studentId.trim().toLowerCase()}|${email.trim().toLowerCase()}';
+
+  bool get _isLockedOut =>
+      _resetAttemptsRemaining == 0 &&
+      (_lockoutRemainingSeconds == null || _lockoutRemainingSeconds! > 0);
+
+  void _clearAttemptStatusIfAccountChanged() {
+    if (_attemptsForAccount == null ||
+        _attemptsForAccount ==
+            _attemptKey(studentIdController.text, emailController.text)) {
+      return;
+    }
+
+    _lockoutTimer?.cancel();
+    setState(() {
+      _attemptsForAccount = null;
+      _resetAttemptsRemaining = null;
+      _lockoutRemainingSeconds = null;
+    });
+  }
+
+  void _startLockoutCountdown(int seconds) {
+    _lockoutTimer?.cancel();
+    if (seconds <= 0) {
+      setState(() => _lockoutRemainingSeconds = 0);
+      return;
+    }
+    setState(() {
+      _lockoutRemainingSeconds = seconds;
+    });
+    _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      final remaining = (_lockoutRemainingSeconds ?? 0) - 1;
+      setState(() {
+        _lockoutRemainingSeconds = remaining > 0 ? remaining : 0;
+      });
+      if (remaining <= 0) timer.cancel();
+    });
+  }
+
+  String _formatLockoutTime(int seconds) {
+    final minutes = seconds ~/ 60;
+    final remainingSeconds = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:'
+        '${remainingSeconds.toString().padLeft(2, '0')}';
+  }
+
   @override
   void dispose() {
+    _lockoutTimer?.cancel();
     studentIdController.dispose();
     emailController.dispose();
     _emailFocus.dispose();
@@ -132,16 +221,10 @@ class _ForgotPageState extends State<ForgotPage> {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  flex: 11,
-                  child: _buildArtPanel(wide: true),
-                ),
+                Expanded(flex: 11, child: _buildArtPanel(wide: true)),
                 Expanded(
                   flex: 10,
-                  child: _buildFormPanel(
-                    wide: true,
-                    constraints: constraints,
-                  ),
+                  child: _buildFormPanel(wide: true, constraints: constraints),
                 ),
               ],
             );
@@ -152,10 +235,7 @@ class _ForgotPageState extends State<ForgotPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _buildArtPanel(wide: false),
-                _buildFormPanel(
-                  wide: false,
-                  constraints: constraints,
-                ),
+                _buildFormPanel(wide: false, constraints: constraints),
               ],
             ),
           );
@@ -171,8 +251,7 @@ class _ForgotPageState extends State<ForgotPage> {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final titleSize = wide
-            ? (MediaQuery.of(context).size.width * 0.08)
-                .clamp(56.0, 120.0)
+            ? (MediaQuery.of(context).size.width * 0.08).clamp(56.0, 120.0)
             : 48.0;
 
         final glowSize = wide ? 500.0 : 300.0;
@@ -223,23 +302,16 @@ class _ForgotPageState extends State<ForgotPage> {
 
         return Container(
           color: _artBg,
-          constraints: BoxConstraints(
-            minHeight: wide ? 0 : 190,
-          ),
+          constraints: BoxConstraints(minHeight: wide ? 0 : 190),
           child: ClipRect(
             child: Stack(
               children: [
                 Positioned(
                   left: wide ? w * 0.06 : w * 0.38,
-                  top: wide
-                      ? MediaQuery.of(context).size.height * 0.16
-                      : -100,
+                  top: wide ? MediaQuery.of(context).size.height * 0.16 : -100,
                   child: IgnorePointer(
                     child: ImageFiltered(
-                      imageFilter: ImageFilter.blur(
-                        sigmaX: 24,
-                        sigmaY: 24,
-                      ),
+                      imageFilter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                       child: Opacity(
                         opacity: 0.78,
                         child: Transform.rotate(
@@ -295,11 +367,8 @@ class _ForgotPageState extends State<ForgotPage> {
             width: 32,
             height: 32,
             fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const Icon(
-              Icons.school_outlined,
-              color: _green,
-              size: 25,
-            ),
+            errorBuilder: (_, __, ___) =>
+                const Icon(Icons.school_outlined, color: _green, size: 25),
           ),
         ),
         const SizedBox(width: 10),
@@ -333,9 +402,7 @@ class _ForgotPageState extends State<ForgotPage> {
     required BoxConstraints constraints,
   }) {
     final form = ConstrainedBox(
-      constraints: BoxConstraints(
-        maxWidth: wide ? 440 : double.infinity,
-      ),
+      constraints: BoxConstraints(maxWidth: wide ? 440 : double.infinity),
       child: _buildForm(wide: wide),
     );
 
@@ -348,9 +415,7 @@ class _ForgotPageState extends State<ForgotPage> {
 
     return SingleChildScrollView(
       child: ConstrainedBox(
-        constraints: BoxConstraints(
-          minHeight: constraints.maxHeight,
-        ),
+        constraints: BoxConstraints(minHeight: constraints.maxHeight),
         child: Center(
           child: Padding(
             padding: EdgeInsets.symmetric(
@@ -366,8 +431,7 @@ class _ForgotPageState extends State<ForgotPage> {
 
   Widget _buildForm({required bool wide}) {
     final headingSize = wide
-        ? (MediaQuery.of(context).size.width * 0.04)
-            .clamp(32.0, 46.0)
+        ? (MediaQuery.of(context).size.width * 0.04).clamp(32.0, 46.0)
         : 37.0;
 
     return Column(
@@ -384,10 +448,7 @@ class _ForgotPageState extends State<ForgotPage> {
           icon: const Icon(Icons.arrow_back, size: 17),
           label: const Text(
             'Back to login',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
           ),
         ),
 
@@ -422,12 +483,11 @@ class _ForgotPageState extends State<ForgotPage> {
           _emailSent
               ? 'Check your inbox for the reset link. Follow the instructions in the email to choose a new password.'
               : 'No worries. Verify your student account and we’ll send you a secure link to reset your password.',
-          style: const TextStyle(
-            color: _muted,
-            fontSize: 14,
-            height: 1.7,
-          ),
+          style: const TextStyle(color: _muted, fontSize: 14, height: 1.7),
         ),
+
+        const SizedBox(height: 12),
+        _buildAttemptNotice(),
 
         const SizedBox(height: 28),
 
@@ -437,16 +497,10 @@ class _ForgotPageState extends State<ForgotPage> {
           curve: Curves.easeOut,
           alignment: Alignment.topCenter,
           child: _errorMessage.isNotEmpty
-              ? _buildMessage(
-                  message: _errorMessage,
-                  isSuccess: false,
-                )
+              ? _buildMessage(message: _errorMessage, isSuccess: false)
               : _successMessage.isNotEmpty
-                  ? _buildMessage(
-                      message: _successMessage,
-                      isSuccess: true,
-                    )
-                  : const SizedBox.shrink(),
+              ? _buildMessage(message: _successMessage, isSuccess: true)
+              : const SizedBox.shrink(),
         ),
 
         // Student ID
@@ -454,11 +508,9 @@ class _ForgotPageState extends State<ForgotPage> {
 
         TextField(
           controller: studentIdController,
+          onChanged: (_) => _clearAttemptStatusIfAccountChanged(),
           enabled: !_emailSent && !isLoading,
-          style: const TextStyle(
-            color: _ink,
-            fontSize: 16,
-          ),
+          style: const TextStyle(color: _ink, fontSize: 16),
           cursorColor: _green,
           textInputAction: TextInputAction.next,
           autofillHints: const [AutofillHints.username],
@@ -476,15 +528,13 @@ class _ForgotPageState extends State<ForgotPage> {
 
         TextField(
           controller: emailController,
+          onChanged: (_) => _clearAttemptStatusIfAccountChanged(),
           focusNode: _emailFocus,
           enabled: !_emailSent && !isLoading,
           keyboardType: TextInputType.emailAddress,
           textCapitalization: TextCapitalization.none,
           autofillHints: const [AutofillHints.email],
-          style: const TextStyle(
-            color: _ink,
-            fontSize: 16,
-          ),
+          style: const TextStyle(color: _ink, fontSize: 16),
           cursorColor: _green,
           textInputAction: TextInputAction.done,
           onSubmitted: (_) {
@@ -505,20 +555,16 @@ class _ForgotPageState extends State<ForgotPage> {
           width: double.infinity,
           height: 57,
           child: ElevatedButton(
-            onPressed: (isLoading || _emailSent)
+            onPressed: (isLoading || _emailSent || _isLockedOut)
                 ? null
                 : _sendResetEmail,
             style: ButtonStyle(
               elevation: const WidgetStatePropertyAll(0),
               shape: WidgetStatePropertyAll(
-                RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              foregroundColor:
-                  const WidgetStatePropertyAll(Colors.white),
-              backgroundColor:
-                  WidgetStateProperty.resolveWith((states) {
+              foregroundColor: const WidgetStatePropertyAll(Colors.white),
+              backgroundColor: WidgetStateProperty.resolveWith((states) {
                 if (states.contains(WidgetState.disabled)) {
                   return _green.withValues(alpha: 0.6);
                 }
@@ -531,10 +577,7 @@ class _ForgotPageState extends State<ForgotPage> {
                 return _green;
               }),
               textStyle: const WidgetStatePropertyAll(
-                TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                ),
+                TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
               ),
             ),
             child: isLoading
@@ -554,9 +597,7 @@ class _ForgotPageState extends State<ForgotPage> {
                     ],
                   )
                 : Text(
-                    _emailSent
-                        ? 'Reset link sent'
-                        : 'Send password reset link',
+                    _emailSent ? 'Reset link sent' : 'Send password reset link',
                   ),
           ),
         ),
@@ -570,18 +611,12 @@ class _ForgotPageState extends State<ForgotPage> {
           decoration: BoxDecoration(
             color: const Color(0xFFEAF3ED),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: const Color(0xFFD4E7D9),
-            ),
+            border: Border.all(color: const Color(0xFFD4E7D9)),
           ),
           child: const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                Icons.verified_user_outlined,
-                color: _green,
-                size: 19,
-              ),
+              Icon(Icons.verified_user_outlined, color: _green, size: 19),
               SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -601,11 +636,7 @@ class _ForgotPageState extends State<ForgotPage> {
 
         const Text(
           'FOTS Student Edition · Secure account recovery',
-          style: TextStyle(
-            color: _footMuted,
-            fontSize: 11,
-            height: 1.6,
-          ),
+          style: TextStyle(color: _footMuted, fontSize: 11, height: 1.6),
         ),
       ],
     );
@@ -627,10 +658,7 @@ class _ForgotPageState extends State<ForgotPage> {
     );
   }
 
-  Widget _buildMessage({
-    required String message,
-    required bool isSuccess,
-  }) {
+  Widget _buildMessage({required String message, required bool isSuccess}) {
     final color = isSuccess ? _successText : _errorText;
     final background = isSuccess
         ? const Color(0xFFEAF3ED)
@@ -643,17 +671,13 @@ class _ForgotPageState extends State<ForgotPage> {
       decoration: BoxDecoration(
         color: background,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: color.withValues(alpha: 0.20),
-        ),
+        border: Border.all(color: color.withValues(alpha: 0.20)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
-            isSuccess
-                ? Icons.check_circle_outline
-                : Icons.error_outline,
+            isSuccess ? Icons.check_circle_outline : Icons.error_outline,
             color: color,
             size: 20,
           ),
@@ -674,41 +698,95 @@ class _ForgotPageState extends State<ForgotPage> {
     );
   }
 
+  Widget _buildAttemptNotice() {
+    final remaining = _resetAttemptsRemaining;
+    if (remaining == null || remaining > 2) {
+      return const SizedBox.shrink();
+    }
+
+    final lockoutComplete = remaining == 0 && _lockoutRemainingSeconds == 0;
+    final locked = remaining == 0 && !lockoutComplete;
+    final message = locked
+        ? _lockoutRemainingSeconds == null
+              ? 'Attempt limit reached. Password resets are locked for 1 hour.'
+              : 'Attempt limit reached. Try again in ${_formatLockoutTime(_lockoutRemainingSeconds!)}.'
+        : lockoutComplete
+        ? 'The lockout period has ended. You can try again now.'
+        : remaining == 1
+        ? '1 of 5 attempts remaining. Password resets lock for 1 hour after the next valid request.'
+        : '${5 - remaining} of 5 attempts used. $remaining attempts remain before a 1-hour lockout.';
+    final color = locked
+        ? _errorText
+        : lockoutComplete
+        ? _successText
+        : const Color(0xFF805B16);
+    final background = locked
+        ? const Color(0xFFFFEEF0)
+        : lockoutComplete
+        ? const Color(0xFFEAF3ED)
+        : const Color(0xFFFFF6E5);
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            locked
+                ? Icons.error_outline
+                : lockoutComplete
+                ? Icons.check_circle_outline
+                : Icons.warning_amber_rounded,
+            color: color,
+            size: 19,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: locked
+                    ? _errorText
+                    : lockoutComplete
+                    ? _successText
+                    : const Color(0xFF654A17),
+                fontSize: 12,
+                height: 1.5,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   InputDecoration _fieldDecoration({
     required String hint,
     required IconData icon,
   }) {
-    OutlineInputBorder border(
-      Color color, [
-      double width = 1,
-    ]) {
+    OutlineInputBorder border(Color color, [double width = 1]) {
       return OutlineInputBorder(
         borderRadius: BorderRadius.circular(13),
-        borderSide: BorderSide(
-          color: color,
-          width: width,
-        ),
+        borderSide: BorderSide(color: color, width: width),
       );
     }
 
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(
-        color: Color(0xFF9AA09B),
-        fontSize: 14,
-      ),
-      prefixIcon: Icon(
-        icon,
-        color: _footMuted,
-        size: 20,
-      ),
+      hintStyle: const TextStyle(color: Color(0xFF9AA09B), fontSize: 14),
+      prefixIcon: Icon(icon, color: _footMuted, size: 20),
       filled: true,
       fillColor: Colors.white,
       constraints: const BoxConstraints(minHeight: 56),
-      contentPadding: const EdgeInsets.symmetric(
-        vertical: 16,
-        horizontal: 15,
-      ),
+      contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 15),
       enabledBorder: border(_border),
       focusedBorder: border(_green, 2),
       disabledBorder: border(_border),

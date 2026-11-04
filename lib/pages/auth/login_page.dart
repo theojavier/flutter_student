@@ -38,6 +38,8 @@ class _LoginPageState extends State<LoginPage> {
   bool isLoading = false;
   bool _isPasswordVisible = false;
   String _loginError = "";
+  int? _attemptsRemaining;
+  String? _attemptsForStudentId;
 
   // ---------------- LOGIC (unchanged) ----------------
 
@@ -64,18 +66,17 @@ class _LoginPageState extends State<LoginPage> {
 
       final result = await functions.httpsCallable('loginWithStudentId').call({
         'studentId': studentId,
+        'password': password,
+        'apiKey': auth.app.options.apiKey,
       });
 
       final data = result.data;
-      final email = data['email'];
+      final customToken = data['customToken'];
       final role = data['role'];
       final program = data['program'];
       final yearBlock = data['yearBlock'];
 
-      final userCredential = await auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      final userCredential = await auth.signInWithCustomToken(customToken);
 
       if (userCredential.user == null) {
         _showError("Login failed: no user returned");
@@ -99,7 +100,21 @@ class _LoginPageState extends State<LoginPage> {
         _showError("Access denied (not a student)");
       }
     } on FirebaseFunctionsException catch (e) {
-      _showError(e.message ?? "Invalid Student ID or password");
+      final details = e.details;
+      final attemptsRemaining = details is Map
+          ? details['attemptsRemaining']
+          : null;
+      if (mounted) {
+        setState(() {
+          _attemptsForStudentId = studentId;
+          if (attemptsRemaining is num) {
+            _attemptsRemaining = attemptsRemaining.toInt();
+          } else if (e.code == 'resource-exhausted') {
+            _attemptsRemaining = 0;
+          }
+          _loginError = e.message ?? "Invalid Student ID or password";
+        });
+      }
     } on FirebaseAuthException {
       _showError("Invalid Student ID or password");
     } catch (e) {
@@ -112,6 +127,54 @@ class _LoginPageState extends State<LoginPage> {
   void _showError(String message) {
     if (!mounted) return;
     setState(() => _loginError = message);
+  }
+
+  bool get _shouldShowAttemptNotice =>
+      _attemptsRemaining != null &&
+      _attemptsRemaining! <= 2 &&
+      _attemptsForStudentId == studentIdController.text.trim();
+
+  Widget _buildAttemptNotice() {
+    final remaining = _attemptsRemaining!;
+    final locked = remaining == 0;
+    final message = locked
+        ? "Sign-in limit reached. Try again later."
+        : remaining == 1
+        ? "Last attempt remaining before sign-in is blocked."
+        : "2 attempts remaining before sign-in is blocked.";
+    final color = locked ? _errorText : const Color(0xFF805B16);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: locked ? const Color(0xFFFFEEF0) : const Color(0xFFFFF6E5),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            locked ? Icons.error_outline : Icons.warning_amber_rounded,
+            color: color,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: locked ? _errorText : const Color(0xFF654A17),
+                fontSize: 12,
+                height: 1.5,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -374,6 +437,16 @@ class _LoginPageState extends State<LoginPage> {
         _fieldLabel("Student ID"),
         TextField(
           controller: studentIdController,
+          onChanged: (value) {
+            if (_attemptsForStudentId != null &&
+                value.trim() != _attemptsForStudentId &&
+                _attemptsRemaining != null) {
+              setState(() {
+                _attemptsRemaining = null;
+                _attemptsForStudentId = null;
+              });
+            }
+          },
           style: const TextStyle(color: _ink, fontSize: 16),
           cursorColor: _green,
           keyboardType: TextInputType.text,
@@ -472,14 +545,27 @@ class _LoginPageState extends State<LoginPage> {
             width: double.infinity,
             constraints: const BoxConstraints(minHeight: 20),
             margin: const EdgeInsets.only(top: 12),
-            child: _loginError.isEmpty
+            child: _loginError.isEmpty && !_shouldShowAttemptNotice
                 ? const SizedBox.shrink()
-                : Semantics(
-                    liveRegion: true,
-                    child: Text(
-                      _loginError,
-                      style: const TextStyle(color: _errorText, fontSize: 12),
-                    ),
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_loginError.isNotEmpty)
+                        Semantics(
+                          liveRegion: true,
+                          child: Text(
+                            _loginError,
+                            style: const TextStyle(
+                              color: _errorText,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      if (_shouldShowAttemptNotice) ...[
+                        if (_loginError.isNotEmpty) const SizedBox(height: 8),
+                        _buildAttemptNotice(),
+                      ],
+                    ],
                   ),
           ),
         ),
