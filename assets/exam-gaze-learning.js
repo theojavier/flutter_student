@@ -20,20 +20,20 @@ const ExamGazeLearning = (() => {
   const cfg = {
     enabled: true, // Can be disabled if needed
     logoEnabled: true,
-    textEnabled: true,
-    buttonEnabled: true,
+    textEnabled: false, // DISABLED - was causing lag with DOM queries every 300ms
+    buttonEnabled: false, // DISABLED - was causing lag
     
     // Logo learning
     logoDwellMs: 2000, // How long to look at logo to trigger learning
     logoCheckInterval: 200, // Check logo fixation every 200ms
     logoMaxSamplesPerExam: 3, // Maximum logo samples per exam
     
-    // Text learning
+    // Text learning (DISABLED)
     textDwellMs: 1500, // Stable gaze on text
     textCheckInterval: 300,
     textMaxSamplesPerExam: 5,
     
-    // Button learning  
+    // Button learning (DISABLED)
     buttonPreClickMs: 400, // Gaze position 400ms before click
     buttonMaxSamplesPerExam: 10,
     
@@ -103,7 +103,14 @@ const ExamGazeLearning = (() => {
   
   function getLogoZone() {
     // Logo is in the exam card header, top-left area
-    // Approximate position based on standard layout
+    // During GATE: This looks for the recording icon area
+    // During EXAM: No logo exists, so this returns null
+    
+    // Only check during gate phase
+    if (window.examStarted) {
+      return null; // No logo during exam, stop checking
+    }
+    
     const examCard = document.getElementById('examCard');
     if (!examCard || examCard.style.display === 'none') return null;
     
@@ -231,6 +238,16 @@ const ExamGazeLearning = (() => {
   
   function checkLogoFixation() {
     if (!cfg.logoEnabled || state.logoSamples >= cfg.logoMaxSamplesPerExam) return;
+    
+    // Stop checking once exam starts (no logo in exam card)
+    if (window.examStarted) {
+      if (logoTimer) {
+        clearInterval(logoTimer);
+        logoTimer = null;
+        if (DEBUG) console.log('[learning] Logo timer stopped - exam started');
+      }
+      return;
+    }
     
     const zone = getLogoZone();
     if (!zone) return;
@@ -500,30 +517,30 @@ const ExamGazeLearning = (() => {
   function startLearning() {
     if (!cfg.enabled) return;
 
-    // Update text zones when question changes
-    updateTextZones();
+    // Update text zones when question changes (DISABLED - not needed without text learning)
+    // updateTextZones();
 
-    // Logo check timer
+    // Logo check timer (ONLY ACTIVE LEARNING)
     if (cfg.logoEnabled && !logoTimer) {
       logoTimer = setInterval(checkLogoFixation, cfg.logoCheckInterval);
     }
 
-    // Text check timer
-    if (cfg.textEnabled && !textTimer) {
-      textTimer = setInterval(checkTextFixation, cfg.textCheckInterval);
-    }
+    // Text check timer (DISABLED - was causing performance issues)
+    // if (cfg.textEnabled && !textTimer) {
+    //   textTimer = setInterval(checkTextFixation, cfg.textCheckInterval);
+    // }
 
-    // Button learning (event-based)
-    if (cfg.buttonEnabled) {
-      setupButtonLearning();
-    }
+    // Button learning (DISABLED - was causing performance issues)
+    // if (cfg.buttonEnabled) {
+    //   setupButtonLearning();
+    // }
 
     console.log('[learning] Started exam gaze learning', {
       platform: state.platform,
       examId: state.examId,
       logo: cfg.logoEnabled,
-      text: cfg.textEnabled,
-      button: cfg.buttonEnabled,
+      text: cfg.textEnabled, // Will show false
+      button: cfg.buttonEnabled, // Will show false
     });
   }
 
@@ -637,12 +654,12 @@ const ExamGazeLearning = (() => {
     },
 
     onQuestionChange() {
-      // Update text zones when question changes
-      updateTextZones();
+      // Update text zones when question changes (DISABLED - text learning disabled)
+      // updateTextZones();
       
-      // Reset text fixation state
-      state.textFixationStart = null;
-      state.textBuffer = [];
+      // Reset text fixation state (DISABLED - text learning disabled)
+      // state.textFixationStart = null;
+      // state.textBuffer = [];
     },
 
     getStats() {

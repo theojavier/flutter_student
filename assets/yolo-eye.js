@@ -67,7 +67,7 @@ const YoloEye = (() => {
 
   const NK = 13, CONF = 0.05, KCONF = 0.30, DISAGREE = 0.10;
   const VARS = [[0.025, -0.02, 1.03], [-0.025, 0.02, 0.97]]; // extra crops: shift (x, y in eye-widths) and zoom
-  const IRIS_Y_NO_TB = true; // vertical gaze ignores the noisy iris top/bottom points
+  const IRIS_Y_NO_TB = false; // OPTIMIZED: Use all iris points including top/bottom for better Y-axis accuracy
   const FLIP = { L: false, R: true };
   const EYES = { L: [33, 133, 159, 145], R: [362, 263, 386, 374] }; // [corner a, corner b, lid up, lid low]
   const IRIS = { L: 468, R: 473 }; // MediaPipe iris centres (refineLandmarks: true)
@@ -598,10 +598,12 @@ const YoloEye = (() => {
     }
     hPrev = { t: tN, yaw: h.yaw, pitch: h.pitch };
     runMaxSpeed = Math.max(runMaxSpeed, headSpeed);
-    const mobileExam = window.__examIsPcDoc === false;
-    const inferenceIntervalMs = mobileExam
-      ? Math.max(cfg.inferenceIntervalMs, 125)
+    
+    // OPTIMIZED: Use exam-defined interval if available, otherwise use config default
+    const inferenceIntervalMs = typeof EXAM_INFERENCE_INTERVAL_MS !== 'undefined' 
+      ? EXAM_INFERENCE_INTERVAL_MS 
       : cfg.inferenceIntervalMs;
+    
     if (
       eyeModel &&
       !recovering &&

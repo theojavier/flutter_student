@@ -1097,7 +1097,12 @@
         return file.toBlob(blob.type);
       }
 
-      function recordBlob(stream, durationMs, label) {
+      function recordBlob(
+        stream,
+        durationMs,
+        label,
+        videoBitsPerSecond = 800_000,
+      ) {
         return new Promise((resolve) => {
           if (!stream?.active || typeof MediaRecorder === "undefined") {
             console.warn(
@@ -1112,7 +1117,7 @@
             const mimeType = pickMimeType();
             recorder = new MediaRecorder(stream, {
               ...(mimeType ? { mimeType } : {}),
-              videoBitsPerSecond: 800_000,
+              videoBitsPerSecond,
             });
           } catch (err) {
             console.warn("MediaRecorder failed:", err);
@@ -1216,29 +1221,31 @@
           return recordBlob(window.cameraCaptureStream, durationMs, "camera");
         }
 
+        const maxWidth = 640;
+        const scale = Math.min(1, maxWidth / (video.videoWidth || maxWidth));
         const canvas = document.createElement("canvas");
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
+        canvas.width = Math.round((video.videoWidth || 640) * scale);
+        canvas.height = Math.round((video.videoHeight || 480) * scale);
         const context = canvas.getContext("2d");
         if (!context) {
           console.warn("Could not create a camera recording canvas.");
           return null;
         }
 
-        const stream = canvas.captureStream(15);
-        let animationFrameId;
+        const stream = canvas.captureStream(10);
+        let drawTimer;
         const drawFrame = () => {
           if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
           }
-          animationFrameId = requestAnimationFrame(drawFrame);
+          drawTimer = setTimeout(drawFrame, 100);
         };
 
         drawFrame();
         try {
-          return await recordBlob(stream, durationMs, "camera");
+          return await recordBlob(stream, durationMs, "camera", 400_000);
         } finally {
-          cancelAnimationFrame(animationFrameId);
+          clearTimeout(drawTimer);
           stream.getTracks().forEach((track) => track.stop());
         }
       }
@@ -1528,10 +1535,11 @@
         if (Number(window.cheatingCount || 0) <= window.lastClippedCount) {
           return;
         }
+        const awayStartedAt = Number(window.awayStartedAt) || 0;
         window.cheatClipBusy = true;
 
         const stills = {};
-        const startedAt = window.awayStartedAt || Date.now();
+        const startedAt = awayStartedAt || Date.now();
         const startCount = window.lastClippedCount + 1;
         let endCount = startCount;
         let videoBlobs = {};
@@ -1861,9 +1869,6 @@
                 if (!res.ok) throw new Error(`${kind} upload failed: ${res.status}`);
               }),
             );
-
-            // 3) tell the server the files are there
-            await requestFn({ examId, snapshotNumber, finalize: true });
 
             window.snapshotsTaken++;
             console.log(
@@ -2504,7 +2509,7 @@
         });
 
         renderNextOrSubmitButton();
-        window.fitExamContent?.();
+        window.fitExamContent?.(true);
       }
       window.refreshExamQuestion = () => showQuestion(currentQuestionIndex);
       function renderNextOrSubmitButton() {
@@ -5157,9 +5162,9 @@
         faceIcon.textContent = "⚠";
       }
     </script>
-    <script src="yolo-eye.js"></script>
-    <script src="exam-gaze-block.js"></script>
-    <script src="gaze-metrics.js"></script>
+    <script src="yolo-eye.js?v=5"></script>
+    <script src="exam-gaze-block.js?v=10"></script>
+    <script src="gaze-metrics.js?v=5"></script>
     <script>
       const GATE_DELAY_MS = 5000;
       const GATE_DEFAULT_TEXT =
@@ -5207,31 +5212,23 @@
         if (!content) return;
 
         examFitCalibrating = true;
-        let worst = 1;
-        window.questions.forEach((q, i) => {
-          content.innerHTML = generateQuestionHtml(
-            q,
-            i,
-            window.answers,
-            window.matchingPool || [],
-          );
-          worst = measureFit(worst);
-        });
-        sharedFit = worst;
-        examFitCalibrated = true;
-        examFitCalibrating = false;
-        document.documentElement.style.setProperty("--fit", sharedFit);
-
-        window.refreshExamQuestion?.();
+        try {
+          sharedFit = measureFit(1);
+          examFitCalibrated = true;
+          document.documentElement.style.setProperty("--fit", sharedFit);
+        } finally {
+          examFitCalibrating = false;
+        }
       };
 
-      window.fitExamContent = function () {
+      window.fitExamContent = function (force = false) {
         const root = document.documentElement.style;
         if (!fitIsActive()) {
           examFitCalibrated = false;
           root.setProperty("--fit", "1");
           return;
         }
+        if (force) examFitCalibrated = false;
         if (!examFitCalibrated) window.calibrateExamFit();
         root.setProperty("--fit", sharedFit);
       };
@@ -5290,8 +5287,16 @@
         document.getElementById("examGate").style.display = "none";
         document.getElementById("examCard").style.display = "block";
         window.startRings?.();
-        window.fitExamContent();
+        
+        // PERFORMANCE FIX: Defer heavy operations to avoid blocking
+        requestAnimationFrame(() => {
+          // Fit the visible question after the exam card is laid out.
+          window.fitExamContent();
+        });
+        
         console.log("Face verified for 5s → starting exam…");
+        
+        // Process gate learning asynchronously (doesn't block exam opening)
         Promise.resolve(gateLearningPromise)
           .then((result) => {
             console.log(
@@ -5397,8 +5402,27 @@
         const dt = Math.min(now - lastBubbleT, 100);
         lastBubbleT = now;
         const a = 1 - Math.exp(-dt / BUBBLE_TAU_MS);
+        
+        // Apply damping to downward Y movement during near-blink conditions
+        // This prevents the bubble from moving down when EAR is low (eyelids closing)
+        const currentEar = window.currentEyeEar || 0.3; // Get current EAR from gaze tracking
+        const earThreshold = 0.15; // Below this = likely blinking/closing eyes
+        const isDampingNeeded = currentEar < earThreshold && targetY > bubbleY;
+        
+        // X movement: normal smoothing
         bubbleX += (targetX - bubbleX) * a;
-        bubbleY += (targetY - bubbleY) * a;
+        
+        // Y movement: apply strong damping if moving down during low EAR
+        let aY = a;
+        if (isDampingNeeded) {
+          // Scale damping based on how low the EAR is
+          // EAR 0.11 (blink threshold) = 90% slower
+          // EAR 0.15 (normal) = normal speed
+          const dampingStrength = Math.max(0, (earThreshold - currentEar) / earThreshold);
+          aY = a * (1 - dampingStrength * 0.9); // Reduce speed by up to 90%
+        }
+        bubbleY += (targetY - bubbleY) * aY;
+        
         // grows fast when the model gets unsure, shrinks slowly so it doesn't pulse every frame
         const ar = 1 - Math.exp(-dt / (targetR > bubbleR ? 120 : 450));
         bubbleR += (targetR - bubbleR) * ar;

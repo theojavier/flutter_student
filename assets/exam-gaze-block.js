@@ -106,26 +106,36 @@ const FACEMESH_TESSELATION = [
   [360,420],[420,437],[437,360],[299,333],[333,332],[332,299],[332,333],[333,331],[331,332]
 ];
 
+const FACEMESH_TESSELATION_LITE = [];
+for (let i = 0, triangle = 0; i + 2 < FACEMESH_TESSELATION.length; i += 3) {
+  const first = FACEMESH_TESSELATION[i];
+  const second = FACEMESH_TESSELATION[i + 1];
+  const third = FACEMESH_TESSELATION[i + 2];
+  if (first[1] !== second[0] || second[1] !== third[0] || third[1] !== first[0]) continue;
+  if (triangle++ % 2 === 0) FACEMESH_TESSELATION_LITE.push(first, second, third);
+}
+
 function drawFaceMesh(ctx, landmarks, width, height) {
   ctx.strokeStyle = 'rgba(8, 123, 79, 0.25)';
   ctx.lineWidth = 1;
   
   // Draw tesselation connections
-  for (const [start, end] of FACEMESH_TESSELATION) {
+  ctx.beginPath();
+  for (const [start, end] of FACEMESH_TESSELATION_LITE) {
     const startPoint = landmarks[start];
     const endPoint = landmarks[end];
     
     if (startPoint && endPoint) {
-      ctx.beginPath();
       ctx.moveTo(startPoint.x * width, startPoint.y * height);
       ctx.lineTo(endPoint.x * width, endPoint.y * height);
-      ctx.stroke();
     }
   }
+  ctx.stroke();
   
   // Draw landmark points
   ctx.fillStyle = 'rgba(8, 123, 79, 0.5)';
-  for (const landmark of landmarks) {
+  for (let i = 0; i < landmarks.length; i += 4) {
+    const landmark = landmarks[i];
     ctx.beginPath();
     ctx.arc(landmark.x * width, landmark.y * height, 1, 0, 2 * Math.PI);
     ctx.fill();
@@ -399,10 +409,6 @@ async function learnFromGate(now) {
   }
   gateCaptureStartedAt = null;
   gateLearned = true;
-  if (!online) {
-    gateFrames.length = 0;
-    return "no-online-model";
-  }
   if (!gateFrames.length) {
     console.warn("Recording-icon gaze sample skipped: no gate frames were recorded.");
     return "no-gate-frames";
@@ -434,22 +440,24 @@ async function learnFromGate(now) {
   const median = GazeCore.med;
   const mx = median(stableFrames.map((frame) => frame.x));
   const my = median(stableFrames.map((frame) => frame.y));
-  if (
-    Math.max(
-      ...stableFrames.map((frame) => Math.hypot(frame.x - mx, frame.y - my)),
-    ) > GATE_MAX_SPREAD
-  ) {
-    console.warn("Recording-icon gaze sample skipped: gaze was not stable.");
+  const stableInliers = stableFrames.filter(
+    (frame) => Math.hypot(frame.x - mx, frame.y - my) <= GATE_MAX_SPREAD,
+  );
+  if (stableInliers.length < GATE_MIN_FRAMES) {
+    console.warn("Recording-icon gaze sample skipped: gaze was not stable.", {
+      stableFrames: stableFrames.length,
+      stableInliers: stableInliers.length,
+    });
     return "unstable";
   }
 
-  const tx = median(stableFrames.map((frame) => frame.tx));
-  const ty = median(stableFrames.map((frame) => frame.ty));
+  const tx = median(stableInliers.map((frame) => frame.tx));
+  const ty = median(stableInliers.map((frame) => frame.ty));
   const featureKeys = ["ox", "oy", "yaw", "pitch", "roll", "cx", "cy", "scale"];
   const sample = Object.fromEntries(
     featureKeys.map((key) => [
       key,
-      median(stableFrames.map((frame) => frame.features[key])),
+      median(stableInliers.map((frame) => frame.features[key])),
     ]),
   );
   Object.assign(sample, {
@@ -472,24 +480,9 @@ async function learnFromGate(now) {
     console.warn("Recording-icon gaze sample skipped: invalid features or target.");
     return "invalid-sample";
   }
-  const result = online.addClick(tx, ty, now, true, "gate");
-  console.log("gate gaze sample:", result);
-  const clicks = online.exportClicks();
-  if (result === "ok") {
-    model = online.getModel();
-    try {
-      sessionStorage.setItem("gazeOnlineClicks", JSON.stringify(clicks));
-    } catch (err) {
-      console.warn("Could not persist gate gaze samples:", err);
-    }
-  } else if (result === "refit-rejected") {
-    console.warn("Gate sample is being saved although the local refit was rejected.");
-  }
-
   gateFrames.length = 0;
   const saved = await saveGazeLearningSample(sample, "recording-icon-gate");
-  if (!saved) return `${result}; cloud-save-failed`;
-  return `${result}; cloud-saved`;
+  return saved ? "cloud-saved; available next exam" : "cloud-save-failed";
 }
 
 window.learnFromRecordingIconGate = () => learnFromGate(performance.now());
@@ -781,12 +774,32 @@ let lossDeadline = 0;
 const missingSignals = new Set();
 let screenLossActive = false;
 
+function isMobileGazePlatform() {
+  const queryPlatform = new URLSearchParams(location.search).get("platform");
+  if (queryPlatform === "mobile" || queryPlatform === "pc")
+    return queryPlatform === "mobile";
+
+  const ua = navigator.userAgent || "";
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  const mobileDevice =
+    navigator.userAgentData?.mobile === true ||
+    /Android|iPhone|iPad|iPod|IEMobile|Windows Phone/i.test(ua) ||
+    (/MacIntel/i.test(platform) && navigator.maxTouchPoints > 1);
+  if (mobileDevice) return true;
+
+  const desktopDevice =
+    /Windows NT|Macintosh|X11|CrOS|Linux x86_64/i.test(ua) ||
+    /Win32|Win64|Windows|MacIntel|Linux x86_64/i.test(platform);
+  return desktopDevice ? false : matchMedia("(pointer: coarse)").matches;
+}
+
 // Online exam learning uses the recording-icon gate as its only labeled target.
 const online = GazeCore.createOnline(calData, {
   gateWeight: 6,
   maxClicks: 0,
   maxGate: 5,
   maxSpreadPx: 100,
+  xOnly: isMobileGazePlatform(),
 });
 const isRecordingIconLearningSample = (sample) =>
   sample?.gate === true || sample?.source === "recording-icon-gate";
@@ -817,25 +830,40 @@ async function saveGazeLearningSample(sample, source) {
     return false;
   }
 
-  try {
-    const addGazeLearning = window.httpsCallable(
-      window.functions,
-      "addGazeLearning",
-      { timeout: 10000 },
-    );
-    const result = await addGazeLearning({
-      platform: window.examGazePlatform || calData.platform,
-      samples: [{ ...sample, source }],
-      ...(typeof window.examData?.examId === "string"
-        ? { examId: window.examData.examId }
-        : {}),
-    });
-    console.log(`Saved ${source} gaze sample:`, result.data);
-    return true;
-  } catch (err) {
-    console.error(`Could not save ${source} gaze sample:`, err);
-    return false;
+  const payload = {
+    platform: window.examGazePlatform || calData.platform,
+    samples: [{ ...sample, source }],
+    ...(typeof window.examData?.examId === "string"
+      ? { examId: window.examData.examId }
+      : {}),
+  };
+  const retryableCodes = new Set([
+    "functions/deadline-exceeded",
+    "functions/internal",
+    "functions/unavailable",
+  ]);
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const addGazeLearning = window.httpsCallable(
+        window.functions,
+        "addGazeLearning",
+        { timeout: 10000 },
+      );
+      const result = await addGazeLearning(payload);
+      if (result.data?.success !== true) {
+        throw new Error("addGazeLearning did not confirm the sample was saved.");
+      }
+      console.log(`Saved ${source} gaze sample:`, result.data);
+      return true;
+    } catch (err) {
+      lastError = err;
+      if (!retryableCodes.has(err?.code) || attempt === 3) break;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+    }
   }
+  console.error(`Could not save ${source} gaze sample:`, lastError);
+  return false;
 }
 
 window.gazeLearningReady = Promise.resolve(window.examGazeCalibrationReady)
