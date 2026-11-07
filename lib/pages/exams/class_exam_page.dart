@@ -991,10 +991,17 @@ class _ClassExamPageState extends State<ClassExamPage> {
     final dark = index.isOdd;
     final foreground = dark ? Colors.white : _ink;
     final secondary = dark ? const Color(0xFFD0D0D5) : _muted;
-    final statusLabel = entry.status == 'completed'
+    final isCompleted = entry.status == 'completed';
+    final isIncomplete = entry.status == 'incomplete';
+    final isInProgress = entry.status == 'in-progress';
+    final statusLabel = isCompleted
         ? 'COMPLETED'
-        : entry.taken
+        : isIncomplete
+        ? 'INCOMPLETE'
+        : isInProgress
         ? 'IN PROGRESS'
+        : entry.taken
+        ? entry.status!.toUpperCase()
         : 'NOT TAKEN';
     final statusColor = entry.taken
         ? (dark ? _muted2 : _muted)
@@ -1104,8 +1111,10 @@ class _ClassExamPageState extends State<ClassExamPage> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   Icon(
-                    entry.status == 'completed'
+                    isCompleted
                         ? Icons.assessment_outlined
+                        : isIncomplete
+                        ? Icons.block_outlined
                         : Icons.arrow_forward_rounded,
                     size: 18,
                     color: dark ? Colors.white : _accent,
@@ -1114,7 +1123,9 @@ class _ClassExamPageState extends State<ClassExamPage> {
                   Text(
                     entry.status == 'completed'
                         ? 'View result'
-                        : entry.taken
+                        : isIncomplete
+                        ? 'Incomplete'
+                        : isInProgress
                         ? 'Continue exam'
                         : 'Enter exam',
                     style: TextStyle(

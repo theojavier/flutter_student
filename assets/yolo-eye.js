@@ -37,9 +37,10 @@ const YoloEye = (() => {
     disagree: 0.10, // (non-fusion modes) ox difference above this: pick best eye instead of averaging
     minCut: 0.5, // 1-Euro min cutoff on the eye offset (lower = steadier when still)
     beta: 4, // 1-Euro speed coefficient (features are in eye-widths, so this needs to be SMALL; try 1)
-    headCompDelay: 300, // ms: align head compensation with delayed visual response
+    headCompDelay: 300, // ms: legacy default; new calibration settings are saved with the model
     boxSmoothing: 0.85, // smoothing of the crop box position
     gpuRetries: 0, // 0 = go straight to CPU after GPU reset
+    inferenceIntervalMs: 100, // YOLO correction rate; MediaPipe still processes every camera frame.
 
     // ---- LOCKED CROP BOX ----
     // The crop is cut from the MediaPipe eye corners. It used to follow them every frame, so the same eye was cut
@@ -54,7 +55,7 @@ const YoloEye = (() => {
     // ---- FUSION ----
     fuse: true, // MediaPipe iris every frame + slow YOLO bias correction
     ref: "mp", // used when fuse is false: "mp" = MediaPipe corners, "yolo" = YOLO corners/lid centre
-    fuseTau: 500, // ms: how fast YOLO corrects MediaPipe's bias (lower = trust YOLO more)
+    fuseTau: 500, // ms: how fast YOLO corrects MediaPipe's bias (higher = slower, steadier correction)
     fuseGate: 0.12, // eye-widths: YOLO samples further than this from the running bias are rejected
     fuseMinQ: 0.25, // skip bias updates when YOLO eye quality is below this
     fuseMinEar: 0.16, // skip bias updates when the lid partly covers the iris (both sources unreliable)
@@ -83,6 +84,8 @@ const YoloEye = (() => {
   // ---- metrics (read by gaze-metrics.js) ----
   const stats = { runs: 0, ok: 0, miss: 0, err: 0, recent: [], eye: { L: { tried: 0, found: 0, closed: 0, miss: 0 }, R: { tried: 0, found: 0, closed: 0, miss: 0 } } };
   let lastGazeAt = 0; // performance.now() when the last YOLO run finished
+  let lastRunMs = 0;
+  let lastInferenceEndedAt = 0;
   const noteRun = (ms, found) => {
     stats.runs++;
     if (found) stats.ok++; else stats.miss++;
@@ -93,6 +96,8 @@ const YoloEye = (() => {
   // GPU-reset recovery state
   let recovering = null;   // Promise while the model is being rebuilt
   let gpuLosses = 0;
+  let wasmRecoveryAttempts = 0;
+  let recoveryAwaitingInference = false;
   let failed = false;      // true only if even the CPU fallback could not load
   let litert = null;       // LiteRT module, loaded once and reused
   let disposed = false;
@@ -187,22 +192,23 @@ const YoloEye = (() => {
     if (DEBUG) console.log(info);
   }
 
-  // Called when the GPU resets mid-exam: drop the dead model, rebuild in the background.
-  // In fusion mode the bubble keeps running on MediaPipe + the last bias while this happens.
-  function handleGpuLoss(err) {
+  function startRecovery(reason, err, accels) {
     if (disposed || recovering) return;
-    gpuLosses++;
-    console.error(`YoloEye: GPU device lost (#${gpuLosses}), recovering…`, err);
+    console.error(`YoloEye: ${reason}; rebuilding on ${accels.join(", ")}…`, err);
 
     const old = eyeModel;
     eyeModel = null;
     lastResult = null;
     try { old?.delete?.(); } catch (_) {}
-    for (const k of Object.keys(trk)) delete trk[k];
+    recoveryAwaitingInference = true;
+    reset();
 
-    const accels = gpuLosses <= cfg.gpuRetries ? cfg.accelerators : ["wasm"];
     recovering = compile(accels)
-      .then(() => console.warn(`YoloEye: recovered on ${usedAccel} after GPU reset #${gpuLosses}.`))
+      .then(() =>
+        console.warn(
+          `YoloEye: model rebuilt on ${usedAccel}; waiting for the first successful inference.`,
+        ),
+      )
       .catch((e) => {
         if (disposed) return;
         failed = true;
@@ -210,6 +216,26 @@ const YoloEye = (() => {
         console.error("YoloEye: recovery failed:", e);
       })
       .finally(() => { recovering = null; });
+  }
+
+  // Called when the GPU resets mid-exam: drop the dead model and rebuild in the background.
+  function handleGpuLoss(err) {
+    if (disposed || recovering) return;
+    gpuLosses++;
+    const accels = gpuLosses <= cfg.gpuRetries ? cfg.accelerators : ["wasm"];
+    startRecovery(`GPU device lost (#${gpuLosses})`, err, accels);
+  }
+
+  function handleWasmFailure(err) {
+    if (disposed || recovering) return;
+    wasmRecoveryAttempts++;
+    if (wasmRecoveryAttempts > 1) {
+      failed = true;
+      error = err;
+      console.error("YoloEye: WASM inference failed after a rebuild; eye tracking is unavailable.", err);
+      return;
+    }
+    startRecovery("WASM inference failed", err, ["wasm"]);
   }
 
   function init(opts = {}) {
@@ -229,6 +255,10 @@ const YoloEye = (() => {
   function dispose() {
     if (disposed) return;
     disposed = true;
+    visibilityCacheAt = 0;
+    visibilityCache = null;
+    lastGaze = null;
+    lastGazeAt = 0;
     if (busy) {
       disposePending = true;
       return;
@@ -283,10 +313,16 @@ const YoloEye = (() => {
         handleGpuLoss(e);
         throw new GpuLost("GPU device lost");
       }
+      if (usedAccel === "wasm") handleWasmFailure(e);
       throw e;
     } finally {
       try { inp.delete(); } catch (_) {}
       try { out && out.forEach((o) => o.delete()); } catch (_) {}
+    }
+    if (usedAccel === "wasm") wasmRecoveryAttempts = 0;
+    if (recoveryAwaitingInference) {
+      recoveryAwaitingInference = false;
+      console.warn(`YoloEye: recovered on ${usedAccel}; inference is working again.`);
     }
     const NC = NK * 3;
     let rows, get, ks;
@@ -562,7 +598,17 @@ const YoloEye = (() => {
     }
     hPrev = { t: tN, yaw: h.yaw, pitch: h.pitch };
     runMaxSpeed = Math.max(runMaxSpeed, headSpeed);
-    if (eyeModel && !recovering && !failed && !busy) {
+    const mobileExam = window.__examIsPcDoc === false;
+    const inferenceIntervalMs = mobileExam
+      ? Math.max(cfg.inferenceIntervalMs, 125)
+      : cfg.inferenceIntervalMs;
+    if (
+      eyeModel &&
+      !recovering &&
+      !failed &&
+      !busy &&
+      tN - lastInferenceEndedAt >= Math.max(inferenceIntervalMs, lastRunMs)
+    ) {
       busy = true;
       if (snap.width !== video.videoWidth || snap.height !== video.videoHeight) {
         snap.width = video.videoWidth;
@@ -573,10 +619,20 @@ const YoloEye = (() => {
       runMaxSpeed = headSpeed;
       const tRun = performance.now();
       yoloGaze(lm, W, H)
-        .then((g) => { if (!disposed) { lastGaze = g; lastGazeAt = performance.now(); noteRun(lastGazeAt - tRun, !!g); } })
+        .then((g) => {
+          const finishedAt = performance.now();
+          lastRunMs = finishedAt - tRun;
+          if (!disposed) {
+            lastGaze = g;
+            lastGazeAt = finishedAt;
+            noteRun(lastRunMs, !!g);
+          }
+        })
         .catch((e) => { stats.err++; if (!(e instanceof GpuLost)) console.error("YOLO eye failed:", e); })
         .finally(() => {
           busy = false;
+          lastRunMs = performance.now() - tRun;
+          lastInferenceEndedAt = performance.now();
           if (disposePending) releaseModel();
         });
     }
@@ -619,10 +675,17 @@ const YoloEye = (() => {
   function reset() {
     fz.L = newFz();
     fz.R = newFz();
+    visibilityCacheAt = 0;
+    visibilityCache = null;
+    lastGaze = null;
+    lastGazeAt = 0;
     warmed = false;
     warmSince = 0;
     for (const k of Object.keys(trk)) delete trk[k];
     lastResult = null;
+    hPrev = null;
+    headSpeed = 0;
+    runMaxSpeed = 0;
   }
 
   // ---------- smoothing (drop-in for GazeCore.makeSmoother) ----------
@@ -688,10 +751,19 @@ const YoloEye = (() => {
 
   // ---------- helpers ----------
   // Settings that change what the features MEAN. Saved with the calibration and re-applied by the exam.
-  const exportCfg = () => ({ refine: cfg.refine, tta: cfg.tta, distanceComp: cfg.distanceComp, fuse: cfg.fuse, ref: cfg.ref });
+  const exportCfg = () => ({
+    refine: cfg.refine,
+    tta: cfg.tta,
+    distanceComp: cfg.distanceComp,
+    fuse: cfg.fuse,
+    ref: cfg.ref,
+    headCompDelay: cfg.headCompDelay,
+    fuseTau: cfg.fuseTau,
+  });
   function applyCfg(c) {
     if (!c) return;
-    for (const k of ["refine", "tta", "distanceComp", "fuse", "ref"]) if (c[k] !== undefined) cfg[k] = c[k];
+    for (const k of ["refine", "tta", "distanceComp", "fuse", "ref", "headCompDelay", "fuseTau"])
+      if (c[k] !== undefined) cfg[k] = c[k];
   }
 
   // draw the model keypoints of the last frame; sx, sy = canvas px per camera px
@@ -758,8 +830,183 @@ const YoloEye = (() => {
     ctx.restore();
   }
 
+  let visibilityCanvas = null;
+  let visibilityContext = null;
+  let visibilityCacheAt = 0;
+  let visibilityCache = null;
+  let visibilityReadErrorLogged = false;
+
+  function checkEyeVisibility(
+    lm,
+    W,
+    H,
+    video,
+    maxAgeMs = Math.min(2500, Math.max(1000, lastRunMs * 2 + 500)),
+  ) {
+    const now = performance.now();
+    if (!lastGazeAt || now - lastGazeAt > maxAgeMs) {
+      return { visible: false, reason: "Eye tracking is not ready yet." };
+    }
+    if (visibilityCacheAt === lastGazeAt && visibilityCache) {
+      return visibilityCache;
+    }
+
+    const eyes = lastGaze?.per || [];
+    const byLabel = new Map(eyes.map((eye) => [eye.lab, eye]));
+    const measuredEyes = ["L", "R"].map((lab) => byLabel.get(lab));
+    if (
+      measuredEyes.some(
+        (eye) =>
+          !eye ||
+          !Number.isFinite(eye.q) ||
+          eye.q < 0.35 ||
+          !Number.isFinite(eye.r?.score) ||
+          eye.r.score < 0.15 ||
+          !Number.isFinite(eye.r?.ear) ||
+          eye.r.ear < cfg.blinkEar,
+      )
+    ) {
+      visibilityCache = {
+        visible: false,
+        reason: "Both eyes are not clearly detected. Keep them open and unobstructed.",
+      };
+      visibilityCacheAt = lastGazeAt;
+      return visibilityCache;
+    }
+
+    if (
+      !lm ||
+      !Number.isFinite(W) ||
+      !Number.isFinite(H) ||
+      W < 1 ||
+      H < 1 ||
+      !video ||
+      video.readyState < 2
+    ) {
+      visibilityCache = {
+        visible: false,
+        reason: "The camera image is not ready. Keep your eyes in view.",
+      };
+      visibilityCacheAt = lastGazeAt;
+      return visibilityCache;
+    }
+
+    try {
+      if (!visibilityCanvas) {
+        visibilityCanvas = document.createElement("canvas");
+        visibilityContext = visibilityCanvas.getContext("2d", {
+          willReadFrequently: true,
+        });
+      }
+      if (!visibilityContext) throw new Error("Could not read the camera image.");
+      if (visibilityCanvas.width !== W || visibilityCanvas.height !== H) {
+        visibilityCanvas.width = W;
+        visibilityCanvas.height = H;
+      }
+      const measurements = measuredEyes.map((eye, index) => {
+        const [cornerA, cornerB, lidUpper, lidLower] =
+          EYES[index === 0 ? "L" : "R"];
+        const point = (id) => ({
+          x: lm[id].x * W,
+          y: lm[id].y * H,
+        });
+        const a = point(cornerA);
+        const b = point(cornerB);
+        const upper = point(lidUpper);
+        const lower = point(lidLower);
+        const eyeWidth = Math.hypot(b.x - a.x, b.y - a.y);
+        if (
+          ![a.x, a.y, b.x, b.y, upper.x, upper.y, lower.x, lower.y, eyeWidth]
+            .every(Number.isFinite) ||
+          eyeWidth < 4
+        ) {
+          return null;
+        }
+
+        const centerX = (a.x + b.x) / 2;
+        const centerY = (upper.y + lower.y) / 2;
+        const roiWidth = eyeWidth * 1.15;
+        const roiHeight = Math.max(eyeWidth * 0.5, Math.abs(lower.y - upper.y) * 2.5);
+        const left = Math.max(0, Math.floor(centerX - roiWidth / 2));
+        const top = Math.max(0, Math.floor(centerY - roiHeight / 2));
+        const right = Math.min(W, Math.ceil(centerX + roiWidth / 2));
+        const bottom = Math.min(H, Math.ceil(centerY + roiHeight / 2));
+        const width = right - left;
+        const height = bottom - top;
+        if (width < 4 || height < 4) return null;
+
+        visibilityContext.drawImage(
+          video,
+          left,
+          top,
+          width,
+          height,
+          left,
+          top,
+          width,
+          height,
+        );
+        const pixels = visibilityContext.getImageData(left, top, width, height).data;
+        const histogram = new Uint32Array(256);
+        let total = 0;
+        let count = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          const luma = Math.round(
+            0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2],
+          );
+          histogram[luma]++;
+          total += luma;
+          count++;
+        }
+        const percentile = (fraction) => {
+          const target = Math.ceil(count * fraction);
+          let accumulated = 0;
+          for (let value = 0; value < histogram.length; value++) {
+            accumulated += histogram[value];
+            if (accumulated >= target) return value;
+          }
+          return 255;
+        };
+        const mean = total / count;
+        const contrast = percentile(0.9) - percentile(0.1);
+        return {
+          lab: eye.lab,
+          ox: eye.ox,
+          oy: eye.oy,
+          ear: eye.r.ear,
+          mean,
+          contrast,
+        };
+      });
+
+      const imageVisible = measurements.every(
+        (eye) => eye && eye.mean >= 32 && eye.contrast >= 14,
+      );
+      visibilityCache = imageVisible
+        ? { visible: true, reason: null, eyes: measurements }
+        : {
+            visible: false,
+            reason: "Improve the lighting so both eyes are clearly visible to the camera.",
+            eyes: measurements,
+          };
+    } catch (error) {
+      if (!visibilityReadErrorLogged) {
+        console.warn("Could not verify eye visibility from the camera image:", error);
+        visibilityReadErrorLogged = true;
+      }
+      visibilityCache = {
+        visible: false,
+        reason: "Could not verify eye visibility. Check the camera and lighting.",
+      };
+    }
+
+    visibilityCacheAt = lastGazeAt;
+    return visibilityCache;
+  }
+
   return {
     cfg, init, dispose, extract, reset, makeSmoother, exportCfg, applyCfg, drawKeypoints, drawYolo,
+    checkEyeVisibility,
     get debugEnabled() { return DEBUG; },
     get stats() { return stats; },
     get lastGazeAt() { return lastGazeAt; },

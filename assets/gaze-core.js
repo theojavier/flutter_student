@@ -110,6 +110,127 @@ const GazeCore = (() => {
     };
   }
 
+  function createFaceInputCropper({
+    minimumWidth = 0.72,
+    faceWidthScale = 2.2,
+    followRate = 0.35,
+    edgeGuard = 0.05,
+    fullFrameEveryMs = 4000,
+  } = {}) {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("Could not create the face-crop canvas.");
+
+    let frame = null;
+    let roi = null;
+    let lastFullAt = 0;
+
+    function prepare(video) {
+      const width = video.videoWidth || video.width;
+      const height = video.videoHeight || video.height;
+      if (!width || !height) return video;
+
+      const now = performance.now();
+      if (fullFrameEveryMs && now - lastFullAt > fullFrameEveryMs) roi = null;
+      if (!roi || roi.width >= width - 1) {
+        roi = { left: 0, width };
+        lastFullAt = now;
+      }
+
+      const sourceWidth = Math.max(1, Math.min(width, roi.width));
+      const left = Math.max(0, Math.min(width - sourceWidth, roi.left));
+      const inputWidth = Math.max(1, Math.round(width * minimumWidth));
+      const inputHeight = Math.max(
+        1,
+        Math.round((height * inputWidth) / sourceWidth),
+      );
+      if (canvas.width !== inputWidth || canvas.height !== inputHeight) {
+        canvas.width = inputWidth;
+        canvas.height = inputHeight;
+      }
+      context.drawImage(
+        video,
+        left,
+        0,
+        sourceWidth,
+        height,
+        0,
+        0,
+        inputWidth,
+        inputHeight,
+      );
+      frame = {
+        left,
+        width: sourceWidth,
+        inputWidth,
+        fullWidth: width,
+      };
+      return canvas;
+    }
+
+    function mapResults(results) {
+      const faces = results.multiFaceLandmarks;
+      if (!frame || !Array.isArray(faces)) return results;
+
+      const mappedFaces = faces.map((landmarks) =>
+        landmarks.map((point) => ({
+          ...point,
+          x: (frame.left + point.x * frame.width) / frame.fullWidth,
+          z: point.z * (frame.width / frame.fullWidth),
+        })),
+      );
+      if (mappedFaces.length) {
+        let minX = 1;
+        let maxX = 0;
+        for (const landmarks of mappedFaces) {
+          for (const point of landmarks) {
+            if (!Number.isFinite(point.x)) continue;
+            minX = Math.min(minX, point.x);
+            maxX = Math.max(maxX, point.x);
+          }
+        }
+
+        if (maxX > minX) {
+          const cropLeft = frame.left / frame.fullWidth;
+          const cropRight = (frame.left + frame.width) / frame.fullWidth;
+          if (minX - cropLeft < edgeGuard || cropRight - maxX < edgeGuard) {
+            roi = null;
+            frame = null;
+            return { ...results, multiFaceLandmarks: mappedFaces };
+          }
+
+          const faceWidth = maxX - minX;
+          const nextWidth = Math.min(
+            1,
+            Math.max(minimumWidth, faceWidth * faceWidthScale),
+          ) * frame.fullWidth;
+          const center = (minX + maxX) * 0.5 * frame.fullWidth;
+          const nextLeft = Math.max(
+            0,
+            Math.min(frame.fullWidth - nextWidth, center - nextWidth * 0.5),
+          );
+          if (!roi || roi.width >= frame.fullWidth - 1) {
+            roi = { left: nextLeft, width: nextWidth };
+          } else {
+            roi = {
+              left: roi.left + (nextLeft - roi.left) * followRate,
+              width: roi.width + (nextWidth - roi.width) * followRate,
+            };
+          }
+        } else {
+          roi = null;
+        }
+      } else {
+        roi = null;
+      }
+
+      frame = null;
+      return { ...results, multiFaceLandmarks: mappedFaces };
+    }
+
+    return { prepare, mapResults };
+  }
+
   // time-based exponential smoothing over all features
   function makeSmoother(tauMs = 250) {
     const s = { init: false, t: 0 };
@@ -303,7 +424,9 @@ const GazeCore = (() => {
       maxSpreadPx: 150, // fixation must be stable (model-predicted spread)
       gatePx: Math.max(350, 3 * (calData.accuracy || 0)), // reject clicks far from what the model sees
       clickWeight: 4, // a clean averaged click ≈ 4 raw calibration frames
+      gateWeight: 8,
       maxClicks: 40, // keep the most recent N
+      maxGate: 5,
       minClicks: 3,
       refitEvery: 3,
       xOnly: false,
@@ -327,7 +450,18 @@ const GazeCore = (() => {
     const baseTrain = trainErr(base, model);
     let clicks = [];
     let accepted = 0;
+    let lastSample = null;
     const buf = [];
+
+    const keepLatest = (items, limit) =>
+      limit > 0 ? items.slice(-limit) : [];
+    const trim = (arr) => {
+      const keep = new Set([
+        ...keepLatest(arr.filter((row) => row.gate), o.maxGate),
+        ...keepLatest(arr.filter((row) => !row.gate), o.maxClicks),
+      ]);
+      return arr.filter((row) => keep.has(row));
+    };
 
     function push(f, now) {
       buf.push({ t: now, f: snapshot(f) });
@@ -351,7 +485,8 @@ const GazeCore = (() => {
       return true;
     }
 
-    function addClick(x, y, now, forceRefit = false) {
+    function addClick(x, y, now, forceRefit = false, kind = "click") {
+      lastSample = null;
       if (
         !Number.isFinite(x) ||
         !Number.isFinite(y) ||
@@ -374,34 +509,38 @@ const GazeCore = (() => {
       if (range(px) > o.maxSpreadPx || range(py) > o.maxSpreadPx)
         return "unstable";
       if (
-        o.xOnly
+        kind !== "gate" &&
+        (o.xOnly
           ? Math.abs(med(px) - x) > o.gatePx
-          : Math.hypot(med(px) - x, med(py) - y) > o.gatePx
+          : Math.hypot(med(px) - x, med(py) - y) > o.gatePx)
       )
         return "outlier";
       const feat = {};
       KEYS.forEach((k) => (feat[k] = med(frames.map((b) => b.f[k]))));
       HEAD_KEYS.forEach((k) => (feat[k] = med(frames.map((b) => b.f[k]))));
       const predictedY = predict(calibrationModel, feat).y;
+      lastSample = {
+        ...feat,
+        sx: x / innerWidth,
+        sy: o.xOnly ? predictedY : y / innerHeight,
+        spot: -1,
+        ...(kind === "gate" ? { gate: true } : {}),
+        w: kind === "gate" ? o.gateWeight : o.clickWeight,
+      };
       const nextClicks = [
         ...clicks,
-        {
-          ...feat,
-          sx: x / innerWidth,
-          sy: o.xOnly ? predictedY : y / innerHeight,
-          spot: -1,
-          w: o.clickWeight,
-        },
-      ].slice(-o.maxClicks);
+        lastSample,
+      ];
+      const trimmedClicks = trim(nextClicks);
       const nextAccepted = accepted + 1;
       if (
         (forceRefit ||
           (nextAccepted >= o.minClicks &&
             nextAccepted % o.refitEvery === 0)) &&
-        !refit(nextClicks)
+        !refit(trimmedClicks)
       )
         return "refit-rejected";
-      clicks = nextClicks;
+      clicks = trimmedClicks;
       accepted = nextAccepted;
       return "ok";
     }
@@ -410,8 +549,9 @@ const GazeCore = (() => {
       push,
       addClick,
       getModel: () => model,
+      getLastSample: () => lastSample,
       exportClicks: () => clicks,
-      importClicks: (arr) => {
+      importClicks: (arr, forceRefit = false) => {
         const safeClicks = Array.isArray(arr)
           ? arr
               .filter(
@@ -425,26 +565,33 @@ const GazeCore = (() => {
                   r.sy >= 0 &&
                   r.sy <= 1,
               )
-              .map((r) => ({
-                ...snapshot(r),
-                sx: r.sx,
-                sy: o.xOnly
-                  ? predict(calibrationModel, r).y
-                  : r.sy,
-                spot: -1,
-                w: o.clickWeight,
-              }))
-              .slice(-o.maxClicks)
+              .map((r) => {
+                const isGate =
+                  r.gate === true || r.source === "recording-icon-gate";
+                return {
+                  ...snapshot(r),
+                  sx: r.sx,
+                  sy: o.xOnly ? predict(calibrationModel, r).y : r.sy,
+                  spot: -1,
+                  w: isGate ? o.gateWeight : o.clickWeight,
+                  ...(isGate ? { gate: true } : {}),
+                };
+              })
           : [];
-        if (safeClicks.length >= o.minClicks && !refit(safeClicks)) {
-          clicks = [];
-          accepted = 0;
-          return 0;
+        const trimmedClicks = trim(safeClicks);
+        if (
+          trimmedClicks.length >= o.minClicks ||
+          (forceRefit && trimmedClicks.length > 0)
+        ) {
+          if (!refit(trimmedClicks)) {
+            clicks = [];
+            accepted = 0;
+            return 0;
+          }
         }
-        clicks = safeClicks;
+        clicks = trimmedClicks;
         accepted = clicks.length;
         return clicks.length;
-        if (clicks.length >= o.minClicks) refit();
       },
     };
   }
@@ -452,6 +599,7 @@ const GazeCore = (() => {
   return {
     VERSION,
     extract,
+    createFaceInputCropper,
     makeSmoother,
     fit,
     predict,

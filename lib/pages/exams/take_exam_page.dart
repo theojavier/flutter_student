@@ -325,7 +325,8 @@ class _TakeExamPageState extends State<TakeExamPage>
                   "This exam needs two things from your browser:\n\n"
                   "•  Full screen sharing (your ENTIRE screen, not a window or tab)\n"
                   "•  Camera access, for a quick look-at-the-camera check\n\n"
-                  "You'll see two browser prompts next — please allow both.",
+                  "You'll see two browser prompts next — please allow both.\n\n"
+                  "During gaze setup, keep your full face centered in the camera preview and follow the on-screen prompts.",
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: _mutedTextColor,
@@ -618,7 +619,8 @@ class _TakeExamPageState extends State<TakeExamPage>
           "${formatDate(startTime.millisecondsSinceEpoch)} - ${DateFormat("h:mm a").format(endTime.toDate())}",
         ),
       if (classId != null) _DetailRow(Icons.class_outlined, "Class", classId),
-      if (program != null) _DetailRow(Icons.school_outlined, "Program", program),
+      if (program != null)
+        _DetailRow(Icons.school_outlined, "Program", program),
       if (yearBlock != null)
         _DetailRow(
           Icons.calendar_view_week_outlined,
@@ -840,10 +842,10 @@ class _TakeExamPageState extends State<TakeExamPage>
                         "•  Full screen sharing (your ENTIRE screen, not a window or tab)\n"
                         "•  Camera access, for monitoring\n\n"
                         "You'll see two browser prompts next — please allow both. "
-                        "After that, a quick eye calibration will start."
+                        "After that, center your full face in the camera preview and follow the gaze setup prompts. If you already calibrated, you may only need a quick face check."
                   : "This exam needs camera access for monitoring.\n\n"
                         "You'll see a browser prompt next — please allow it. "
-                        "After that, a quick eye calibration will start.";
+                        "After that, center your full face in the camera preview and follow the gaze setup prompts. If you already calibrated, you may only need a quick face check.";
 
               final agreed = await showDialog<bool>(
                 context: context,
@@ -972,26 +974,23 @@ class _TakeExamPageState extends State<TakeExamPage>
               bool closed = false;
               final calibrationOk = await showDialog<bool>(
                 context: context,
-                barrierDismissible: false,
+                barrierDismissible: true,
                 barrierColor: const Color(0xF00B1220),
                 useSafeArea: false,
                 builder: (ctx) {
-                  void close(bool ok) {
+                  void close(bool? ok) {
                     if (closed) return;
                     closed = true;
                     if (ctx.mounted) Navigator.of(ctx).pop(ok);
                   }
 
-                  return PopScope(
-                    canPop: false,
-                    child: Dialog.fullscreen(
-                      backgroundColor: Colors.transparent,
-                      child: GazeCalibrationOverlay(
-                        examId: widget.examId,
-                        onCalibrationComplete: () => close(true),
-                        onCalibrationFailed: () => close(false),
-                        onCalibrationCancelled: () => close(false),
-                      ),
+                  return Dialog.fullscreen(
+                    backgroundColor: Colors.transparent,
+                    child: GazeCalibrationOverlay(
+                      examId: widget.examId,
+                      onCalibrationComplete: () => close(true),
+                      onCalibrationFailed: () => close(false),
+                      onCalibrationCancelled: () => close(null),
                     ),
                   );
                 },
@@ -1001,11 +1000,12 @@ class _TakeExamPageState extends State<TakeExamPage>
                 if (isPc) {
                   _screen.stop();
                 }
+                if (calibrationOk == null) return;
                 if (mounted) {
                   await _showErrorDialog(
-                    title: "Calibration Required",
+                    title: "Gaze Setup Required",
                     message:
-                        "Gaze calibration is required to take this exam. Please complete the calibration process to continue.",
+                        "Gaze setup is required to take this exam. Complete the calibration or face check to continue.",
                     icon: Icons.visibility_off_outlined,
                     color: _warnColor,
                   );

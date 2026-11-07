@@ -4,7 +4,8 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class GazeCalibrationView extends StatefulWidget {
   final String examId;
-  final void Function(String action) onAction;
+  final Future<dynamic> Function(String action, Map<String, dynamic> data)
+  onAction;
 
   const GazeCalibrationView({
     super.key,
@@ -19,19 +20,13 @@ class GazeCalibrationView extends StatefulWidget {
 class _GazeCalibrationViewState extends State<GazeCalibrationView> {
   static const _origin = 'https://student-099266.web.app';
 
-  // Runs BEFORE the page's own scripts, clearing both calibration and stale exam-attempt data.
-  // Calibration is redone right now; exam leftovers must be wiped so the next attempt starts fresh.
+  // Clear stale attempt state without removing the saved gaze calibration.
   static final _resetScript = UserScript(
     source: """
       try {
-        // Calibration data (will be rewritten by this calibration session)
-        localStorage.removeItem('gazeCalibrationData');
-
-        // Exam-attempt leftovers (keep in sync with EXAM_LOCAL_KEYS in exam.html)
         ['cheatingCount', 'cheatClipIndex', 'pendingCheatStill']
           .forEach(function(k) { localStorage.removeItem(k); });
 
-        // Session-scoped exam state
         ['gazeBias', 'gazeOnlineClicks', 'examStarted', 'is_unloading']
           .forEach(function(k) { sessionStorage.removeItem(k); });
       } catch (e) {}
@@ -45,7 +40,7 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
       initialUrlRequest: URLRequest(
         url: WebUri(
           '$_origin/assets/gaze-calibration.html'
-          '?examId=${widget.examId}&platform=mobile&v=3',
+          '?exam=1&examId=${widget.examId}',
         ),
       ),
       initialUserScripts: UnmodifiableListView([_resetScript]),
@@ -68,8 +63,12 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
           callback: (args) {
             final data = args.isNotEmpty ? args.first : null;
             if (data is Map && data['action'] is String) {
-              widget.onAction(data['action'] as String);
+              return widget.onAction(
+                data['action'] as String,
+                Map<String, dynamic>.from(data),
+              );
             }
+            return null;
           },
         );
       },

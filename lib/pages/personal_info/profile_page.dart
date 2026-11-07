@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../../helpers/SecureStorageHelper.dart';
 import '../../widgets/pull_to_refresh_shell.dart';
+import 'profile_calibration_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -18,6 +20,7 @@ class _ProfilePageState extends State<ProfilePage> {
   static const Color _green = Color(0xFF087B4F);
   static const Color _line = Color(0xFFDFE2DF);
   static const Color _softGreen = Color(0xFFDCF2E5);
+  static const Color _warn = Color(0xFFB88826); // Orange for warnings
 
   String? _userId;
   Map<String, dynamic>? _userData;
@@ -25,12 +28,15 @@ class _ProfilePageState extends State<ProfilePage> {
   String? _latestClassAcademicYear;
   bool _loading = true;
   String? _error;
+  Map<String, dynamic>? _calibrationStatus; // Gaze calibration status
+  bool _loadingCalibrationStatus = true;
 
   @override
   void initState() {
     super.initState();
     AppRefresh.tick.addListener(_refreshProfile);
     _loadProfile();
+    _loadCalibrationStatus();
   }
 
   @override
@@ -39,7 +45,10 @@ class _ProfilePageState extends State<ProfilePage> {
     super.dispose();
   }
 
-  void _refreshProfile() => _loadProfile();
+  void _refreshProfile() {
+    _loadProfile();
+    _loadCalibrationStatus();
+  }
 
   Future<void> _loadProfile() async {
     try {
@@ -86,7 +95,35 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  Future<String?> _fetchLatestClassYearBlock(Map<String, dynamic> userData) async {
+  Future<void> _loadCalibrationStatus() async {
+    if (!mounted) return;
+    setState(() => _loadingCalibrationStatus = true);
+
+    try {
+      final functions = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      );
+      final callable = functions.httpsCallable('getGazeCalibrationStatus');
+
+      final result = await callable.call();
+
+      if (!mounted) return;
+
+      final data = result.data as Map<String, dynamic>?;
+      setState(() {
+        _calibrationStatus = data;
+        _loadingCalibrationStatus = false;
+      });
+    } catch (e) {
+      debugPrint('[profile] Error loading calibration status: $e');
+      if (!mounted) return;
+      setState(() => _loadingCalibrationStatus = false);
+    }
+  }
+
+  Future<String?> _fetchLatestClassYearBlock(
+    Map<String, dynamic> userData,
+  ) async {
     _classYearBlockCandidates.clear();
     final firestore = FirebaseFirestore.instance;
     final classIds = <String>{};
@@ -110,13 +147,18 @@ class _ProfilePageState extends State<ProfilePage> {
         final doc = await firestore.collection('classes').doc(id).get();
         if (doc.exists && doc.data() != null) {
           // Keep only documents that actually contain a year/block value.
-          if ((doc.data()!['yearBlock']?.toString().trim().isNotEmpty ?? false)) {
+          if ((doc.data()!['yearBlock']?.toString().trim().isNotEmpty ??
+              false)) {
             // Convert the document snapshot into a query snapshot candidate below
             // by retaining its data and timestamp separately.
             final value = doc.data()!['yearBlock'].toString().trim();
             if (value.isNotEmpty) {
               final updatedAt = doc.data()!['updatedAt'];
-              _classYearBlockCandidates.add((value, doc.data()!['schoolYear']?.toString().trim(), _dateForSort(updatedAt)));
+              _classYearBlockCandidates.add((
+                value,
+                doc.data()!['schoolYear']?.toString().trim(),
+                _dateForSort(updatedAt),
+              ));
             }
           }
         }
@@ -135,7 +177,11 @@ class _ProfilePageState extends State<ProfilePage> {
         for (final doc in query.docs) {
           final value = doc.data()['yearBlock']?.toString().trim();
           if (value != null && value.isNotEmpty) {
-            _classYearBlockCandidates.add((value, doc.data()['schoolYear']?.toString().trim(), _dateForSort(doc.data()['updatedAt'])));
+            _classYearBlockCandidates.add((
+              value,
+              doc.data()['schoolYear']?.toString().trim(),
+              _dateForSort(doc.data()['updatedAt']),
+            ));
           }
         }
       } catch (_) {
@@ -155,7 +201,11 @@ class _ProfilePageState extends State<ProfilePage> {
         for (final doc in query.docs) {
           final value = doc.data()['yearBlock']?.toString().trim();
           if (value != null && value.isNotEmpty) {
-            _classYearBlockCandidates.add((value, doc.data()['schoolYear']?.toString().trim(), _dateForSort(doc.data()['updatedAt'])));
+            _classYearBlockCandidates.add((
+              value,
+              doc.data()['schoolYear']?.toString().trim(),
+              _dateForSort(doc.data()['updatedAt']),
+            ));
           }
         }
       } catch (_) {
@@ -166,7 +216,9 @@ class _ProfilePageState extends State<ProfilePage> {
     if (_classYearBlockCandidates.isEmpty) return null;
     _classYearBlockCandidates.sort((a, b) => b.$3.compareTo(a.$3));
     final latest = _classYearBlockCandidates.first;
-    _latestClassAcademicYear = (latest.$2 != null && latest.$2!.isNotEmpty) ? latest.$2 : null;
+    _latestClassAcademicYear = (latest.$2 != null && latest.$2!.isNotEmpty)
+        ? latest.$2
+        : null;
     _classYearBlockCandidates.clear();
     return latest.$1;
   }
@@ -189,7 +241,9 @@ class _ProfilePageState extends State<ProfilePage> {
     final parts = name.trim().split(RegExp(r'\s+')).where((e) => e.isNotEmpty);
     if (parts.isEmpty) return 'ST';
     if (parts.length == 1) {
-      return parts.first.substring(0, parts.first.length < 2 ? parts.first.length : 2).toUpperCase();
+      return parts.first
+          .substring(0, parts.first.length < 2 ? parts.first.length : 2)
+          .toUpperCase();
     }
     return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
   }
@@ -286,34 +340,38 @@ class _ProfilePageState extends State<ProfilePage> {
                       const SizedBox(height: 9),
                       const Text(
                         'View your student information and enrollment details.',
-                        style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
+                        style: TextStyle(
+                          color: _muted,
+                          fontSize: 13,
+                          height: 1.6,
+                        ),
                       ),
                       const SizedBox(height: 26),
                       if (wide)
-  SizedBox(
-    height: 430, // CHANGE THIS VALUE TO INCREASE BOTH CARD HEIGHTS
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          flex: 1,
-          child: _profileCard(name, imageUrl),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          flex: 2,
-          child: _personalCard(),
-        ),
-      ],
-    ),
-  )
-else ...[
-  _profileCard(name, imageUrl),
-  const SizedBox(height: 16),
-  _personalCard(),
-],
+                        SizedBox(
+                          height:
+                              430, // CHANGE THIS VALUE TO INCREASE BOTH CARD HEIGHTS
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                flex: 1,
+                                child: _profileCard(name, imageUrl),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(flex: 2, child: _personalCard()),
+                            ],
+                          ),
+                        )
+                      else ...[
+                        _profileCard(name, imageUrl),
+                        const SizedBox(height: 16),
+                        _personalCard(),
+                      ],
                       const SizedBox(height: 18),
                       _enrollmentCard(),
+                      const SizedBox(height: 18),
+                      _gazeCalibrationCard(),
                     ],
                   ),
                 ),
@@ -323,6 +381,222 @@ else ...[
         ],
       ),
     );
+  }
+
+  Widget _gazeCalibrationCard() {
+    return _Panel(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _PanelHeader(
+            title: 'Gaze Tracking Calibration',
+            subtitle: 'Setup and improve gaze tracking accuracy for exams',
+            icon: Icons.remove_red_eye_outlined,
+          ),
+          Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Calibrate your gaze tracking for accurate exam monitoring. Your calibration improves automatically during exams.',
+                  style: TextStyle(color: _muted, fontSize: 12, height: 1.6),
+                ),
+                const SizedBox(height: 20),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final twoColumns = constraints.maxWidth >= 520;
+                    return twoColumns
+                        ? Row(
+                            children: [
+                              Expanded(child: _calibrationStatusCard('PC')),
+                              const SizedBox(width: 14),
+                              Expanded(child: _calibrationStatusCard('Mobile')),
+                            ],
+                          )
+                        : Column(
+                            children: [
+                              _calibrationStatusCard('PC'),
+                              const SizedBox(height: 14),
+                              _calibrationStatusCard('Mobile'),
+                            ],
+                          );
+                  },
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _loadingCalibrationStatus
+                        ? null
+                        : _startCalibration,
+                    icon: const Icon(Icons.center_focus_strong, size: 17),
+                    label: const Text('Calibrate this device'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _green,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      textStyle: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _calibrationStatusCard(String platform) {
+    final platformKey = platform.toLowerCase();
+    final statusData =
+        _calibrationStatus?[platformKey] as Map<String, dynamic>?;
+
+    final bool isCalibrated = statusData?['calibrated'] == true;
+    final bool needsRecalibration = statusData?['needsRecalibration'] == true;
+    final int? daysOld = statusData?['daysOld'] as int?;
+    final double? accuracy = (statusData?['accuracy'] as num?)?.toDouble();
+    final int? learningSamples = statusData?['learningSampleCount'] as int?;
+
+    final IconData platformIcon = platform == 'PC'
+        ? Icons.computer
+        : Icons.phone_android;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFAFBF9),
+        border: Border.all(color: _line),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: isCalibrated ? _softGreen : Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Icon(
+                  platformIcon,
+                  color: isCalibrated ? _green : Colors.grey.shade400,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      platform.toUpperCase(),
+                      style: const TextStyle(
+                        color: _muted,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: .5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      isCalibrated
+                          ? (needsRecalibration ? 'Needs update' : 'Calibrated')
+                          : 'Not calibrated',
+                      style: TextStyle(
+                        color: isCalibrated
+                            ? (needsRecalibration ? _warn : _green)
+                            : _muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (isCalibrated && accuracy != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+              decoration: BoxDecoration(
+                color: _softGreen,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: const Color(0xFFB9E2CA)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.check_circle_outline,
+                    size: 12,
+                    color: _green,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Accuracy: ${accuracy.toStringAsFixed(0)}px',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: _green,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (daysOld != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Calibrated $daysOld ${daysOld == 1 ? 'day' : 'days'} ago',
+                style: const TextStyle(fontSize: 10, color: _muted),
+              ),
+            ],
+            if (learningSamples != null && learningSamples > 0) ...[
+              const SizedBox(height: 4),
+              Text(
+                '$learningSamples learning samples',
+                style: const TextStyle(fontSize: 10, color: _muted),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _startCalibration() async {
+    final result = await showDialog<bool>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      barrierColor: const Color(0xB3000000),
+      useSafeArea: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: Dialog.fullscreen(
+          backgroundColor: Colors.transparent,
+          child: const ProfileCalibrationPage(),
+        ),
+      ),
+    );
+
+    // If calibration succeeded, reload status
+    if (result == true) {
+      _loadCalibrationStatus();
+    }
   }
 
   String _normaliseImageUrl(String url) {
@@ -408,7 +682,12 @@ else ...[
           const SizedBox(height: 15),
           _miniInfo(Icons.school_outlined, 'Program', _value('program')),
           const SizedBox(height: 13),
-          _miniInfo(Icons.calendar_month_outlined, 'Academic year', _latestClassAcademicYear ?? _value('academicYear', _value('schoolYear'))),
+          _miniInfo(
+            Icons.calendar_month_outlined,
+            'Academic year',
+            _latestClassAcademicYear ??
+                _value('academicYear', _value('schoolYear')),
+          ),
         ],
       ),
     );
@@ -563,7 +842,11 @@ else ...[
                   value,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _ink, fontSize: 12, fontWeight: FontWeight.w500),
+                  style: const TextStyle(
+                    color: _ink,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],
@@ -588,12 +871,19 @@ else ...[
             padding: const EdgeInsets.all(22),
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 720 ? 3 : (constraints.maxWidth >= 420 ? 2 : 1);
+                final columns = constraints.maxWidth >= 720
+                    ? 3
+                    : (constraints.maxWidth >= 420 ? 2 : 1);
                 final gap = 12.0;
-                final itemWidth = (constraints.maxWidth - gap * (columns - 1)) / columns;
+                final itemWidth =
+                    (constraints.maxWidth - gap * (columns - 1)) / columns;
                 final details = <(IconData, String, String)>[
                   (Icons.menu_book_outlined, 'PROGRAM', _value('program')),
-                  (Icons.groups_outlined, 'YEAR / BLOCK', _latestClassYearBlock ?? _value('yearBlock')),
+                  (
+                    Icons.groups_outlined,
+                    'YEAR / BLOCK',
+                    _latestClassYearBlock ?? _value('yearBlock'),
+                  ),
                   (Icons.event_note_outlined, 'SEMESTER', _value('semester')),
                 ];
                 return Wrap(
@@ -734,7 +1024,10 @@ class _PanelHeader extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: const TextStyle(color: Color(0xFF6F7276), fontSize: 10),
+                  style: const TextStyle(
+                    color: Color(0xFF6F7276),
+                    fontSize: 10,
+                  ),
                 ),
               ],
             ),

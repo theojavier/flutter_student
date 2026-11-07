@@ -558,9 +558,9 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     return Container(
       height: _topBarHeight(desktop),
       padding: EdgeInsets.fromLTRB(
-        desktop ? 35 : 6,
+        desktop ? 35 : (width < 360 ? 4 : 6),
         inset,
-        desktop ? 35 : 12,
+        desktop ? 35 : (width < 360 ? 4 : 12),
         0,
       ),
       decoration: BoxDecoration(
@@ -604,21 +604,25 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const _LogoMark(size: 34, radius: 9),
-                  const SizedBox(width: 9),
-                  const Text(
-                    'FOTS',
-                    style: TextStyle(
-                      color: _kInk,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.6,
+                  if (width > 300) ...[
+                    const SizedBox(width: 9),
+                    const Text(
+                      'FOTS',
+                      style: TextStyle(
+                        color: _kInk,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.6,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '/ STUDENT',
-                    style: _kMono.copyWith(color: _kMuted, fontSize: 10),
-                  ),
+                    if (width >= 360) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        '/ STUDENT',
+                        style: _kMono.copyWith(color: _kMuted, fontSize: 10),
+                      ),
+                    ],
+                  ],
                 ],
               ),
             ),

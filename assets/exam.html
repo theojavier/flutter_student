@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>FOTS — Secure Examination</title>
 
+    <script>
+      window.examGazeCalibrationReady = new Promise((resolve) => {
+        window.resolveExamGazeCalibrationReady = resolve;
+      });
+    </script>
+
     <!-- Firebase + App Initialization FIRST -->
     <script type="module">
       window.isPageReload =
@@ -76,9 +82,145 @@
       }
 
       let authReady = false;
+      let gazeBootstrapStarted = false;
       const functions = getFunctions(app, "asia-southeast1");
       window.functions = functions;
       window.httpsCallable = httpsCallable;
+      const gazeCalibrationVersion = 4;
+
+      function detectGazePlatform() {
+        const queryPlatform = new URLSearchParams(location.search).get("platform");
+        if (queryPlatform === "mobile" || queryPlatform === "pc") return queryPlatform;
+        const ua = navigator.userAgent || "";
+        const platform = navigator.userAgentData?.platform || navigator.platform || "";
+        const mobileDevice =
+          navigator.userAgentData?.mobile === true ||
+          /Android|iPhone|iPad|iPod|IEMobile|Windows Phone/i.test(ua) ||
+          (/MacIntel/i.test(platform) && navigator.maxTouchPoints > 1);
+        if (mobileDevice) return "mobile";
+        const desktopDevice =
+          /Windows NT|Macintosh|X11|CrOS|Linux x86_64/i.test(ua) ||
+          /Win32|Win64|Windows|MacIntel|Linux x86_64/i.test(platform);
+        if (desktopDevice) return "pc";
+        return matchMedia("(pointer: coarse)").matches ? "mobile" : "pc";
+      }
+
+      window.examGazeHost = {
+        getCalibration: async (platform) => {
+          const result = await httpsCallable(functions, "getGazeCalibration")({ platform });
+          return result.data;
+        },
+      };
+
+      function isUsableGazeCalibration(data) {
+        const required = ["ox", "oy", "yaw", "pitch", "roll", "cx", "cy", "scale", "sx", "sy"];
+        return !!data &&
+          data.version === gazeCalibrationVersion &&
+          data.geometryOk === true &&
+          data.modelQuad && typeof data.modelQuad === "object" &&
+          data.modelLin && typeof data.modelLin === "object" &&
+          Array.isArray(data.rows) &&
+          data.rows.length >= 9 &&
+          data.rows.every((row) =>
+            row &&
+            required.every((key) => Number.isFinite(row[key])) &&
+            row.sx >= 0 && row.sx <= 1 &&
+            row.sy >= 0 && row.sy <= 1,
+          );
+      }
+
+      function normalizeCalibration(value) {
+        if (Array.isArray(value)) return value.map(normalizeCalibration);
+        if (!value || typeof value !== "object") return value;
+        return Object.keys(value).sort().reduce((normalized, key) => {
+          normalized[key] = normalizeCalibration(value[key]);
+          return normalized;
+        }, {});
+      }
+
+      function sameCalibration(first, second) {
+        return JSON.stringify(normalizeCalibration(first)) ===
+          JSON.stringify(normalizeCalibration(second));
+      }
+
+      function blockExamForCalibration(message) {
+        window.gazeCalibrationReadyForExam = false;
+        window.gazeCalibrationBlockReason = message;
+        const gateMessage = document.querySelector("#examContentGate p");
+        if (gateMessage) gateMessage.textContent = message;
+        window.resolveExamGazeCalibrationReady({ ready: false, reason: message });
+      }
+
+      async function prepareExamGazeCalibration(user) {
+        const platform = detectGazePlatform();
+        window.examGazePlatform = platform;
+        try {
+          const response = await window.examGazeHost.getCalibration(platform);
+          const record = response?.record || response;
+          const calibrationData =
+            response?.calibrationData ||
+            record?.calibrationData ||
+            response?.calibration ||
+            record?.calibration ||
+            (response?.version ? response : null);
+          const calibrationExists =
+            response?.exists === true ||
+            calibrationData != null;
+          const valid = calibrationExists && isUsableGazeCalibration(calibrationData);
+          let localCalibration = null;
+          try {
+            localCalibration = JSON.parse(localStorage.getItem("gazeCalibrationData") || "null");
+          } catch (error) {
+            console.warn("Ignoring malformed local gaze calibration:", error);
+          }
+
+          const matchesDatabase = valid &&
+            localStorage.getItem("gazeCalibrationPlatform") === platform &&
+            sameCalibration(localCalibration, calibrationData);
+
+          if (valid && !matchesDatabase) {
+            localStorage.setItem(`gazeCalibrationData:${platform}`, JSON.stringify(calibrationData));
+            localStorage.setItem("gazeCalibrationData", JSON.stringify(calibrationData));
+            localStorage.setItem("gazeCalibrationPlatform", platform);
+            localStorage.setItem(
+              "gazeCalibrationLoadedKey",
+              `${platform}:${calibrationData.timestamp || record.calibratedAt || "saved"}`,
+            );
+            sessionStorage.removeItem("gazeOnlineClicks");
+            sessionStorage.removeItem("gazeBias");
+            location.reload();
+            await new Promise(() => {});
+          }
+
+          if (!valid) {
+            localStorage.removeItem("gazeCalibrationData");
+            localStorage.removeItem("gazeCalibrationPlatform");
+            localStorage.removeItem("gazeCalibrationLoadedKey");
+            sessionStorage.removeItem("gazeOnlineClicks");
+            sessionStorage.removeItem("gazeBias");
+            blockExamForCalibration(
+              "No valid calibration is saved for this device. Return to the pre-exam setup and complete calibration.",
+            );
+            return;
+          }
+
+          window.examGazeCalibrationRecord = {
+            ...record,
+            ...response,
+            exists: calibrationExists,
+            calibrationData,
+          };
+          window.gazeCalibrationBlockReason = null;
+          window.gazeCalibrationReadyForExam = true;
+          window.resolveExamGazeCalibrationReady({ ready: true, platform, calibrationData });
+        } catch (error) {
+          console.error("Could not compare gaze calibration with Firestore:", error);
+          blockExamForCalibration(
+            `Could not verify your saved calibration: ${error.message || "Check your connection and return to the pre-exam setup."}`,
+          );
+        }
+      }
+
       const registerStrikeFn = httpsCallable(functions, "registerExamStrike");
       const getStrikeCountFn = httpsCallable(functions, "getExamStrikeCount");
 
@@ -161,7 +303,14 @@
       }
 
       onAuthStateChanged(auth, async (user) => {
-        if (user) {
+        if (user && !gazeBootstrapStarted) {
+          gazeBootstrapStarted = true;
+          try {
+            await prepareExamGazeCalibration(user);
+          } catch (err) {
+            console.error("Exam gaze setup could not complete:", err);
+            return;
+          }
           authReady = true;
           window.authUid = user.uid;
           window.examToken = await getIdToken(user);
@@ -178,6 +327,9 @@
             restoreOrStartExam();
           }
         } else {
+          blockExamForCalibration(
+            "Sign in to verify your saved calibration before starting the exam.",
+          );
           console.log("No user signed in inside iframe");
         }
       });
@@ -1598,6 +1750,190 @@
         }).catch((err) => console.warn("Proctor event failed:", err));
       };
 
+      // ============================================================================
+      // PERIODIC EXAM SNAPSHOTS (4 per hour: 1 at start, 3 randomized per hour)
+      // ============================================================================
+      const SNAPSHOTS_PER_HOUR = 4;
+      window.examSnapshotsSchedule = null;
+      window.snapshotsTaken = 0;
+      window.totalSnapshotsExpected = 0;
+
+      // Small seeded random generator so the schedule is the SAME after a page reload.
+      function hashSeed(str) {
+        let h = 2166136261;
+        for (let i = 0; i < str.length; i++) {
+          h ^= str.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
+      }
+
+      function mulberry32(a) {
+        return () => {
+          a |= 0;
+          a = (a + 0x6d2b79f5) | 0;
+          let t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      async function captureExamSnapshot(snapshotNumber) {
+        if (window.examFinished || window.submitting || window.hasSubmitted) return;
+        // Slot #1 is taken right after the gate opens; the rest only once the exam started.
+        if (snapshotNumber > 1 && !window.examStarted) return;
+
+        const examId = window.examData?.examId;
+        if (!examId || !window.authUid) return;
+
+        console.log(
+          `[snapshot ${snapshotNumber}/${window.totalSnapshotsExpected}] Capturing...`,
+        );
+
+        // Capture whatever is available: camera and/or screen. One failing must not lose the other.
+        const blobs = {};
+        try {
+          const cameraBlob = await stillFromVideo(
+            document.getElementById("input_video"),
+            640,
+            0.7,
+          );
+          if (cameraBlob) blobs.camera = cameraBlob;
+        } catch (err) {
+          console.warn(`[snapshot ${snapshotNumber}] camera capture failed:`, err);
+        }
+
+        if (isPcExam() && window.cheatCaptureStream?.active) {
+          try {
+            const screenBlob = await withTimeout(
+              stillFromStream(window.cheatCaptureStream),
+              2000,
+            );
+            if (screenBlob) blobs.screen = screenBlob;
+          } catch (err) {
+            console.warn(`[snapshot ${snapshotNumber}] screen capture failed:`, err);
+          }
+        }
+
+        if (!Object.keys(blobs).length) {
+          console.warn(`[snapshot ${snapshotNumber}] nothing captured, skipping`);
+          return;
+        }
+
+        const parts = {};
+        for (const kind of Object.keys(blobs)) parts[kind] = "image/jpeg";
+
+        const occurredAt = Date.now();
+        const requestFn = httpsCallable(functions, "getExamSnapshotUploadUrl");
+
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          if (window.examFinished || window.submitting) return;
+
+          try {
+            // 1) get signed URLs
+            const { data } = await requestFn({
+              examId,
+              snapshotNumber,
+              occurredAt,
+              parts,
+            });
+
+            // 2) upload each image
+            await Promise.all(
+              Object.entries(blobs).map(async ([kind, blob]) => {
+                const upload = data.uploads?.[kind];
+                if (!upload?.uploadUrl) {
+                  throw new Error(`No upload URL returned for ${kind}`);
+                }
+                if (blob.size > upload.maxBytes) {
+                  throw new Error(`${kind} snapshot is too large (${blob.size} bytes)`);
+                }
+
+                const res = await fetch(upload.uploadUrl, {
+                  method: "PUT",
+                  headers: {
+                    "Content-Type": upload.contentType,
+                    "x-goog-content-length-range": `0,${upload.maxBytes}`,
+                  },
+                  body: blob,
+                });
+
+                if (!res.ok) throw new Error(`${kind} upload failed: ${res.status}`);
+              }),
+            );
+
+            // 3) tell the server the files are there
+            await requestFn({ examId, snapshotNumber, finalize: true });
+
+            window.snapshotsTaken++;
+            console.log(
+              `[snapshot ${snapshotNumber}] done (${window.snapshotsTaken}/${window.totalSnapshotsExpected})`,
+            );
+            return;
+          } catch (err) {
+            console.error(`[snapshot ${snapshotNumber}] attempt ${attempt} failed:`, err);
+            // No point retrying these
+            if (
+              [
+                "functions/already-exists",
+                "functions/permission-denied",
+                "functions/invalid-argument",
+              ].includes(err.code)
+            ) {
+              return;
+            }
+            if (attempt < 2) await new Promise((r) => setTimeout(r, 2000));
+          }
+        }
+      }
+
+      window.captureExamSnapshot = captureExamSnapshot; // REQUIRED: openExamFromGate() is in a classic <script>
+
+      function scheduleExamSnapshots(examId, startTime, endTime) {
+        if (window.examSnapshotsSchedule) return;
+
+        const durationMs = endTime - startTime;
+        if (!(durationMs > 0)) return;
+
+        // 4 per hour over the WHOLE exam. #1 is taken at exam start; #2..total are randomized.
+        const total = Math.max(
+          1,
+          Math.ceil((durationMs / 3600000) * SNAPSHOTS_PER_HOUR),
+        );
+        window.totalSnapshotsExpected = total;
+
+        // Same examId + student = same schedule after every reload.
+        const rand = mulberry32(hashSeed(`${examId}:${window.authUid}`));
+
+        const randomSlots = total - 1;
+        const timers = [];
+
+        if (randomSlots > 0) {
+          const windowSize = durationMs / randomSlots;
+          const margin = windowSize * 0.1;
+
+          for (let i = 0; i < randomSlots; i++) {
+            const at =
+              startTime + windowSize * i + margin + rand() * (windowSize - 2 * margin);
+            const delay = at - Date.now();
+            if (delay <= 0) continue; // already passed (reload or late join)
+            timers.push(setTimeout(() => captureExamSnapshot(i + 2), delay));
+          }
+        }
+
+        window.examSnapshotsSchedule = timers;
+        console.log(
+          `[snapshots] total ${total}, ${timers.length} still scheduled for this session`,
+        );
+      }
+
+      function cancelExamSnapshots() {
+        if (window.examSnapshotsSchedule) {
+          window.examSnapshotsSchedule.forEach((timer) => clearTimeout(timer));
+          window.examSnapshotsSchedule = null;
+        }
+      }
+
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
         const blocked = () =>
@@ -1816,8 +2152,10 @@
       function handleSuccessfulSubmission(examId, result) {
         window.stopRings?.();
         clearExamStorage();
+        cancelExamSnapshots(); // Cancel any pending snapshots
 
         window.examFinished = true;
+        
         window.questions = [];
         window.answers = {};
         window.examData = null;
@@ -1846,7 +2184,7 @@
         window.disposeExamTracking?.();
 
         // Notify parent window or redirect
-        console.log("📤 Sending finishExam message to parent window");
+        console.log("Sending finishExam message to parent window");
 
         // Send message immediately AND after a short delay to ensure Flutter receives it
         const message = {
@@ -1856,21 +2194,21 @@
 
         if (window.parent && window.parent !== window) {
           window.sendToHost(message);
-          console.log("📤 First message sent");
+          console.log("First message sent");
 
           // Send again after 100ms to ensure Flutter listener is ready
           setTimeout(() => {
             window.sendToHost(message);
-            console.log("📤 Retry message sent");
+            console.log("Retry message sent");
           }, 100);
 
           // Send again after 500ms as final backup
           setTimeout(() => {
             window.sendToHost(message);
-            console.log("📤 Final backup message sent");
+            console.log("Final backup message sent");
           }, 500);
         } else {
-          console.error("⚠️ No parent window found");
+          console.error(" No parent window found");
           clearExamStorage();
 
           window.examFinished = true;
@@ -1914,6 +2252,15 @@
           return;
         }
 
+        const now = Date.now();
+        const totalExamDurationMs = endTime - startTime;
+        const remainingMs = Math.max(endTime - now, 0);
+        
+        // Schedule snapshots with deterministic timing (same schedule on reload)
+        if (remainingMs > 60000) { // Only if more than 1 minute left
+          scheduleExamSnapshots(examId, startTime, endTime);
+        }
+
         window.__countdownTimer = setInterval(() => {
           const durationMs = endTime - startTime;
           const elapsedMs = Date.now() - startTime;
@@ -1924,6 +2271,7 @@
             countdownEl.textContent = "Time's up!";
             window.examFinished = true; // prevent late strikes
             window.allowStrikes = false; // prevent late strikes
+            cancelExamSnapshots(); // Cancel any pending snapshots
             clearExamStorage();
 
             window.markIncompleteIfNeeded2cloudfunction();
@@ -4394,6 +4742,7 @@
           grid-template-columns: minmax(0, 1fr);
         }
       }
+
     </style>
   </head>
 
@@ -4491,7 +4840,7 @@
           </div>
           <div class="status-row">
             <div id="faceStatus" class="face-status bad">
-              <span id="faceIcon" aria-hidden="true">⛔</span>
+              <span id="faceIcon" aria-hidden="true">X</span>
               <div>
                 <div class="verified-line" id="faceText">Face not verified</div>
                 <div class="status-description">
@@ -4662,11 +5011,12 @@
     <div
       id="gazeBubble"
       class="gaze-bubble"
-      style="left: 50%; top: 50%; display: block"
+       style="left: 50%; top: 50%; display: block"
     ></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="gaze-core.js"></script>
 
     <script>
       // Bridge function for cross-platform communication
@@ -4719,6 +5069,7 @@
         locateFile: (file) =>
           `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
       });
+      const faceInputCropper = GazeCore.createFaceInputCropper();
       faceMesh.setOptions({
         maxNumFaces: 1,
         refineLandmarks: true,
@@ -4795,7 +5146,7 @@
       let bubbleR = 30,
         targetR = 30;
       let lastBubbleT = performance.now();
-      const BUBBLE_TAU_MS = 200; // raise to 150 if still jumpy
+      const BUBBLE_TAU_MS = 200;
       const SENSITIVITY = 10.4;
 
       function showCameraUnavailable() {
@@ -4806,7 +5157,6 @@
         faceIcon.textContent = "⚠";
       }
     </script>
-    <script src="gaze-core.js"></script>
     <script src="yolo-eye.js"></script>
     <script src="exam-gaze-block.js"></script>
     <script src="gaze-metrics.js"></script>
@@ -4816,6 +5166,8 @@
         "Please look at the recording icon to start your exam.";
       let gateTimer = null;
       let gateDeadline = 0;
+      let gateOpening = false;
+      window.gazeCalibrationReadyForExam = false;
 
       const MIN_FIT = 0.75;
       let sharedFit = 1;
@@ -4903,13 +5255,35 @@
         );
       }
 
-      function openExamFromGate() {
+      async function openExamFromGate() {
+        if (
+          gateOpening ||
+          window.examStarted ||
+          !window.gazeCalibrationReadyForExam
+        ) return;
+        gateOpening = true;
         if (gateTimer !== null) {
           clearInterval(gateTimer);
           gateTimer = null;
         }
-        if (window.examStarted) return;
+        try {
+          await window.gazeLearningReady;
+        } catch (err) {
+          console.warn("Could not restore saved gate gaze samples:", err);
+        }
+        if (
+          window.examStarted ||
+          !window.gazeCalibrationReadyForExam ||
+          !verified ||
+          gateDeadline === 0
+        ) {
+          window.resetExamGateLearning?.();
+          gateOpening = false;
+          return;
+        }
 
+        const gateLearningPromise = window.learnFromRecordingIconGate?.();
+        gateOpening = false;
         window.examStarted = true;
         window.allowStrikes = true;
         sessionStorage.setItem("examStarted", "1");
@@ -4918,11 +5292,31 @@
         window.startRings?.();
         window.fitExamContent();
         console.log("Face verified for 5s → starting exam…");
+        Promise.resolve(gateLearningPromise)
+          .then((result) => {
+            console.log(
+              "Recording-icon gate learning:",
+              result || "unavailable",
+            );
+          })
+          .catch((err) => {
+            console.error("Recording-icon gate learning failed:", err);
+          });
+
+        // Capture first snapshot immediately after exam starts
+        setTimeout(() => {
+          captureExamSnapshot(1);
+        }, 2000); // 2 second delay to ensure camera is stable
       }
 
       function startGateCountdown() {
-        if (gateTimer !== null || window.examStarted) return;
+        if (
+          gateTimer !== null ||
+          window.examStarted ||
+          !window.gazeCalibrationReadyForExam
+        ) return;
 
+        window.beginExamGateLearning?.();
         gateDeadline = Date.now() + GATE_DELAY_MS;
         const message = document.querySelector("#examContentGate p");
         const renderCountdown = () => {
@@ -4946,10 +5340,10 @@
       }
 
       function cancelGateCountdown() {
-        if (gateTimer === null) return;
-        clearInterval(gateTimer);
+        if (gateTimer !== null) clearInterval(gateTimer);
         gateTimer = null;
         gateDeadline = 0;
+        window.resetExamGateLearning?.();
         const message = document.querySelector("#examContentGate p");
         if (message) message.textContent = GATE_DEFAULT_TEXT;
       }
@@ -4970,11 +5364,26 @@
             faceIcon.textContent = "⚠";
           }
         }
-        faceText.textContent =
+        const nextText =
           reason || (verified ? "Face verified" : "Face not verified");
+        if (faceText.textContent !== nextText) {
+          faceText.textContent = nextText;
+        }
+        if (!window.gazeCalibrationReadyForExam && window.gazeCalibrationBlockReason) {
+          cancelGateCountdown();
+          if (faceText.textContent !== window.gazeCalibrationBlockReason) {
+            faceText.textContent = window.gazeCalibrationBlockReason;
+          }
+          return;
+        }
         if (!window.examStarted) {
-          if (verified) {
+          if (verified && window.gazeCalibrationReadyForExam) {
             startGateCountdown();
+          } else if (verified) {
+            cancelGateCountdown();
+            if (faceText.textContent !== "Loading your saved gaze calibration…") {
+              faceText.textContent = "Loading your saved gaze calibration…";
+            }
           } else {
             cancelGateCountdown();
           }
@@ -4982,6 +5391,7 @@
       }
 
       function updateBubble() {
+        if (window.gazeBlinkHolding) return;
         // Time-based smoothing: extra calls harmless, framerate-independent
         const now = performance.now();
         const dt = Math.min(now - lastBubbleT, 100);
@@ -5009,6 +5419,8 @@
       // Initialize camera AFTER YOLO is ready (critical for gaze tracking to work!)
       (async () => {
         try {
+          await window.examGazeCalibrationReady;
+          if (trackingDisposed) return;
           console.log("Waiting for YOLO eye model to initialize...");
           // Wait for YOLO to initialize first - THIS IS CRITICAL!
           await YoloEye.init();
@@ -5021,7 +5433,9 @@
           camera = new Camera(videoElement, {
             onFrame: async () => {
               if (trackingDisposed || window.submitting) return;
-              await faceMesh.send({ image: videoElement });
+              await faceMesh.send({
+                image: faceInputCropper.prepare(videoElement),
+              });
             },
             facingMode: "user",
             // CRITICAL: Match calibration camera size! Different resolution = wrong field of view = compressed edges
@@ -5029,7 +5443,9 @@
             height: calData?.camera?.h || 1080,
           });
           window.camera = camera; // expose so handleSuccessfulSubmission can stop it
-          faceMesh.onResults(onResults);
+          faceMesh.onResults((results) =>
+            onResults(faceInputCropper.mapResults(results)),
+          );
           await camera.start();
           if (trackingDisposed) {
             camera.stop();
