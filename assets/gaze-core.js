@@ -1,7 +1,5 @@
 // gaze-core.js — shared by gaze-calibration.html and exam.html
 // Load it BEFORE each page's own script:  <script src="gaze-core.js"></script>
-//
-// Idea: screen position = f(eye-in-head) + g(head pose / head position).
 // The old code only learned f and then added a hand-tuned head term. Here BOTH
 // parts are learned from data, so the head term is correct by construction.
 
@@ -17,10 +15,9 @@ const GazeCore = (() => {
   const HEAD_CLAMP = 3; // std-devs; stops wild extrapolation on extreme poses
   // Minimum "typical spread" per head feature (yaw,pitch,roll rad; cx,cy,scale frame fractions).
   // Without head-move data the calibration rows barely vary in these, and dividing by a tiny
-  // std-dev would amplify noise. With the floor the head terms stay ~0 until real data arrives.
   const HEAD_SD_FLOOR = [0.1, 0.1, 0.1, 0.05, 0.05, 0.03];
 
-  // ---------- small vector helpers ----------
+
   const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
   const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
   const cross = (a, b) => [
@@ -37,7 +34,7 @@ const GazeCore = (() => {
     return s[s.length >> 1];
   };
 
-  // ---------- features ----------
+
   // Iris offset from the eye-corner midpoint, in IMAGE axes, as a fraction of eye width.
   // (Image axes, not eye-corner axes: when the head rolls, the eyeball keeps pointing at
   // the same screen spot, so the image-frame offset stays put. The old eye-axis
@@ -62,7 +59,7 @@ const GazeCore = (() => {
     };
   }
 
-  // 3D head orientation from cheeks (234,454) + forehead/chin (10,152), plus
+  // 3D head orientation from cheeks  + forehead/chin , plus
   // where the face sits in the frame (cx, cy) and how big it is (scale ~ distance).
   function headFeatures(lm, W, H) {
     const P = (i) => [lm[i].x * W, lm[i].y * H, lm[i].z * W];
@@ -93,7 +90,6 @@ const GazeCore = (() => {
   // Gaze direction = eye-in-head angle + head angle. Turning the head by θ makes the eyes
   // counter-rotate to keep a fixation, shifting the iris by about (eyeball radius / eye width)·θ
   // ≈ 12mm / 30mm ≈ 0.4 eye-widths per radian. Subtracting that gives an iris offset that
-  // describes where the eyes point in the CAMERA frame, whatever the head is doing.
   // Rough constant: if the bubble still moves when you turn your head while fixating a dot,
   // raise/lower it (and recalibrate — calibration and exam must use the same value).
   const EYE_PER_RAD = 0.4;
@@ -252,7 +248,6 @@ const GazeCore = (() => {
     return fn;
   }
 
-  // ---------- model: quadratic (or linear) in the eye, linear in the head ----------
   const nEyeTerms = (quad) => (quad ? 6 : 3);
   function feats(s, quad, rng) {
     const head = HEAD_KEYS.map((k) => s[k]);
@@ -296,7 +291,6 @@ const GazeCore = (() => {
     return x;
   }
 
-  // rows: [{ox,oy,yaw,pitch,roll,cx,cy,scale, sx,sy (target in 0..1), spot}]
   function fit(rows, quad) {
     const F = rows.map((r) => feats(r, quad));
     const wts = rows.map((r) => r.w ?? 1); // optional per-row weight
@@ -363,7 +357,6 @@ const GazeCore = (() => {
     };
   }
 
-  // ---------- validation helpers ----------
   const pxErr = (r, m) => {
     const p = predict(m, r);
     return Math.hypot((p.x - r.sx) * innerWidth, (p.y - r.sy) * innerHeight);
@@ -402,7 +395,7 @@ const GazeCore = (() => {
     }
   }
 
-  // ---------- online learning from clicks ----------
+  //online learning from clicks
   const range = (a) => Math.max(...a) - Math.min(...a);
   const snapshot = (f) => {
     const o = {};

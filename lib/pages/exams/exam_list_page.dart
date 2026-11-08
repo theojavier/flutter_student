@@ -18,9 +18,9 @@ class ExamListPage extends StatefulWidget {
   State<ExamListPage> createState() => _ExamListPageState();
 }
 
-// ============================================================
+
 // HELPERS
-// ============================================================
+
 
 String _text(dynamic v, [String fallback = '']) {
   final s = (v ?? '').toString().trim();
@@ -36,9 +36,9 @@ class _ExamEntry {
   bool get taken => status != null;
 }
 
-// ============================================================
+
 // PAGE
-// ============================================================
+
 
 class _ExamListPageState extends State<ExamListPage> {
   // FOTS editorial palette (green) — same as ClassExamPage
@@ -220,9 +220,9 @@ class _ExamListPageState extends State<ExamListPage> {
     return _takenExamIdsFuture!;
   }
 
-  // ============================================================
+  
   // STYLES
-  // ============================================================
+  
 
   TextStyle _monoStyle(double size, {Color color = _muted2}) => TextStyle(
     fontFamily: _mono,
@@ -248,9 +248,9 @@ class _ExamListPageState extends State<ExamListPage> {
         border: Border.all(color: _line),
       );
 
-  // ============================================================
+  
   // BUILD
-  // ============================================================
+  
 
   @override
   Widget build(BuildContext context) {
@@ -316,9 +316,9 @@ class _ExamListPageState extends State<ExamListPage> {
     );
   }
 
-  // ============================================================
+  
   // PAGE HEAD
-  // ============================================================
+  
 
   Widget _pageHead() {
     return Column(
@@ -336,9 +336,9 @@ class _ExamListPageState extends State<ExamListPage> {
     );
   }
 
-  // ============================================================
+  
   // EXAMS
-  // ============================================================
+  
 
   Widget _examsSection() {
     return StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
@@ -688,9 +688,9 @@ class _ExamListPageState extends State<ExamListPage> {
     child: child,
   );
 
-  // ============================================================
+  
   // EMPTY / ERROR STATE
-  // ============================================================
+  
 
   Widget _stateBox(IconData icon, String title, String message) {
     return Padding(

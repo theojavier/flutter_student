@@ -1,5 +1,5 @@
 // yolo-eye.js — YOLO eyelid/iris keypoints (LiteRT .tflite) for the gaze pipeline.
-// Load order:  gaze-core.js  ->  yolo-eye.js  ->  gaze-calibration.js / exam-gaze-block.js
+// Load order:  gaze-core.js  -  yolo-eye.js  -  gaze-calibration.js / exam-gaze-block.js
 //
 // MediaPipe finds the face, eye corners and head pose (GazeCore.extract).
 //
@@ -11,17 +11,13 @@
 //     to MediaPipe as a slowly-corrected bias. YOLO's own corner / eyelid keypoints are NOT used
 //     for the offset any more, so their noise no longer reaches the features.
 //
-// Other modes:
-//   fuse:false, ref:"mp"    -> YOLO iris vs MediaPipe corners, updated only when YOLO finishes
-//   fuse:false, ref:"yolo"  -> the old behaviour (YOLO iris vs YOLO corners / lid centre)
-//
-// Calibration and exam MUST use the same mode. Features changed -> recalibrate (GazeCore.VERSION 5).
+// Calibration and exam MUST use the same mode. Features changed recalibrate
 //
 //   await YoloEye.init();
-//   const raw = await YoloEye.extract(lm, W, H, videoEl);   // null = no usable result yet. In fusion
-//                                                           // mode this returns instantly (not a promise).
+//   const raw = await YoloEye.extract(lm, W, H, videoEl);   
+//                                                          
 //   const smooth = YoloEye.makeSmoother(250);
-//   const s = smooth(raw, performance.now());               // s.ox/s.oy are already head + distance corrected
+//   const s = smooth(raw, performance.now());               
 
 const YoloEye = (() => {
   const DEBUG = false; // Enables model logs and keypoint/box overlays only when debugging.
@@ -31,18 +27,17 @@ const YoloEye = (() => {
     accelerators: ["webgpu", "wasm"], // tried in order; wasm (CPU) is the fallback if WebGPU is missing
     litertBase: "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3",
     refine: false, // DISABLED: 2nd pass is slow, skip it
-    tta: 1, // DISABLED: test-time averaging is slow, 1 = off
+    tta: 1, 
     distanceComp: true, // scale the offset by (SCALE_REF / face scale)
     blinkEar: 0.14, // MediaPipe eye-aspect-ratio below this = eye closed
     disagree: 0.10, // (non-fusion modes) ox difference above this: pick best eye instead of averaging
-    minCut: 0.5, // 1-Euro min cutoff on the eye offset (lower = steadier when still)
-    beta: 4, // 1-Euro speed coefficient (features are in eye-widths, so this needs to be SMALL; try 1)
+    minCut: 0.5, // min cutoff on the eye offset (lower = steadier when still)
+    beta: 4, // speed coefficient (features are in eye-widths, so this needs to be SMALL; try 1)
     headCompDelay: 300, // ms: legacy default; new calibration settings are saved with the model
     boxSmoothing: 0.85, // smoothing of the crop box position
     gpuRetries: 0, // 0 = go straight to CPU after GPU reset
     inferenceIntervalMs: 100, // YOLO correction rate; MediaPipe still processes every camera frame.
 
-    // ---- LOCKED CROP BOX ----
     // The crop is cut from the MediaPipe eye corners. It used to follow them every frame, so the same eye was cut
     // out slightly differently each time and the YOLO keypoints moved with it. Now the box stays put and only
     // moves when the eye really moved. Distances are in eye-widths.
@@ -52,12 +47,12 @@ const YoloEye = (() => {
     boxRecenter: 0.12, // ...or YOLO's own corners say the eye sits this far off-centre in the box
     boxMissMax: 3, // YOLO found nothing this many frames in a row: drop the box and re-find the eye
 
-    // ---- FUSION ----
+    // FUSION
     fuse: true, // MediaPipe iris every frame + slow YOLO bias correction
     ref: "mp", // used when fuse is false: "mp" = MediaPipe corners, "yolo" = YOLO corners/lid centre
     fuseTau: 500, // ms: how fast YOLO corrects MediaPipe's bias (higher = slower, steadier correction)
     fuseGate: 0.12, // eye-widths: YOLO samples further than this from the running bias are rejected
-    fuseMinQ: 0.25, // skip bias updates when YOLO eye quality is below this
+    fuseMinQ: 0.25, // samples below this quality are rejected (score * keypoint confidence * EAR)
     fuseMinEar: 0.16, // skip bias updates when the lid partly covers the iris (both sources unreliable)
     fuseSkipFirst: 3, // ignore initial YOLO results while the GPU and exposure settle
     fuseSeedN: 5, // seed the bias from the median of this many samples
@@ -67,7 +62,7 @@ const YoloEye = (() => {
 
   const NK = 13, CONF = 0.05, KCONF = 0.30, DISAGREE = 0.10;
   const VARS = [[0.025, -0.02, 1.03], [-0.025, 0.02, 0.97]]; // extra crops: shift (x, y in eye-widths) and zoom
-  const IRIS_Y_NO_TB = false; // OPTIMIZED: Use all iris points including top/bottom for better Y-axis accuracy
+  const IRIS_Y_NO_TB = false; //Use all iris points including top/bottom for better Y-axis accuracy
   const FLIP = { L: false, R: true };
   const EYES = { L: [33, 133, 159, 145], R: [362, 263, 386, 374] }; // [corner a, corner b, lid up, lid low]
   const IRIS = { L: 468, R: 473 }; // MediaPipe iris centres (refineLandmarks: true)
@@ -81,7 +76,7 @@ const YoloEye = (() => {
   let S = 128, J = null, eyeModel = null, LTensor = null, NHWC = false, V = null;
   let lastScore = 0, why = "", initPromise = null, error = null, info = "", usedAccel = "", lastGaze = null;
 
-  // ---- metrics (read by gaze-metrics.js) ----
+  // (read by gaze-metrics.js) 
   const stats = { runs: 0, ok: 0, miss: 0, err: 0, recent: [], eye: { L: { tried: 0, found: 0, closed: 0, miss: 0 }, R: { tried: 0, found: 0, closed: 0, miss: 0 } } };
   let lastGazeAt = 0; // performance.now() when the last YOLO run finished
   let lastRunMs = 0;
@@ -126,7 +121,7 @@ const YoloEye = (() => {
 
   const shapeOf = (d) => (d && d.shape ? Array.from(d.shape) : null);
 
-  // ---------- model loading ----------
+  // model loading
   async function getLiteRt() {
     if (!litert) {
       const m = await import(cfg.litertBase + "/+esm");
@@ -277,7 +272,7 @@ const YoloEye = (() => {
     }
   }
 
-  // ---------- crop + inference ----------
+  //crop + inference
   function eyeM(A, B, flip) {
     const cx = (A.x + B.x) / 2, cy = (A.y + B.y) / 2, w = Math.hypot(B.x - A.x, B.y - A.y), ang = Math.atan2(B.y - A.y, B.x - A.x);
     const s = S / (w * J.K), c = Math.cos(-ang), n = Math.sin(-ang), f = flip ? -1 : 1;
@@ -398,7 +393,7 @@ const YoloEye = (() => {
     return r.score * kc * clamp((r.ear - cfg.blinkEar) / 0.10, 0, 1);
   }
 
-  // ---------- FUSION helpers ----------
+  // FUSION helpers
   // MediaPipe eye-aspect-ratio for one eye (lid opening / eye width)
   const earOf = (lab, lm, W, H) => {
     const [a, b, u, l] = EYES[lab];
@@ -579,14 +574,12 @@ const YoloEye = (() => {
     return { ox: avg("ox"), oy: avg("oy"), eyePx: avg("eyePx"), per, note };
   }
 
-  // ---------- public: one frame -> raw features ----------
   // Same shape as GazeCore.extract (ear, yaw, pitch, roll, cx, cy, scale) except:
-  //  - ox / oy are the EYE-ONLY iris offsets (head compensation happens in the smoother)
-  //  - eyePx is the eye width in camera pixels (used to smooth small/far eyes harder)
-  //  - null = no usable result yet
+  // ox / oy are the EYE-ONLY iris offsets (head compensation happens in the smoother)
+  // eyePx is the eye width in camera pixels (used to smooth small/far eyes harder)
+  // null = no usable result yet
   let lastResult = null;
 
-  // fusion mode: synchronous. YOLO is kicked off in the background and only updates the bias.
   function extractFused(lm, W, H, video) {
     if (disposed) return null;
     const h = GazeCore.extract(lm, W, H);
@@ -599,7 +592,7 @@ const YoloEye = (() => {
     hPrev = { t: tN, yaw: h.yaw, pitch: h.pitch };
     runMaxSpeed = Math.max(runMaxSpeed, headSpeed);
     
-    // OPTIMIZED: Use exam-defined interval if available, otherwise use config default
+    //Use exam-defined interval if available, otherwise use config default
     const inferenceIntervalMs = typeof EXAM_INFERENCE_INTERVAL_MS !== 'undefined' 
       ? EXAM_INFERENCE_INTERVAL_MS 
       : cfg.inferenceIntervalMs;
@@ -690,8 +683,8 @@ const YoloEye = (() => {
     runMaxSpeed = 0;
   }
 
-  // ---------- smoothing (drop-in for GazeCore.makeSmoother) ----------
-  // 1 Euro filter: heavy smoothing while the eye is still (kills jitter), light while it moves (no lag)
+  // smoothing (drop-in for GazeCore.makeSmoother)
+  // heavy smoothing while the eye is still (kills jitter), light while it moves (no lag)
   class OneEuro {
     constructor() { this.x = null; this.dx = 0; this.t = 0; }
     static a(c, dt) { return 1 / (1 + 1 / (2 * Math.PI * c) / dt); }
@@ -732,7 +725,7 @@ const YoloEye = (() => {
       const a = 1 - Math.exp(-(now - s.t) / tauMs);
       s.t = now;
       HEAD.forEach((k) => (s[k] += (r[k] - s[k]) * a)); // head features: plain smoothing
-      const mc = cfg.minCut * clamp((raw.eyePx || REF_EYE_PX) / REF_EYE_PX, 0.4, 1); // small/far eyes -> steadier
+      const mc = cfg.minCut * clamp((raw.eyePx || REF_EYE_PX) / REF_EYE_PX, 0.4, 1); // small/far eyes - steadier
       const eox = euro.ox.f(r.ox, now, mc, cfg.beta), eoy = euro.oy.f(r.oy, now, mc, cfg.beta);
       // cheek-to-cheek width shrinks by cos(yaw) when the head turns: undo that so a head turn isn't read as "farther away"
       const scaleEff = s.scale / Math.max(Math.cos(s.yaw), 0.6);
@@ -751,7 +744,7 @@ const YoloEye = (() => {
     return fn;
   }
 
-  // ---------- helpers ----------
+  // helpers
   // Settings that change what the features MEAN. Saved with the calibration and re-applied by the exam.
   const exportCfg = () => ({
     refine: cfg.refine,
@@ -783,9 +776,9 @@ const YoloEye = (() => {
 
   // RED debug overlay: the model's eye box (solid) + its keypoints, per eye.
   // o: { sx, sy, ox, oy }  canvas px = camera px * s + o   (set these from the video's object-fit)
-  //    mirrored: true when the canvas is CSS-flipped (scaleX(-1)) so the label text is flipped back
-  //    maxAgeMs: hide when the last YOLO result is older than this (so it disappears while the eye is closed)
-  //    showCrop: also draw the dashed square that is fed to the model
+  // mirrored: true when the canvas is CSS-flipped (scaleX(-1)) so the label text is flipped back
+  // maxAgeMs: hide when the last YOLO result is older than this (so it disappears while the eye is closed)
+  // showCrop: also draw the dashed square that is fed to the model
   function drawYolo(ctx, g = lastGaze, o = {}) {
     const { sx = 1, sy = 1, ox = 0, oy = 0, mirrored = false, maxAgeMs = 400, showCrop = false, color = "#ff1a1a" } = o;
     if (!g || !g.per || !lastGazeAt || performance.now() - lastGazeAt > maxAgeMs) return;
@@ -1013,7 +1006,7 @@ const YoloEye = (() => {
     get stats() { return stats; },
     get lastGazeAt() { return lastGazeAt; },
     get ready() { return !!eyeModel; },
-    isReady() { return !!eyeModel; }, // alias
+    isReady() { return !!eyeModel; }, 
     isBusy() { return busy; }, // YOLO is processing a frame (in fusion mode this does NOT block features)
     get error() { return error; },
     get info() { return info; },

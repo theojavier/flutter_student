@@ -2,10 +2,10 @@
 // additional gaze labels and are kept only for the current exam session.
 //
 // Camera / face protection added here:
-//   1. Face lost for FACE_LOST_MS             -> strike
-//   2. Camera stalled / ended / muted         -> strike (watchdog + track events)
-//   3. Eyes closed / low EAR for BLINK_MAX_MS -> treated as looking away (no more free pass)
-//   4. More than one face in frame            -> strike
+//   1. Face lost for FACE_LOST_MS             - strike
+//   2. Camera stalled / ended / muted         - strike (watchdog + track events)
+//   3. Eyes closed / low EAR for BLINK_MAX_MS - treated as looking away (no more free pass)
+//   4. More than one face in frame            - strike
 
 // FaceMesh drawing utilities
 const FACEMESH_TESSELATION = [
@@ -144,9 +144,9 @@ function drawFaceMesh(ctx, landmarks, width, height) {
 
 const BLINK_EAR = 0.11; // Match YoloEye.cfg.blinkEar to prevent freeze-then-jump
 const AWAY_MS = 700; // must be outside the safe zone this long before a strike
-const HEAD_LIMIT_RAD = 0.7; // ≈40° from the calibrated pose = "away" no matter where the eyes point
+const HEAD_LIMIT_RAD = 0.7; 
 
-const BLINK_MAX_MS = 1500; // a real blink is ~100-400 ms; longer = eyes closed / looking down
+const BLINK_MAX_MS = 1500; 
 const BLINK_REL = 0.70;
 const BLINK_WIN_MS = 1500;
 const BLINK_SETTLE_MS = 120;
@@ -160,13 +160,19 @@ window.gazeBlinkHolding = false;
 const FACE_LOST_MS = 1500; // tolerate brief tracking drops before striking
 const FACE_LOSS_SUBMIT_MS = 5000;
 const MULTI_FACE_MS = 1500; // second face must persist this long before a strike
+const PRE_GATE_MISSING_VISION_GRACE_MS = 5000;
 const CAMERA_STALL_MS = 3000; // no FaceMesh results for this long = camera stopped/blocked
 const STALL_STRIKE_INTERVAL_MS = 5000; // at most one camera-loss strike per interval
 const WATCHDOG_INTERVAL_MS = 1000;
+let preGateFaceMissingSince = 0;
+let preGateEyesMissingSince = 0;
+let preGateFaceStrikeIssued = false;
+let preGateEyesStrikeIssued = false;
+window.examVisionModelsReady = false;
 
-// Allow a second face to be reported so it can be detected (exam.html sets 1).
+
 const FACE_MIN_CONF = 0.55; // MediaPipe only return
-// s a face whose confidence is at or above this
+
 faceMesh.setOptions({
   maxNumFaces: 2,
   refineLandmarks: true,
@@ -203,20 +209,17 @@ let model = calData ? (calData.best === "lin" ? calData.modelLin : calData.model
 const baseModel = model;
 const headBase = calData?.headBase || { yaw: 0, pitch: 0, roll: 0 };
 
-// Use the SAME eye-feature settings (refine / crop averaging / distance compensation) the calibration used.
+
 YoloEye.applyCfg(calData?.yoloCfg);
 
-// EXAM-ONLY overrides for smoother tracking (not saved to exportCfg, calibration keeps its own)
+
 YoloEye.cfg.minCut = 0.8;       // lower cutoff adds steadiness while the eyes are still
 YoloEye.cfg.beta = 4;            // was 6 - less aggressive opening on movement
 YoloEye.cfg.boxSmoothing = 0.6;  // was 0.85 - eye crop follows movement faster
 YoloEye.cfg.blinkEar = 0.11;     // was 0.14 - fixes bottom gaze (looking down drops EAR)
 YoloEye.cfg.disagree = 0.2;      // was 0.10 - average both eyes more often (less switching)
 
-// MUST be the YOLO smoother (frame averaging + 1-Euro on the eye offset, then head + distance correction).
-// GazeCore.makeSmoother does none of that, so the exam would feed the model different features
-// than the ones it was calibrated on and the bubble ends up stuck at an edge.
-// Use a shorter exam-only smoothing window to keep gaze responsive.
+
 const examSmoothTauMs = Math.max(
   Number.isFinite(calData?.smoothTauMs) ? calData.smoothTauMs : 250,
   450,
@@ -224,8 +227,8 @@ const examSmoothTauMs = Math.max(
 const smoothGaze = YoloEye.makeSmoother(examSmoothTauMs, 3);
 const yoloReady = () => (typeof YoloEye.isReady === "function" ? YoloEye.isReady() : !!YoloEye.ready);
 let yoloBusy = false; // the YOLO step is slower than a camera frame: don't let frames pile up
-// ---------------------------------------------------------------------------- PART 1
-const HEAD_GAIN = 0.05;        // 0 = head pose never moves the dot, 1 = the full calibrated head terms
+
+const HEAD_GAIN = 0.05;      
 const GAZE_BIAS_X = -0.03;
 const R_MIN = 28;              // px: bubble radius when the model is calm
 const R_BASE_MAX = 60;         // px: cap calibration-derived radius so a good calibration can look smaller
@@ -240,7 +243,6 @@ const HEAD_EYE_FALLBACK_MIN_RAD = 0.15; // use eyes alone if head motion pushes 
  
 const clampPx = (v, a, b) => Math.max(a, Math.min(b, v));
 const pxA = (cut, dt) => 1 / (1 + 1 / (2 * Math.PI * cut) / dt);
-// 1-Euro filter in screen pixels
 class PxFilter {
   constructor(minCut = 0.4, beta = 0.004, dCut = 1) {
     Object.assign(this, { minCut, beta, dCut, x: null, dx: 0, t: 0 });
@@ -493,7 +495,6 @@ async function learnFromGate(now) {
 
 window.learnFromRecordingIconGate = () => learnFromGate(performance.now());
  
-// Radius containing CLOUD_PCT of recent raw gaze estimates (px).
 function recordSpread(now, x, y) {
   posHist.push({ t: now, x, y });
   while (posHist.length && now - posHist[0].t > SPREAD_WIN_MS) posHist.shift();
@@ -914,9 +915,7 @@ if (!model) {
   console.warn("No v" + GazeCore.VERSION + " gaze calibration found in localStorage.");
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+
 
 function strikesActive() {
   return !!(
@@ -929,6 +928,51 @@ function strikesActive() {
 
 // Mark the student as "away" for a given reason; strike once it lasts longer than `ms`.
 function flagAway(reason, ms) {
+  if (!window.examStarted) {
+    let missingSince = 0;
+    if (reason === "Face not found" && window.examVisionModelsReady) {
+      preGateEyesMissingSince = 0;
+      preGateEyesStrikeIssued = false;
+      if (!preGateFaceMissingSince) preGateFaceMissingSince = performance.now();
+      missingSince = preGateFaceMissingSince;
+    } else if (
+      reason.startsWith("Both eyes are not clearly detected") &&
+      window.examVisionModelsReady
+    ) {
+      preGateFaceMissingSince = 0;
+      preGateFaceStrikeIssued = false;
+      if (!preGateEyesMissingSince) preGateEyesMissingSince = performance.now();
+      missingSince = preGateEyesMissingSince;
+    } else {
+      preGateFaceMissingSince = 0;
+      preGateEyesMissingSince = 0;
+      preGateFaceStrikeIssued = false;
+      preGateEyesStrikeIssued = false;
+    }
+
+    if (
+      missingSince &&
+      performance.now() - missingSince >= PRE_GATE_MISSING_VISION_GRACE_MS &&
+      ((reason === "Face not found" && !preGateFaceStrikeIssued) ||
+        (reason.startsWith("Both eyes are not clearly detected") &&
+          !preGateEyesStrikeIssued))
+    ) {
+      if (reason === "Face not found") {
+        preGateFaceStrikeIssued = true;
+      } else {
+        preGateEyesStrikeIssued = true;
+      }
+      window.registerStrikeOnce({ allowGateStrike: true }).catch((err) =>
+        console.error("Pre-gate missing face/eyes strike failed:", err),
+      );
+    }
+  } else {
+    preGateFaceMissingSince = 0;
+    preGateEyesMissingSince = 0;
+    preGateFaceStrikeIssued = false;
+    preGateEyesStrikeIssued = false;
+  }
+
   const gazeRelatedReason =
     reason === "Eyes closed or looking down" ||
     reason === "Looking away detected" ||
@@ -1179,7 +1223,7 @@ window.getCameraHealth = function getCameraHealth() {
   };
 };
 
-// Attach listeners to the live camera track (the track exists only after camera.start()).
+
 function watchCameraTrack() {
   const track = videoElement.srcObject?.getVideoTracks?.()[0];
   if (!track || track === watchedTrack) return;
@@ -1214,11 +1258,8 @@ setInterval(() => {
   cameraLost("Camera stopped or blocked");
 }, WATCHDOG_INTERVAL_MS);
 
-// ---------------------------------------------------------------------------
-// Main per-frame handler
-// ---------------------------------------------------------------------------
 
-// Camera pixels -> overlay canvas pixels, respecting the <video> object-fit. null until the video size is known.
+
 function overlayMap(vw, vh) {
   const cw = videoElement.videoWidth, ch = videoElement.videoHeight;
   if (!cw || !ch) return null;
@@ -1268,7 +1309,7 @@ function addOverlayToggle() {
 addOverlayToggle();
 
 async function onResults(results) {
-  // CRITICAL: Exit immediately if submitting to avoid blocking submission
+
   if (window.submitting || window.examFinished || window.__examTrackingDisposed) return;
   
   lastFrameAt = performance.now(); // heartbeat for the watchdog
@@ -1286,6 +1327,7 @@ async function onResults(results) {
   canvasCtx.clearRect(0, 0, vw, vh);
 
   const faces = results.multiFaceLandmarks;
+  window.examVisionModelsReady = true;
   window.GazeMetrics?.onModelMetrics({ faceMeshMinConfidence: FACE_MIN_CONF });
   
   // Draw FaceMesh if faces detected
@@ -1307,7 +1349,7 @@ async function onResults(results) {
   // Keep the YOLO visualization out of the normal camera preview.
   if (YoloEye.debugEnabled && window.SHOW_YOLO_OVERLAY !== false && faces && faces.length > 0) drawYoloOverlay(vw, vh);
 
-  // (1) No face: left the frame, hand/cover over the lens, etc.
+  // No face: left the frame, hand/cover over the lens, etc.
   if (!faces || faces.length === 0) {
     setBlinkHold(false);
     eyesClosedSince = 0;
@@ -1324,6 +1366,8 @@ async function onResults(results) {
     return;
   }
   clearFaceLossCountdown("Face not found");
+  preGateFaceMissingSince = 0;
+  preGateFaceStrikeIssued = false;
 
   // (4) More than one face: someone else is in view.
   if (faces.length > 1) {
@@ -1342,7 +1386,7 @@ async function onResults(results) {
   const head = GazeCore.extract(lm, W, H);
   if (!model) return;
 
-  // (3) Blink handling with a time limit.
+  // Blink handling with a time limit.
   // Uses MediaPipe's eye-aspect-ratio, NOT the YOLO result: YoloEye.extract returns null when the
   // eyes are closed, which would silently skip this check and give a free pass for closed eyes.
   const now = performance.now();
@@ -1351,6 +1395,8 @@ async function onResults(results) {
   setBlinkHold(eyesClosed || blinkish);
   window.GazeMetrics?.onEye(head.ear, blinkish, head.ear < BLINK_EAR);
   if (eyesClosed) {
+    preGateEyesMissingSince = 0;
+    preGateEyesStrikeIssued = false;
     if (!eyesClosedSince) eyesClosedSince = now;
     if (now - eyesClosedSince <= BLINK_MAX_MS) {
       updateBubble();
@@ -1364,6 +1410,8 @@ async function onResults(results) {
   eyesClosedSince = 0;
 
   if (blinkish) {
+    preGateEyesMissingSince = 0;
+    preGateEyesStrikeIssued = false;
     updateBubble();
     return; // hold the last gaze through a blink and brief iris-settling period
   }
@@ -1372,7 +1420,7 @@ async function onResults(results) {
   // Eye features from YOLO (async). Frames that arrive while it is still busy are dropped.
   if (yoloBusy) return;
   
-  // CRITICAL: Don't start YOLO processing if we're submitting
+
   if (window.submitting || window.examFinished || window.__examTrackingDisposed) return;
   
   yoloBusy = true;
@@ -1387,7 +1435,7 @@ async function onResults(results) {
     yoloBusy = false;
   }
   
-  // CRITICAL: Check again after async operation completes
+
   if (window.submitting || window.examFinished || window.__examTrackingDisposed) return;
   if (
     frameBlinkGeneration !== blinkHoldGeneration ||
@@ -1412,17 +1460,24 @@ async function onResults(results) {
     gazeBubble.classList.add("alert");
     setVerification(false, reason);
     if (
-      window.examStarted &&
-      failedAt - eyeVisibilityBadSince >= EYE_VISIBILITY_GRACE_MS
+      (window.examStarted &&
+        failedAt - eyeVisibilityBadSince >= EYE_VISIBILITY_GRACE_MS) ||
+      (!window.examStarted &&
+        reason.startsWith("Both eyes are not clearly detected"))
     ) {
       flagAway(reason, AWAY_MS);
+    } else if (!window.examStarted) {
+      preGateEyesMissingSince = 0;
+      preGateEyesStrikeIssued = false;
     }
     updateBubble();
     return;
   }
   eyeVisibilityBadSince = 0;
+  preGateEyesMissingSince = 0;
+  preGateEyesStrikeIssued = false;
  
-// ---------------------------------------------------------------------------- PART 2
+
 // (this is the tail of onResults; `raw`, `model`, `headBase`, `calData`, `online` come from the code above it)
   const tNow = performance.now();
   const f = smoothGaze(raw, tNow);
@@ -1519,7 +1574,7 @@ async function onResults(results) {
 
   const spread = recordSpread(tNow, estimateX, estimateY);
   // 1) median of the last 3 gaze estimates removes one-frame "teleports"
-  // 2) 1-Euro smooths what is left
+
   // 3) the CENTRE is clamped to the viewport, so the bubble can sit on the edge (half visible) but never leaves
   const recentEstimates = posHist.slice(-(MOBILE_FILTER ? 5 : 3));
   const mid = (k) =>

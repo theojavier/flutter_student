@@ -18,11 +18,7 @@
       rel="stylesheet"
     />
     <style>
-      /* =====================================================================
-         FOTS — editorial green / paper theme (matches the student portal)
-         paper #f7f8f6 • ink #111217 • emerald #087B4F
-         All element IDs and classes used by gaze-calibration.js are unchanged.
-         ===================================================================== */
+
       :root {
         --paper: #f7f8f6;
         --panel: #ffffff;
@@ -96,7 +92,7 @@
         outline-offset: 3px;
       }
 
-      /* ---------- Start screen ---------- */
+      /*  Start screen  */
       #mainScreen {
         position: relative;
         z-index: 1;
@@ -374,7 +370,7 @@
         color: var(--muted);
       }
 
-      /* ---------- Buttons ---------- */
+      /*  Buttons  */
       button {
         background: var(--green);
         color: #fff;
@@ -435,7 +431,7 @@
         }
       }
 
-      /* ---------- Calibration overlay ---------- */
+      /*  Calibration overlay  */
       #calibrationOverlay {
   display: none;
   position: fixed;
@@ -591,7 +587,7 @@
         pointer-events: none;
       }
 
-      /* ---------- Camera preview ---------- */
+      /*  Camera preview  */
       .cam-preview {
         position: absolute;
         bottom: calc(20px + env(safe-area-inset-bottom, 0px));

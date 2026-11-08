@@ -129,9 +129,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
     }
   }
 
-  // ============================================================
+  
   // STYLES
-  // ============================================================
+  
 
   TextStyle _monoStyle(double size, {Color color = _muted2}) => TextStyle(
     fontFamily: _mono,
@@ -150,9 +150,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
         letterSpacing: -size * 0.05,
       );
 
-  // ============================================================
+  
   // BUILD
-  // ============================================================
+  
 
   @override
   Widget build(BuildContext context) {
@@ -198,9 +198,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
     );
   }
 
-  // ============================================================
+  
   // PAGE HEAD
-  // ============================================================
+  
 
   Widget _pageHead(bool compact) {
     return Column(
@@ -218,9 +218,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
     );
   }
 
-  // ============================================================
+  
   // INBOX CARD
-  // ============================================================
+  
 
   Widget _inboxCard() {
     final all = _notifications;
@@ -389,9 +389,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
     );
   }
 
-  // ============================================================
+  
   // SHARED PIECES
-  // ============================================================
+  
 
   Widget _card(Widget child) => Container(
     clipBehavior: Clip.antiAlias,

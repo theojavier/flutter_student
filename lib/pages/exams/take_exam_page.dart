@@ -145,7 +145,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     });
   }
 
-  // ---------- Error popup ----------
+  // Error popup 
 
   Future<void> _showErrorDialog({
     required String title,
@@ -268,7 +268,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     _dialogOpen = false;
   }
 
-  // ---------- Single "ready" popup that frames BOTH permissions ----------
+  // Single "ready" popup that frames BOTH permissions 
 
   Future<bool> _showReadyDialog() async {
     if (!mounted) return false;
@@ -372,7 +372,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     return proceed ?? false;
   }
 
-  // ---------- Screen share (whole screen only) ----------
+  // Screen share (whole screen only) 
 
   Future<bool> _requestFullScreenShare() async {
     try {
@@ -392,7 +392,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     }
   }
 
-  // ---------- Camera / permissions ----------
+  // Camera / permissions 
 
   /// Only asks for camera permission (no preview, no waiting). The stream is
   /// stopped right away so gaze calibration / exam.html can open the camera
@@ -448,7 +448,7 @@ class _TakeExamPageState extends State<TakeExamPage>
         : DateFormat("MMM d, yyyy").format(date);
   }
 
-  // ---------- BUILD ----------
+  // BUILD 
 
   @override
   Widget build(BuildContext context) {
@@ -1067,7 +1067,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     );
   }
 
-  // ---------- UI helpers: match the clean Secure Exam HTML layout ----------
+  // UI helpers: match the clean Secure Exam HTML layout 
 
   Widget _skelBox({double? width, required double height, double radius = 6}) {
     return Container(

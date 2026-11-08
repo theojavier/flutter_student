@@ -18,9 +18,9 @@ class SchedulePage extends StatefulWidget {
   State<SchedulePage> createState() => _SchedulePageState();
 }
 
-// ============================================================
+
 // HELPERS
-// ============================================================
+
 
 DateTime? _toDate(dynamic value) {
   if (value == null) return null;
@@ -166,9 +166,9 @@ List<({int weekday, int start, int end})> _classScheduleSlots(
   return slots;
 }
 
-// ============================================================
+
 // MODELS
-// ============================================================
+
 
 class _Entry {
   const _Entry({
@@ -254,9 +254,9 @@ class _Placed {
   final bool stacked;
 }
 
-// ============================================================
+
 // HOVER CARD (pops up above the child)
-// ============================================================
+
 
 class _HoverCard extends StatefulWidget {
   const _HoverCard({
@@ -340,9 +340,9 @@ class _HoverCardState extends State<_HoverCard> {
   }
 }
 
-// ============================================================
+
 // PAGE
-// ============================================================
+
 
 class _SchedulePageState extends State<SchedulePage> {
   // FOTS editorial palette (green)
@@ -515,9 +515,9 @@ class _SchedulePageState extends State<SchedulePage> {
     return controller.stream;
   }
 
-  // ============================================================
+  
   // SCHEDULE LOGIC
-  // ============================================================
+  
   //
   // 1. Classes come from the `classes` collection (status == active).
   // 2. Each class repeats weekly for every configured schedule slot.
@@ -679,9 +679,9 @@ class _SchedulePageState extends State<SchedulePage> {
     return _timeFmt.format(DateTime(2000, 1, 1, m ~/ 60, m % 60));
   }
 
-  // ============================================================
+  
   // STACK LAYOUT
-  // ============================================================
+  
   //
   // Cards that overlap in time form a "cluster" and are drawn as a
   // stack: each card starts at its real time but is pushed down at least
@@ -734,9 +734,9 @@ class _SchedulePageState extends State<SchedulePage> {
     return result;
   }
 
-  // ============================================================
+  
   // WEEK NAVIGATION
-  // ============================================================
+  
 
   void _shiftWeek(int delta) {
     setState(() {
@@ -756,9 +756,9 @@ class _SchedulePageState extends State<SchedulePage> {
         .toUpperCase();
   }
 
-  // ============================================================
+  
   // BUILD
-  // ============================================================
+  
 
   @override
   Widget build(BuildContext context) {
@@ -821,9 +821,9 @@ class _SchedulePageState extends State<SchedulePage> {
     );
   }
 
-  // ============================================================
+  
   // STYLES
-  // ============================================================
+  
 
   TextStyle _monoStyle(double size, {Color color = _muted2}) => TextStyle(
     fontFamily: _mono,
@@ -849,9 +849,9 @@ class _SchedulePageState extends State<SchedulePage> {
         border: Border.all(color: _line),
       );
 
-  // ============================================================
+  
   // PAGE HEAD
-  // ============================================================
+  
 
   Widget _pageHead() {
     return Column(
@@ -870,9 +870,9 @@ class _SchedulePageState extends State<SchedulePage> {
     );
   }
 
-  // ============================================================
+  
   // CARD HEADER (title, week navigator, legend)
-  // ============================================================
+  
 
   Widget _cardHeader() {
     return Container(
@@ -974,9 +974,9 @@ class _SchedulePageState extends State<SchedulePage> {
     );
   }
 
-  // ============================================================
+  
   // BODY (streams -> weekly table)
-  // ============================================================
+  
 
   Widget _scheduleBody() {
     return StreamBuilder<_Docs>(
@@ -1028,9 +1028,9 @@ class _SchedulePageState extends State<SchedulePage> {
     );
   }
 
-  // ============================================================
+  
   // WEEKLY TABLE
-  // ============================================================
+  
 
   Widget _weeklyTable(List<_Entry> entries) {
     final now = DateTime.now();
@@ -1496,9 +1496,9 @@ class _SchedulePageState extends State<SchedulePage> {
     );
   }
 
-  // ============================================================
+  
   // CLASSES WITH NO DAY SET
-  // ============================================================
+  
 
   Widget _unplacedSection(List<_Unplaced> items) {
     return Container(
@@ -1566,9 +1566,9 @@ class _SchedulePageState extends State<SchedulePage> {
     );
   }
 
-  // ============================================================
+  
   // EMPTY / ERROR STATE
-  // ============================================================
+  
 
   Widget _stateBox(IconData icon, String title, String message) {
     return Padding(

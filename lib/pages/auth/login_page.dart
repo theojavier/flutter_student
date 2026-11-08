@@ -41,7 +41,7 @@ class _LoginPageState extends State<LoginPage> {
   int? _attemptsRemaining;
   String? _attemptsForStudentId;
 
-  // ---------------- LOGIC (unchanged) ----------------
+  //  LOGIC (unchanged) 
 
   Future<void> _login() async {
     final studentId = studentIdController.text.trim();
@@ -185,7 +185,7 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  // ---------------- UI ----------------
+  //  UI 
 
   @override
   Widget build(BuildContext context) {
@@ -223,7 +223,7 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  // ----- Left / top dark art panel -----
+  //  Left / top dark art panel 
   Widget _buildArtPanel({required bool wide}) {
     return LayoutBuilder(
       builder: (context, c) {
@@ -364,7 +364,7 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  // ----- Right / bottom form panel -----
+  //  Right / bottom form panel 
   Widget _buildFormPanel({
     required bool wide,
     required BoxConstraints constraints,

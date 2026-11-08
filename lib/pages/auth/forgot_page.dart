@@ -45,7 +45,7 @@ class _ForgotPageState extends State<ForgotPage> {
   String _errorMessage = '';
   String _successMessage = '';
 
-  // ---------------- PASSWORD RESET LOGIC ----------------
+  //  PASSWORD RESET LOGIC 
 
   Future<void> _sendResetEmail() async {
     final studentId = studentIdController.text.trim();
@@ -207,7 +207,7 @@ class _ForgotPageState extends State<ForgotPage> {
     super.dispose();
   }
 
-  // ---------------- PAGE LAYOUT ----------------
+  //  PAGE LAYOUT 
 
   @override
   Widget build(BuildContext context) {
@@ -244,7 +244,7 @@ class _ForgotPageState extends State<ForgotPage> {
     );
   }
 
-  // ---------------- BRAND / ART PANEL ----------------
+  //  BRAND / ART PANEL 
 
   Widget _buildArtPanel({required bool wide}) {
     return LayoutBuilder(
@@ -395,7 +395,7 @@ class _ForgotPageState extends State<ForgotPage> {
     );
   }
 
-  // ---------------- FORM PANEL ----------------
+  //  FORM PANEL 
 
   Widget _buildFormPanel({
     required bool wide,
@@ -642,7 +642,7 @@ class _ForgotPageState extends State<ForgotPage> {
     );
   }
 
-  // ---------------- FORM HELPERS ----------------
+  //  FORM HELPERS 
 
   Widget _fieldLabel(String text) {
     return Padding(

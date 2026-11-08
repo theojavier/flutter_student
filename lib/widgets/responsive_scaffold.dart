@@ -17,9 +17,9 @@ import 'pull_to_refresh_shell.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
 
-// ---------------------------------------------------------------------------
+
 // Palette (same as the FOTS Admin shell)
-// ---------------------------------------------------------------------------
+
 const Color _kPaper = Color(0xFFF7F8F6);
 const Color _kInk = Color(0xFF121217);
 const Color _kRed = Color(0xFFDF2D45);
@@ -422,7 +422,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     return (first + last).toUpperCase();
   }
 
-  // ---------- BUILD ----------
+  //  BUILD 
 
   @override
   Widget build(BuildContext context) {
@@ -501,7 +501,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     );
   }
 
-  // ---------- TOP BAR ----------
+  //  TOP BAR 
 
   double _topBarHeight(bool desktop) {
     final inset = desktop ? 0.0 : MediaQuery.of(context).padding.top;
@@ -826,7 +826,7 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     ];
   }
 
-  // ---------- SIDEBAR / DRAWER ----------
+  //  SIDEBAR / DRAWER 
 
   int _activeIndex() {
     final path = GoRouterState.of(context).uri.path;
@@ -1235,9 +1235,9 @@ class ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   }
 }
 
-// ---------------------------------------------------------------------------
+
 // Small reusable pieces
-// ---------------------------------------------------------------------------
+
 class _LogoMark extends StatelessWidget {
   final double size;
   final double radius;

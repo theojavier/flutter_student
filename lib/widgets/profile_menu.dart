@@ -372,12 +372,12 @@ class _ProfileMenuTile extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------
+
 // Built-in "Change Password" fallback. Same behavior as before (send a
 // Firebase password reset email to whoever is currently signed in) —
 // only the pop-up's look has changed, now matching the dark navy /
 // accent-blue theme used across LoginPage and ForgotPage.
-// ---------------------------------------------------------------------
+
 Future<void> confirmChangePassword(BuildContext context) {
   return showDialog(
     context: context,

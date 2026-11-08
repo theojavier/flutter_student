@@ -170,7 +170,6 @@ const trimmedRange = (a, p = 0.15) => {
   return s[Math.ceil(s.length * (1 - p)) - 1] - s[Math.floor(s.length * p)];
 };
 
-// ---------------- plan ----------------
 const IS_MOBILE =
   examSetupMode || profileSetupMode
     ? examPlatform === "mobile"
@@ -210,7 +209,7 @@ const MOBILE_COLLECT_SKIP_MS = 1000;
 // Keep calibration and exam camera constraints aligned for each platform.
 const CAM_W = IS_MOBILE ? 1280 : 1920, CAM_H = IS_MOBILE ? 720 : 1080;
 const maxTrainPx = () =>
-  Math.hypot(innerWidth, innerHeight) * (IS_MOBILE ? 0.22 : 0.15); // RELAXED: we're averaging multiple frames
+  Math.hypot(innerWidth, innerHeight) * (IS_MOBILE ? 0.22 : 0.15); //we're averaging multiple frames
 const softLooPx = () => Math.hypot(innerWidth, innerHeight) * 0.13;
 
 YoloEye.cfg.blinkEar = BLINK_EAR;
@@ -240,7 +239,6 @@ const cal = {
   lastFeedback: "",
 };
 
-// ---------------- feedback ----------------
 function showFeedback(message, type = "warning") {
   if (cal.lastFeedback === message) return;
   cal.lastFeedback = message;
@@ -295,7 +293,6 @@ function checkRealtimeMovement(s) {
   else if (cal.samples.length > 3) clearFeedback();
 }
 
-// ---------------- validation ----------------
 function validateSamples(samples) {
   if (samples.length < MIN_SAMPLES)
     return {
@@ -331,7 +328,7 @@ function validateSamples(samples) {
 function cleanSamples(r) {
   const mx = med(r.map((x) => x.ox)),
     my = med(r.map((x) => x.oy));
-  const dx = 6.0 * med(r.map((x) => Math.abs(x.ox - mx))) + 0.004; // INCREASED from 4.5 to 6.0
+  const dx = 6.0 * med(r.map((x) => Math.abs(x.ox - mx))) + 0.004; 
   const dy = 6.0 * med(r.map((x) => Math.abs(x.oy - my))) + 0.004;
   const kept = r.filter(
     (x) => Math.abs(x.ox - mx) <= dx && Math.abs(x.oy - my) <= dy,
@@ -418,7 +415,6 @@ function failAttempt(reason, restartAll = false) {
   showCalibrationError(reason);
 }
 
-// ---------------- flow ----------------
 // Dot glide and progress ring are driven by requestAnimationFrame.
 const RING_R = 20.5,
   RING_C = 2 * Math.PI * RING_R;
@@ -784,7 +780,6 @@ function getCalibrationRows(calibrationData) {
   }
   return history;
 }
-// ---------------- geometry sanity check ----------------
 // Starting guesses for an "average PC". Tune them from the console log (see below).
 const GEOM_ENFORCE = true;
 const GEOM_DEBUG = true; // false = log only, never block
@@ -828,7 +823,7 @@ function validateGeometry(rows) {
   const hx = (mean([2, 3, 6], "ox") - mean([1, 4, 8], "ox")) / 2; // right - left
   const hy = (mean([3, 4, 7], "oy") - mean([1, 2, 5], "oy")) / 2; // bottom - top
 
-  // ---- expected span from an average PC ----
+  //expected span from an average PC
   const scale = med(rows.map((r) => r.scale));
   const aspect = Math.min(1, video.videoWidth / video.videoHeight); // portrait frame => narrower width FOV
   const tanHalf = Math.tan((LONG_SIDE_FOV_DEG * Math.PI) / 360) * aspect;
@@ -842,7 +837,7 @@ function validateGeometry(rows) {
     EYE_PER_RAD_Y *
     Math.atan((edgeY * innerHeight) / CSS_PX_PER_CM / distCm);
 
-  // ---- template: where each dot should sit relative to the centre dot ----
+  //where each dot should sit relative to the centre dot
   const dbg = [];
   const bad = [];
   if (Math.abs(hx) > 1e-3 && Math.abs(hy) > 1e-3) {
@@ -1245,7 +1240,6 @@ const calibrationTimer = setInterval(() => {
   }
 }, 50);
 
-// ---------------- UI wiring ----------------
 let modelReady = false;
 let examSetupState = examSetupMode ? "checking" : "calibrating";
 let calibrationSetupCancelled = false;
@@ -1853,7 +1847,7 @@ startBtn.onclick = () => {
   if (!modelReady) return;
   if (!examSetupMode || examSetupState === "calibrating") startCalibration();
 };
-// ---------------- MediaPipe (face + head pose) ----------------
+//MediaPipe (face + head pose)
 const fm = new FaceMesh({
   locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`,
 });

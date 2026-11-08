@@ -36,11 +36,11 @@ String notifTimeAgo(DateTime? t) {
   return DateFormat('MMM d, yyyy').format(t);
 }
 
-// ---------------------------------------------------------------------------
+
 // One notification row (used by the bubble AND the full page).
 // Material + InkWell (no ListTile, no colored Container above the ink), so
 // the splash is visible and Flutter doesn't throw the ink warning.
-// ---------------------------------------------------------------------------
+
 class NotificationTile extends StatelessWidget {
   final String subject;
   final DateTime? createdAt;
@@ -146,10 +146,10 @@ class NotificationTile extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
+
 // Pointer triangle: white fill, outlined only on the two slanted edges so it
 // blends into the card's border.
-// ---------------------------------------------------------------------------
+
 class _BubbleTrianglePainter extends CustomPainter {
   const _BubbleTrianglePainter();
 
@@ -177,9 +177,9 @@ class _BubbleTrianglePainter extends CustomPainter {
   bool shouldRepaint(covariant _BubbleTrianglePainter oldDelegate) => false;
 }
 
-// ---------------------------------------------------------------------------
+
 // The bubble
-// ---------------------------------------------------------------------------
+
 class NotificationBubbleSheet extends StatelessWidget {
   /// Kept for compatibility with the caller; the unread count shown in the
   /// header is computed from [notifications].

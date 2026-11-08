@@ -86,9 +86,9 @@ class _ExamResultPageState extends State<ExamResultPage> {
     };
   }
 
-  // ============================================================
+  
   // GRADING
-  // ============================================================
+  
 
   Color _getColor(double percent) {
     if (percent >= 80) return _green;
@@ -101,9 +101,9 @@ class _ExamResultPageState extends State<ExamResultPage> {
   String _fmt(num n) =>
       n == n.roundToDouble() ? n.toInt().toString() : n.toStringAsFixed(1);
 
-  // ============================================================
+  
   // STYLES
-  // ============================================================
+  
 
   TextStyle _monoStyle(double size, {Color color = _muted2}) => TextStyle(
     fontFamily: _mono,
@@ -129,9 +129,9 @@ class _ExamResultPageState extends State<ExamResultPage> {
         border: Border.all(color: _line),
       );
 
-  // ============================================================
+  
   // BUILD
-  // ============================================================
+  
 
   @override
   Widget build(BuildContext context) {
@@ -202,9 +202,9 @@ class _ExamResultPageState extends State<ExamResultPage> {
     );
   }
 
-  // ============================================================
+  
   // PAGE HEAD
-  // ============================================================
+  
 
   Widget _pageHead() {
     return Column(
@@ -223,9 +223,9 @@ class _ExamResultPageState extends State<ExamResultPage> {
     );
   }
 
-  // ============================================================
+  
   // RESULT CARD
-  // ============================================================
+  
 
   Widget _resultCard({
     required String subject,
@@ -470,9 +470,9 @@ class _ExamResultPageState extends State<ExamResultPage> {
     );
   }
 
-  // ============================================================
+  
   // EMPTY / ERROR STATE + SKELETON
-  // ============================================================
+  
 
   Widget _stateBox(IconData icon, String title, String message) {
     return Padding(

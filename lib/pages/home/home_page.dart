@@ -36,9 +36,9 @@ bool _isMonitoredOngoingExam(Map<String, dynamic> data, DateTime now) {
 }
 
 class _HomePageState extends State<HomePage> {
-  // ============================================================
+  
   // FOTS EDITORIAL PALETTE
-  // ============================================================
+  
 
   static const Color _bg = Color(0xFFF7F8F6);
   static const Color _ink = Color(0xFF111217);
@@ -131,16 +131,16 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // ============================================================
+  
   // FIRESTORE DATA
-  // ============================================================
+  
 
   Future<Map<String, dynamic>> _loadDashboardData() async {
     final now = DateTime.now();
 
-    // ------------------------------------------------------------
+    
     // EXAMS
-    // ------------------------------------------------------------
+    
 
     final examsById = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
     final examSnapshots = await Future.wait(
@@ -191,9 +191,9 @@ class _HomePageState extends State<HomePage> {
       return aStart.compareTo(bStart);
     });
 
-    // ------------------------------------------------------------
+    
     // RESULTS
-    // ------------------------------------------------------------
+    
 
     final authUid = _authUid;
     if (authUid == null) {
@@ -239,9 +239,9 @@ class _HomePageState extends State<HomePage> {
       return bTime.compareTo(aTime);
     });
 
-    // ------------------------------------------------------------
+    
     // READINESS
-    // ------------------------------------------------------------
+    
 
     final bool accountReady =
         _authUid != null &&
@@ -262,9 +262,9 @@ class _HomePageState extends State<HomePage> {
     };
   }
 
-  // ============================================================
+  
   // BUILD
-  // ============================================================
+  
 
   @override
   Widget build(BuildContext context) {
@@ -345,24 +345,24 @@ class _HomePageState extends State<HomePage> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
 
                       children: [
-                        // ==================================================
+                        
                         // HEADER
-                        // ==================================================
+                        
 
                         _pageHead(),
 
                         const SizedBox(height: 22),
 
-                        // ==================================================
+                        
                         // HERO
-                        // ==================================================
+                        
                         _hero(),
 
                         const SizedBox(height: 16),
 
-                        // ==================================================
+                        
                         // FOUR STAT CARDS
-                        // ==================================================
+                        
                         _statsGrid(
                           activeExamCount,
                           completedCount,
@@ -372,16 +372,16 @@ class _HomePageState extends State<HomePage> {
 
                         const SizedBox(height: 16),
 
-                        // ==================================================
+                        
                         // UPCOMING + READINESS
-                        // ==================================================
+                        
                         _dashboardGrid(activeExams, readiness, ready),
 
                         const SizedBox(height: 30),
 
-                        // ==================================================
+                        
                         // RESULTS
-                        // ==================================================
+                        
                         _sectionHeader(
                           Icons.assignment_turned_in_outlined,
                           "Results",
@@ -401,9 +401,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // TEXT STYLES
-  // ============================================================
+  
 
   TextStyle _monoStyle(double size, {Color color = _muted2}) {
     return TextStyle(
@@ -433,9 +433,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // PAGE HEADER
-  // ============================================================
+  
 
   Widget _pageHead() {
     return Column(
@@ -458,9 +458,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // HERO
-  // ============================================================
+  
 
   Widget _hero() {
     return LayoutBuilder(
@@ -649,9 +649,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // FOUR CARDS
-  // ============================================================
+  
 
   Widget _statsGrid(int available, int completed, int readiness, int strikes) {
     return LayoutBuilder(
@@ -793,9 +793,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // UPCOMING EXAMS + READINESS
-  // ============================================================
+  
 
   Widget _dashboardGrid(
     List<QueryDocumentSnapshot> exams,
@@ -830,9 +830,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // ACTIVE EXAMS
-  // ============================================================
+  
 
   Widget _activeExamsCard(List<QueryDocumentSnapshot> exams) {
     // Ongoing exams appear first, followed by the soonest upcoming exams.
@@ -1029,9 +1029,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // READINESS
-  // ============================================================
+  
 
   Widget _readinessCard(int readiness, bool ready) {
     return Container(
@@ -1201,9 +1201,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // HELPERS
-  // ============================================================
+  
 
   Widget _statusPill(String text, IconData? icon) {
     return Container(
@@ -1285,9 +1285,9 @@ class _HomePageState extends State<HomePage> {
     context.go('/student/class/${Uri.encodeComponent(classId)}');
   }
 
-  // ============================================================
+  
   // SECTION HEADER
-  // ============================================================
+  
 
   Widget _sectionHeader(IconData icon, String title, String tag) {
     return Padding(
@@ -1329,9 +1329,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // RESULTS
-  // ============================================================
+  
 
   Widget _buildResultsTable(List<Map<String, dynamic>> results) {
     if (results.isEmpty) {
@@ -1515,9 +1515,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // EMPTY
-  // ============================================================
+  
 
   Widget _emptyCard(IconData icon, String message) {
     return Container(
@@ -1555,9 +1555,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ============================================================
+  
   // SKELETON
-  // ============================================================
+  
 
   Widget _buildSkeletonUI() {
     Widget block(double height, {double radius = 10}) {

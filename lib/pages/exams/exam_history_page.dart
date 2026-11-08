@@ -118,9 +118,9 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
   });
 }
 
-  // ============================================================
+  
   // STYLES
-  // ============================================================
+  
 
   TextStyle _monoStyle(double size, {Color color = _muted2}) => TextStyle(
     fontFamily: _mono,
@@ -146,9 +146,9 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
         border: Border.all(color: _line),
       );
 
-  // ============================================================
+  
   // BUILD
-  // ============================================================
+  
 
   @override
   Widget build(BuildContext context) {
@@ -216,9 +216,9 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
     );
   }
 
-  // ============================================================
+  
   // PAGE HEAD
-  // ============================================================
+  
 
   Widget _pageHead() {
     return Column(
@@ -274,9 +274,9 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
     );
   }
 
-  // ============================================================
+  
   // SUMMARY
-  // ============================================================
+  
 
   Widget _summaryCard(int total, int completed, int inProgress) {
     return Container(
@@ -355,9 +355,9 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
     );
   }
 
-  // ============================================================
+  
   // EXAMS LIST
-  // ============================================================
+  
 
   Widget _examsCard(List<ExamHistoryModel> exams) {
     return Container(
@@ -575,9 +575,9 @@ class _ExamHistoryPageState extends State<ExamHistoryPage> {
     );
   }
 
-  // ============================================================
+  
   // EMPTY / ERROR STATE + SKELETON
-  // ============================================================
+  
 
   Widget _stateBox(IconData icon, String title, String message) {
     return Padding(

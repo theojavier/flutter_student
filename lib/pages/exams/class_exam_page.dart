@@ -16,9 +16,9 @@ class ClassExamPage extends StatefulWidget {
   State<ClassExamPage> createState() => _ClassExamPageState();
 }
 
-// ============================================================
+
 // HELPERS
-// ============================================================
+
 
 String _text(dynamic v, [String fallback = '']) {
   final s = (v ?? '').toString().trim();
@@ -209,9 +209,9 @@ String _initials(String name) {
   return (parts.first[0] + parts[1][0]).toUpperCase();
 }
 
-// ============================================================
+
 // PAGE
-// ============================================================
+
 
 class _ClassExamPageState extends State<ClassExamPage> {
   // FOTS editorial palette (green)
@@ -304,9 +304,9 @@ class _ClassExamPageState extends State<ClassExamPage> {
     return {...classData, 'programName': programName};
   }
 
-  // ============================================================
+  
   // STYLES
-  // ============================================================
+  
 
   TextStyle _monoStyle(double size, {Color color = _muted2}) => TextStyle(
     fontFamily: _mono,
@@ -332,9 +332,9 @@ class _ClassExamPageState extends State<ClassExamPage> {
         border: Border.all(color: _line),
       );
 
-  // ============================================================
+  
   // BUILD
-  // ============================================================
+  
 
   @override
   Widget build(BuildContext context) {
@@ -383,9 +383,9 @@ class _ClassExamPageState extends State<ClassExamPage> {
     );
   }
 
-  // ============================================================
+  
   // PAGE HEAD
-  // ============================================================
+  
 
   Widget _pageHead(String subject) {
     return Column(
@@ -403,9 +403,9 @@ class _ClassExamPageState extends State<ClassExamPage> {
     );
   }
 
-  // ============================================================
+  
   // OVERVIEW CARD
-  // ============================================================
+  
 
   Widget _overviewCard(Map<String, dynamic> c) {
     final teacher = _text(c['adviserName'], 'Not assigned');
@@ -736,9 +736,9 @@ class _ClassExamPageState extends State<ClassExamPage> {
     );
   }
 
-  // ============================================================
+  
   // EXAMS (stats + grouped list)
-  // ============================================================
+  
 
   Widget _examsSection(Map<String, dynamic> classData) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -1176,9 +1176,9 @@ class _ClassExamPageState extends State<ClassExamPage> {
     child: child,
   );
 
-  // ============================================================
+  
   // EMPTY / ERROR STATE
-  // ============================================================
+  
 
   Widget _stateBox(IconData icon, String title, String message) {
     return Padding(

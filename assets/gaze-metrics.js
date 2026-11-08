@@ -21,12 +21,6 @@
 //   GazeMetrics.showYolo(false)     hide the red YOLO boxes / keypoints
 //   Esc                             aborts a running test
 //
-// NOTE: during a test window.allowStrikes is switched OFF (and restored after), so tests never create real strikes.
-// The "would-be strikes" are still counted.
-//
-// START GATE: before every test (and before each phase of the false-positive test) the dot is shown with
-// "click or press Space when ready". The 3-2-1 countdown only starts after that, so you can sit properly,
-// rest between tests, and check your head position. Turn it off with GazeMetrics.setGate(false) or runX({ gate: false }).
 
 if (typeof YoloEye !== "undefined") window.YoloEye = YoloEye;
 

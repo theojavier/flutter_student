@@ -11,7 +11,6 @@
       });
     </script>
 
-    <!-- Firebase + App Initialization FIRST -->
     <script type="module">
       window.isPageReload =
         window.performance.navigation.type === 1 ||
@@ -765,6 +764,9 @@
           window.examToken = await getCurrentIdToken();
         }
         void setExamPresence(examId, window.authUid, true);
+        void takeEntrySnapshot().catch((err) =>
+          console.error("Entry snapshot failed:", err),
+        );
         startExamHeartbeat();
         startCountdownFromFirestore(examId);
         window.strikesLoadedPromise = loadExistingStrikes();
@@ -948,8 +950,7 @@
               window.__inheritedParentScreen = true;
               if (ok) {
                 window.__inheritedParentScreen = true;
-                // DELETE this line:
-                // try { window.parent.__examScreenStream = null; } catch (_) {}
+  
                 console.log("Inherited screen-share stream from parent app.");
                 return true;
               }
@@ -1758,9 +1759,7 @@
         }).catch((err) => console.warn("Proctor event failed:", err));
       };
 
-      // ============================================================================
-      // PERIODIC EXAM SNAPSHOTS (4 per hour: 1 at start, 3 randomized per hour)
-      // ============================================================================
+    
       const SNAPSHOTS_PER_HOUR = 4;
       window.examSnapshotsSchedule = null;
       window.snapshotsTaken = 0;
@@ -1787,12 +1786,13 @@
       }
 
       async function captureExamSnapshot(snapshotNumber) {
-        if (window.examFinished || window.submitting || window.hasSubmitted) return;
-        // Slot #1 is taken right after the gate opens; the rest only once the exam started.
-        if (snapshotNumber > 1 && !window.examStarted) return;
+        if (window.examFinished || window.submitting || window.hasSubmitted) return true;
+        // The entry snapshot can run before the gate opens.
+        // Later snapshots require the exam to have started.
+        if (snapshotNumber > 1 && !window.examStarted) return true;
 
         const examId = window.examData?.examId;
-        if (!examId || !window.authUid) return;
+        if (!examId || !window.authUid) return false;
 
         console.log(
           `[snapshot ${snapshotNumber}/${window.totalSnapshotsExpected}] Capturing...`,
@@ -1811,6 +1811,7 @@
           console.warn(`[snapshot ${snapshotNumber}] camera capture failed:`, err);
         }
 
+        if (isPcExam()) tryInheritParentScreenStream();
         if (isPcExam() && window.cheatCaptureStream?.active) {
           try {
             const screenBlob = await withTimeout(
@@ -1825,7 +1826,7 @@
 
         if (!Object.keys(blobs).length) {
           console.warn(`[snapshot ${snapshotNumber}] nothing captured, skipping`);
-          return;
+          return false;
         }
 
         const parts = {};
@@ -1835,7 +1836,7 @@
         const requestFn = httpsCallable(functions, "getExamSnapshotUploadUrl");
 
         for (let attempt = 1; attempt <= 2; attempt++) {
-          if (window.examFinished || window.submitting) return;
+          if (window.examFinished || window.submitting || window.hasSubmitted) return true;
 
           try {
             // 1) get signed URLs
@@ -1874,10 +1875,10 @@
             console.log(
               `[snapshot ${snapshotNumber}] done (${window.snapshotsTaken}/${window.totalSnapshotsExpected})`,
             );
-            return;
+            return true;
           } catch (err) {
             console.error(`[snapshot ${snapshotNumber}] attempt ${attempt} failed:`, err);
-            // No point retrying these
+
             if (
               [
                 "functions/already-exists",
@@ -1885,14 +1886,55 @@
                 "functions/invalid-argument",
               ].includes(err.code)
             ) {
-              return;
+              return true;
             }
             if (attempt < 2) await new Promise((r) => setTimeout(r, 2000));
           }
         }
+        return false;
       }
 
-      window.captureExamSnapshot = captureExamSnapshot; // REQUIRED: openExamFromGate() is in a classic <script>
+      window.entrySnapshotStarted = false;
+
+      async function takeEntrySnapshot() {
+        if (window.entrySnapshotStarted) return;
+        window.entrySnapshotStarted = true;
+
+        try {
+          await withTimeout(
+            Promise.resolve(window.examCameraReady).catch(() => null),
+            15000,
+          );
+          const video = document.getElementById("input_video");
+          const deadline = Date.now() + 5000;
+          while (
+            Date.now() < deadline &&
+            !(video?.videoWidth &&
+              video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            if (window.examFinished || window.submitting || window.hasSubmitted) {
+              return;
+            }
+            if (await captureExamSnapshot(1)) return;
+            if (attempt < 3) {
+              await new Promise((resolve) => setTimeout(resolve, 3000 * attempt));
+            }
+          }
+
+          console.warn("[snapshot 1] gave up after 3 rounds");
+          window.entrySnapshotStarted = false;
+        } catch (err) {
+          window.entrySnapshotStarted = false;
+          throw err;
+        }
+      }
+
+      window.captureExamSnapshot = captureExamSnapshot;
+      window.takeEntrySnapshot = takeEntrySnapshot;
 
       function scheduleExamSnapshots(examId, startTime, endTime) {
         if (window.examSnapshotsSchedule) return;
@@ -1900,7 +1942,7 @@
         const durationMs = endTime - startTime;
         if (!(durationMs > 0)) return;
 
-        // 4 per hour over the WHOLE exam. #1 is taken at exam start; #2..total are randomized.
+        // 4 per hour over the WHOLE exam. #1 is taken on entry; #2..total are randomized.
         const total = Math.max(
           1,
           Math.ceil((durationMs / 3600000) * SNAPSHOTS_PER_HOUR),
@@ -1942,18 +1984,23 @@
       window.registerStrikeOnce = (function () {
         let lastAway = 0;
         const blocked = () =>
-          !window.allowStrikes ||
           window.examFinished ||
           window.hasSubmitted ||
           window.submitting;
-        return async function registerStrikeOnce() {
-          if (blocked()) return;
+        return async function registerStrikeOnce(
+          { allowGateStrike = false } = {},
+        ) {
+          const isBlocked = () =>
+            blocked() ||
+            (!window.allowStrikes &&
+              !(allowGateStrike && !window.examStarted));
+          if (isBlocked()) return;
           const now = Date.now();
           if (now - lastAway < 1200) return;
           lastAway = now;
 
           if (window.strikesLoadedPromise) await window.strikesLoadedPromise;
-          if (blocked()) return;
+          if (isBlocked()) return;
 
           const examId = window.examData?.examId;
           if (!examId) return;
@@ -1973,7 +2020,7 @@
         };
       })();
 
-      // Mark incomplete (keep this in module so beforeunload can call it safely)
+
       // window.markStoppedIfNeeded = function () {
       //   try {
       //     if (window.examFinished) return;
@@ -2296,7 +2343,11 @@
         if (document.hidden) {
           setTimeout(() => {
             if (document.hidden && !window.skipIncompleteOnNextUnload) {
-              window.registerStrikeOnce();
+              const gateStrike =
+                !window.examStarted && !!window.examData?.examId;
+              window.registerStrikeOnce({ allowGateStrike: gateStrike }).catch(
+                (err) => console.error("Visibility strike failed:", err),
+              );
             }
           }, 1200);
         }
@@ -5151,10 +5202,6 @@
     </script>
 
     <script>
-      //ARDUINO SERIAL CONNECTION
-      // ===============================================
-
-      // ========== EXISTING EXAM CODE (UNCHANGED) ==========
       const videoElement = document.getElementById("input_video");
       const canvasElement = document.getElementById("overlay");
       const canvasCtx = canvasElement.getContext("2d");
@@ -5291,7 +5338,7 @@
       }
     </script>
     <script src="yolo-eye.js?v=5"></script>
-    <script src="exam-gaze-block.js?v=16"></script>
+    <script src="exam-gaze-block.js?v=17"></script>
     <script src="gaze-metrics.js?v=5"></script>
     <script>
       const GATE_DELAY_MS = 5000;
@@ -5416,7 +5463,6 @@
         document.getElementById("examCard").style.display = "block";
         window.startRings?.();
         
-        // PERFORMANCE FIX: Defer heavy operations to avoid blocking
         requestAnimationFrame(() => {
           // Fit the visible question after the exam card is laid out.
           window.fitExamContent();
@@ -5436,10 +5482,6 @@
             console.error("Recording-icon gate learning failed:", err);
           });
 
-        // Capture first snapshot immediately after exam starts
-        setTimeout(() => {
-          captureExamSnapshot(1);
-        }, 2000); // 2 second delay to ensure camera is stable
       }
 
       function startGateCountdown() {
@@ -5569,7 +5611,7 @@
       animLoop();
 
       // Initialize camera AFTER YOLO is ready (critical for gaze tracking to work!)
-      (async () => {
+      window.examCameraReady = (async () => {
         try {
           await window.examGazeCalibrationReady;
           if (trackingDisposed) return;
@@ -5590,7 +5632,7 @@
               });
             },
             facingMode: "user",
-            // CRITICAL: Match calibration camera size! Different resolution = wrong field of view = compressed edges
+          
             width: calData?.camera?.w || 1920,
             height: calData?.camera?.h || 1080,
           });
