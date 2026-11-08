@@ -4748,6 +4748,116 @@
         }
       }
 
+      @media (max-width: 600px) and (pointer: coarse) {
+        :root {
+          --mobile-exam-card-height: clamp(311px, 54.4dvh, 482px);
+        }
+
+        html,
+        body {
+          overscroll-behavior-y: none;
+        }
+
+        .wrap {
+          padding: 10px 8px calc(18px + env(safe-area-inset-bottom));
+          gap: 12px;
+          overscroll-behavior-y: none;
+        }
+
+        .exam-panel-body {
+          padding: 10px;
+        }
+
+        .exam-hero {
+          gap: 10px;
+          padding: 18px 14px 14px;
+        }
+
+        #examGate {
+          display: flex;
+          height: var(--mobile-exam-card-height);
+          align-items: center;
+          justify-content: center;
+        }
+
+        #examGate[style*="block"] {
+          display: flex !important;
+        }
+
+        #examContentGate {
+          width: 100%;
+          transform: translateY(-8%);
+        }
+
+        #examCard {
+          height: var(--mobile-exam-card-height);
+          padding: 12px;
+        }
+
+        #examCard:not([style*="none"]) {
+          display: flex !important;
+          flex-direction: column;
+        }
+
+        #examContent {
+          display: flex;
+          flex: 1 1 auto;
+          flex-direction: column;
+          min-height: 0;
+        }
+
+        #examContent .question {
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        #examContent .question:has(
+          .options[data-qtype="multiple-choice"]
+        ) {
+          overflow-y: auto;
+        }
+
+        .exam-footer {
+          flex: 0 0 auto;
+          margin-top: 10px;
+          padding-top: 10px;
+        }
+
+        #examContent .question {
+          padding: 14px 12px;
+        }
+
+        #examContent .options label {
+          min-height: 58px;
+          padding: 14px 12px;
+          font-size: 14px;
+        }
+
+        #examContent .options[data-qtype="multiple-choice"] {
+          --opt-pad: 12px;
+          --opt-height: max(
+            60px,
+            calc(
+              var(--opt-font) * 1.4 * var(--opt-lines) +
+                var(--opt-pad) * 2 + 2px
+            )
+          );
+          gap: 8px;
+        }
+
+        #examContent .options[data-qtype="multiple-choice"] > .opt > label {
+          padding: var(--opt-pad) 12px;
+        }
+
+        #nextQuestion {
+          min-height: 60px;
+          font-size: 15px;
+        }
+      }
+
     </style>
   </head>
 
@@ -5143,6 +5253,24 @@
       const STABLE_MS = 300;
       let strikes = 0;
       let blocked = false;
+      window.__examIsMobilePlatform = (() => {
+        const queryPlatform = new URLSearchParams(location.search).get("platform");
+        if (queryPlatform === "mobile" || queryPlatform === "pc") {
+          return queryPlatform === "mobile";
+        }
+        const ua = navigator.userAgent || "";
+        const platform =
+          navigator.userAgentData?.platform || navigator.platform || "";
+        const mobileDevice =
+          navigator.userAgentData?.mobile === true ||
+          /Android|iPhone|iPad|iPod|IEMobile|Windows Phone/i.test(ua) ||
+          (/MacIntel/i.test(platform) && navigator.maxTouchPoints > 1);
+        if (mobileDevice) return true;
+        const desktopDevice =
+          /Windows NT|Macintosh|X11|CrOS|Linux x86_64/i.test(ua) ||
+          /Win32|Win64|Windows|MacIntel|Linux x86_64/i.test(platform);
+        return desktopDevice ? false : matchMedia("(pointer: coarse)").matches;
+      })();
 
       let bubbleX = window.innerWidth / 2,
         bubbleY = window.innerHeight / 2;
@@ -5151,7 +5279,7 @@
       let bubbleR = 30,
         targetR = 30;
       let lastBubbleT = performance.now();
-      const BUBBLE_TAU_MS = 200;
+      const BUBBLE_TAU_MS = window.__examIsMobilePlatform ? 460 : 200;
       const SENSITIVITY = 10.4;
 
       function showCameraUnavailable() {
@@ -5163,7 +5291,7 @@
       }
     </script>
     <script src="yolo-eye.js?v=5"></script>
-    <script src="exam-gaze-block.js?v=10"></script>
+    <script src="exam-gaze-block.js?v=16"></script>
     <script src="gaze-metrics.js?v=5"></script>
     <script>
       const GATE_DELAY_MS = 5000;
@@ -5591,6 +5719,7 @@
     </script>
     <script>
       (() => {
+        if (window.__examIsMobilePlatform) return;
         const trigger = 60;
         const maxPull = 90;
         const indicator = document.createElement("div");

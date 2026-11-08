@@ -30,6 +30,7 @@ class _ProfilePageState extends State<ProfilePage> {
   String? _error;
   Map<String, dynamic>? _calibrationStatus; // Gaze calibration status
   bool _loadingCalibrationStatus = true;
+  bool _canCloseCalibration = false;
 
   @override
   void initState() {
@@ -578,17 +579,26 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   void _startCalibration() async {
+    _canCloseCalibration = false;
     final result = await showDialog<bool>(
       context: context,
       useRootNavigator: true,
       barrierDismissible: false,
       barrierColor: const Color(0xB3000000),
       useSafeArea: false,
-      builder: (_) => PopScope(
-        canPop: false,
-        child: Dialog.fullscreen(
-          backgroundColor: Colors.transparent,
-          child: const ProfileCalibrationPage(),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setDialogState) => PopScope(
+          canPop: _canCloseCalibration,
+          child: Dialog.fullscreen(
+            backgroundColor: Colors.transparent,
+            child: ProfileCalibrationPage(
+              onCalibrationSaved: () {
+                if (!mounted) return;
+                setState(() => _canCloseCalibration = true);
+                setDialogState(() {});
+              },
+            ),
+          ),
         ),
       ),
     );

@@ -1,10 +1,13 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:pointer_interceptor/pointer_interceptor.dart';
 import '../../widgets/profile_gaze_calibration_view.dart';
 
 class ProfileCalibrationPage extends StatefulWidget {
-  const ProfileCalibrationPage({super.key});
+  final VoidCallback? onCalibrationSaved;
+
+  const ProfileCalibrationPage({super.key, this.onCalibrationSaved});
 
   @override
   State<ProfileCalibrationPage> createState() => _ProfileCalibrationPageState();
@@ -141,6 +144,8 @@ class _ProfileCalibrationPageState extends State<ProfileCalibrationPage> {
       final success = responseData?['success'] == true;
 
       if (success) {
+        setState(() => _saving = false);
+        widget.onCalibrationSaved?.call();
         final accuracy = responseData?['accuracy'] as num?;
         final learningSampleCount =
             responseData?['learningSampleCount'] as int?;
@@ -161,8 +166,6 @@ class _ProfileCalibrationPageState extends State<ProfileCalibrationPage> {
 
         await _showSessionReport(savedCalibration);
 
-        // Wait a bit before navigating back
-        await Future.delayed(const Duration(seconds: 2));
         if (mounted) {
           Navigator.of(context, rootNavigator: true).pop(true);
         }
@@ -249,236 +252,263 @@ class _ProfileCalibrationPageState extends State<ProfileCalibrationPage> {
     const green = Color(0xFF087B4F);
     const softGreen = Color(0xFFE8F5EE);
     const line = Color(0xFFDFE2DF);
+    final reportScrollController = ScrollController();
+    final reportHeight = MediaQuery.sizeOf(context).height * 0.72;
 
-    await showDialog<void>(
+    await showDialog<bool>(
       context: context,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: 520,
-            maxHeight: MediaQuery.sizeOf(context).height * 0.82,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      builder: (dialogContext) => PointerInterceptor(
+        child: Dialog(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: 520, maxHeight: reportHeight),
+            child: SizedBox(
+              height: reportHeight,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: softGreen,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.insights_outlined,
-                        color: green,
-                        size: 22,
-                      ),
-                    ),
-                    const SizedBox(width: 13),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Calibration updated',
-                            style: TextStyle(
-                              color: ink,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.3,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            'Session consistency report',
-                            style: TextStyle(color: muted, fontSize: 13),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Lower scores mean the calibration runs agree more closely. The newest run is kept; when history exceeds four runs, the least consistent older run is removed.',
-                  style: TextStyle(color: muted, fontSize: 13, height: 1.45),
-                ),
-                const SizedBox(height: 16),
-                Flexible(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        ...displaySessions.map((session) {
-                          final score = session['score'];
-                          final isNew = session['isNew'] == true;
-                          final removed = session['dropped'] == true;
-                          final accent = removed
-                              ? const Color(0xFFB42338)
-                              : isNew
-                              ? green
-                              : muted;
-                          final background = removed
-                              ? const Color(0xFFFFF1F3)
-                              : isNew
-                              ? softGreen
-                              : const Color(0xFFFAFBF9);
-                          final border = removed
-                              ? const Color(0xFFF0CAD0)
-                              : isNew
-                              ? const Color(0xFFCDE7D7)
-                              : line;
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: softGreen,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.insights_outlined,
+                            color: green,
+                            size: 22,
+                          ),
+                        ),
+                        const SizedBox(width: 13),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Calibration updated',
+                                style: TextStyle(
+                                  color: ink,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'Session consistency report',
+                                style: TextStyle(color: muted, fontSize: 13),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Lower scores mean the calibration runs agree more closely. The newest run is kept; when history exceeds four runs, the least consistent older run is removed.',
+                      style: TextStyle(
+                        color: muted,
+                        fontSize: 13,
+                        height: 1.45,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Flexible(
+                      child: PointerInterceptor(
+                        child: Scrollbar(
+                          controller: reportScrollController,
+                          thumbVisibility: true,
+                          trackVisibility: true,
+                          interactive: true,
+                          child: ListView(
+                            controller: reportScrollController,
+                            primary: false,
+                            physics: const AlwaysScrollableScrollPhysics(
+                              parent: ClampingScrollPhysics(),
+                            ),
+                            children: [
+                              ...displaySessions.map((session) {
+                                final score = session['score'];
+                                final isNew = session['isNew'] == true;
+                                final removed = session['dropped'] == true;
+                                final accent = removed
+                                    ? const Color(0xFFB42338)
+                                    : isNew
+                                    ? green
+                                    : muted;
+                                final background = removed
+                                    ? const Color(0xFFFFF1F3)
+                                    : isNew
+                                    ? softGreen
+                                    : const Color(0xFFFAFBF9);
+                                final border = removed
+                                    ? const Color(0xFFF0CAD0)
+                                    : isNew
+                                    ? const Color(0xFFCDE7D7)
+                                    : line;
 
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 9),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 13,
-                              vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: background,
-                              border: Border.all(color: border),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 9),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 13,
+                                    vertical: 12,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: background,
+                                    border: Border.all(color: border),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Row(
                                     children: [
-                                      Text(
-                                        sessionLabel(session['sessionId']),
-                                        style: const TextStyle(
-                                          color: ink,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              sessionLabel(
+                                                session['sessionId'],
+                                              ),
+                                              style: const TextStyle(
+                                                color: ink,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            if (isNew || removed) ...[
+                                              const SizedBox(height: 5),
+                                              Text(
+                                                removed
+                                                    ? 'Removed from calibration history'
+                                                    : 'Just recorded',
+                                                style: TextStyle(
+                                                  color: accent,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ],
                                         ),
                                       ),
-                                      if (isNew || removed) ...[
-                                        const SizedBox(height: 5),
-                                        Text(
-                                          removed
-                                              ? 'Removed from calibration history'
-                                              : 'Just recorded',
-                                          style: TextStyle(
-                                            color: accent,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                          ),
+                                      const SizedBox(width: 12),
+                                      Text(
+                                        score is num
+                                            ? '${score.round()} px'
+                                            : 'Need another run',
+                                        style: TextStyle(
+                                          color: accent,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w700,
                                         ),
-                                      ],
+                                      ),
                                     ],
                                   ),
-                                ),
-                                const SizedBox(width: 12),
-                                Text(
-                                  score is num
-                                      ? '${score.round()} px'
-                                      : 'Need another run',
+                                );
+                              }),
+                              if (disagreementRows.isNotEmpty) ...[
+                                const SizedBox(height: 7),
+                                const Divider(color: line, height: 24),
+                                const Text(
+                                  'Cross-check details',
                                   style: TextStyle(
-                                    color: accent,
+                                    color: ink,
                                     fontSize: 14,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
+                                const SizedBox(height: 3),
+                                const Text(
+                                  'Model trained on the first run, tested on the second.',
+                                  style: TextStyle(
+                                    color: muted,
+                                    fontSize: 12,
+                                    height: 1.4,
+                                  ),
+                                ),
+                                const SizedBox(height: 9),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFAFBF9),
+                                    border: Border.all(color: line),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: disagreementRows,
+                                  ),
+                                ),
+                              ] else if (sessions.length == 1) ...[
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.all(13),
+                                  decoration: BoxDecoration(
+                                    color: softGreen,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Text(
+                                    'This run is your baseline. Session comparison will be available after another nine-point calibration.',
+                                    style: TextStyle(
+                                      color: ink,
+                                      fontSize: 12,
+                                      height: 1.45,
+                                    ),
+                                  ),
+                                ),
                               ],
-                            ),
-                          );
-                        }),
-                        if (disagreementRows.isNotEmpty) ...[
-                          const SizedBox(height: 7),
-                          const Divider(color: line, height: 24),
-                          const Text(
-                            'Cross-check details',
-                            style: TextStyle(
-                              color: ink,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            ),
+                            ],
                           ),
-                          const SizedBox(height: 3),
-                          const Text(
-                            'Model trained on the first run, tested on the second.',
-                            style: TextStyle(
-                              color: muted,
-                              fontSize: 12,
-                              height: 1.4,
-                            ),
-                          ),
-                          const SizedBox(height: 9),
-                          Container(
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    PointerInterceptor(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: green,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
+                              horizontal: 22,
+                              vertical: 12,
                             ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFAFBF9),
-                              border: Border.all(color: line),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: disagreementRows,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(9),
                             ),
                           ),
-                        ] else if (sessions.length == 1) ...[
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.all(13),
-                            decoration: BoxDecoration(
-                              color: softGreen,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Text(
-                              'This run is your baseline. Session comparison will be available after another nine-point calibration.',
-                              style: TextStyle(
-                                color: ink,
-                                fontSize: 12,
-                                height: 1.45,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: green,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 22,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(9),
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          child: const Text('Done'),
+                        ),
                       ),
                     ),
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Done'),
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
       ),
     );
+    reportScrollController.dispose();
   }
 
   @override

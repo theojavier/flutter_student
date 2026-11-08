@@ -255,7 +255,13 @@ class PxFilter {
     return this.x;
   }
 }
-const posX = new PxFilter(), posY = new PxFilter();
+const MOBILE_FILTER = window.__examIsMobilePlatform === true;
+const posX = MOBILE_FILTER
+  ? new PxFilter(0.18, 0.0008)
+  : new PxFilter();
+const posY = MOBILE_FILTER
+  ? new PxFilter(0.18, 0.0008)
+  : new PxFilter();
 const posHist = []; // raw (unfiltered) screen estimates of the last SPREAD_WIN_MS
 let usingEyeFirstFallbackX = false;
 let usingEyeFirstFallbackY = false;
@@ -501,9 +507,9 @@ function recordSpread(now, x, y) {
   return distances[Math.ceil(CLOUD_PCT * n) - 1];
 }
 
-const EXIT_WIN = 4;
-const EXIT_VOTES = 3;
-const EXIT_MIN_MS = 300;
+const EXIT_WIN = MOBILE_FILTER ? 6 : 4;
+const EXIT_VOTES = MOBILE_FILTER ? 5 : 3;
+const EXIT_MIN_MS = MOBILE_FILTER ? 800 : 300;
 const JUMP_PX = 220;
 const JUMP_EXTRA_MS = 250;
 const EXIT_INSET = 3;
@@ -765,6 +771,7 @@ let awaySince = 0;
 let eyesClosedSince = 0;
 let eyeVisibilityBadSince = 0;
 const EYE_VISIBILITY_GRACE_MS = 750;
+let mobileTouchGraceUntil = 0;
 let lastFrameAt = performance.now();
 let lastFaceDetected = false;
 let lastStallStrikeAt = 0;
@@ -775,6 +782,9 @@ const missingSignals = new Set();
 let screenLossActive = false;
 
 function isMobileGazePlatform() {
+  if (typeof window.__examIsMobilePlatform === "boolean") {
+    return window.__examIsMobilePlatform;
+  }
   const queryPlatform = new URLSearchParams(location.search).get("platform");
   if (queryPlatform === "mobile" || queryPlatform === "pc")
     return queryPlatform === "mobile";
@@ -792,6 +802,7 @@ function isMobileGazePlatform() {
     /Win32|Win64|Windows|MacIntel|Linux x86_64/i.test(platform);
   return desktopDevice ? false : matchMedia("(pointer: coarse)").matches;
 }
+const MOBILE_GAZE_PLATFORM = isMobileGazePlatform();
 
 // Online exam learning uses the recording-icon gate as its only labeled target.
 const online = GazeCore.createOnline(calData, {
@@ -799,7 +810,7 @@ const online = GazeCore.createOnline(calData, {
   maxClicks: 0,
   maxGate: 5,
   maxSpreadPx: 100,
-  xOnly: isMobileGazePlatform(),
+  xOnly: MOBILE_GAZE_PLATFORM,
 });
 const isRecordingIconLearningSample = (sample) =>
   sample?.gate === true || sample?.source === "recording-icon-gate";
@@ -918,6 +929,20 @@ function strikesActive() {
 
 // Mark the student as "away" for a given reason; strike once it lasts longer than `ms`.
 function flagAway(reason, ms) {
+  const gazeRelatedReason =
+    reason === "Eyes closed or looking down" ||
+    reason === "Looking away detected" ||
+    reason.startsWith("Both eyes are not clearly visible");
+  if (
+    gazeRelatedReason &&
+    MOBILE_GAZE_PLATFORM &&
+    performance.now() < mobileTouchGraceUntil
+  ) {
+    awaySince = 0;
+    awayMs = 0;
+    clearAway();
+    return;
+  }
   window.GazeMetrics?.onFlag(reason, ms);
   examCard.classList.add("alert");
   gazeBubble.classList.add("alert");
@@ -929,6 +954,24 @@ function flagAway(reason, ms) {
     awaySince = 0;
   }
 }
+
+document.addEventListener("pointerdown", (event) => {
+  if (
+    !MOBILE_GAZE_PLATFORM ||
+    event.pointerType !== "touch" ||
+    !window.examStarted ||
+    window.examFinished ||
+    !(event.target instanceof Element) ||
+    !event.target.closest("#examContent .options, #nextQuestion")
+  ) {
+    return;
+  }
+  mobileTouchGraceUntil = performance.now() + 900;
+  awaySince = 0;
+  awayMs = 0;
+  eyesClosedSince = 0;
+  clearAway();
+});
 
 function clearAway() {
   awaySince = 0;
@@ -1478,8 +1521,11 @@ async function onResults(results) {
   // 1) median of the last 3 gaze estimates removes one-frame "teleports"
   // 2) 1-Euro smooths what is left
   // 3) the CENTRE is clamped to the viewport, so the bubble can sit on the edge (half visible) but never leaves
-  const last3 = posHist.slice(-3);
-  const mid = (k) => (last3.length < 3 ? last3[last3.length - 1][k] : GazeCore.med(last3.map((q) => q[k])));
+  const recentEstimates = posHist.slice(-(MOBILE_FILTER ? 5 : 3));
+  const mid = (k) =>
+    recentEstimates.length < (MOBILE_FILTER ? 5 : 3)
+      ? recentEstimates[recentEstimates.length - 1][k]
+      : GazeCore.med(recentEstimates.map((q) => q[k]));
   targetX = clampPx(posX.filter(mid("x"), tNow), 0, window.innerWidth);
   targetY = clampPx(posY.filter(mid("y"), tNow), 0, window.innerHeight);
 
@@ -1540,9 +1586,11 @@ async function onResults(results) {
     (headOk || usingEyeFirstFallback) &&
     !outsideCalibratedRange(f.ox, eyeRange.ox) &&
     !outsideCalibratedRange(f.oy, eyeRange.oy);
-  if (window.examStarted && !gazeOk) {
+  const mobileTouchGrace =
+    MOBILE_GAZE_PLATFORM && tNow < mobileTouchGraceUntil;
+  if (window.examStarted && !gazeOk && !mobileTouchGrace) {
     if (!window.awayStartedAt) window.awayStartedAt = Date.now();
-  } else if (gazeOk && awayMs <= 0) {
+  } else if ((gazeOk || mobileTouchGrace) && awayMs <= 0) {
     window.awayStartedAt = 0;
   }
   if (!window.examStarted) {
@@ -1556,7 +1604,7 @@ async function onResults(results) {
   // Leaky timer instead of "reset on every good frame": a few jittery frames can't build a strike
   const dtG = Math.min(tNow - lastGazeT, 200);
   lastGazeT = tNow;
-  awayMs = gazeOk
+  awayMs = gazeOk || mobileTouchGrace
     ? Math.max(0, awayMs - dtG * AWAY_DECAY)
     : Math.min(awayMs + dtG, AWAY_MS * 1.6);
   window.GazeMetrics?.onState(gazeOk, awayMs);

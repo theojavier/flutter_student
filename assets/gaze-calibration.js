@@ -171,45 +171,47 @@ const trimmedRange = (a, p = 0.15) => {
 };
 
 // ---------------- plan ----------------
-const G = [0.08, 0.5, 0.92];
-const ORDER = [
-  [G[1], G[1]], // 0 center
-  [G[0], G[0]],
-  [G[2], G[0]],
-  [G[2], G[2]],
-  [G[0], G[2]], // corners
-  [G[1], G[0]],
-  [G[2], G[1]],
-  [G[1], G[2]],
-  [G[0], G[1]], // edges
-];
-const PLAN = ORDER.map((_, spot) => ({ spot }));
-
 const IS_MOBILE =
   examSetupMode || profileSetupMode
     ? examPlatform === "mobile"
     : detectedPlatform === "mobile";
+const GX = IS_MOBILE ? [0.05, 0.5, 0.95] : [0.08, 0.5, 0.92];
+const GY = [0.08, 0.5, 0.92];
+const ORDER = [
+  [GX[1], GY[1]], // 0 center
+  [GX[0], GY[0]],
+  [GX[2], GY[0]],
+  [GX[2], GY[2]],
+  [GX[0], GY[2]], // corners
+  [GX[1], GY[0]],
+  [GX[2], GY[1]],
+  [GX[1], GY[2]],
+  [GX[0], GY[1]], // edges
+];
+const PLAN = ORDER.map((_, spot) => ({ spot }));
 
 // Wait for each dot's glide before collecting, then keep collecting through the full ring.
 const GLIDE_MS = 550;
 const SETTLE = GLIDE_MS + 350;
-const RING_MS = IS_MOBILE ? 3000 : 2500;
-const EXTRA_MS = 2000;
+const RING_MS = IS_MOBILE ? 4000 : 2500;
+const EXTRA_MS = IS_MOBILE ? 4000 : 2000;
 const COLLECT_MIN = RING_MS;
 const COLLECT_MAX = RING_MS + EXTRA_MS;
 const FRAMES_PER_AVG = 3;
-const TARGET_SAMPLES = IS_MOBILE ? 8 : 10,
+const TARGET_SAMPLES = IS_MOBILE ? 12 : 10,
   MIN_SAMPLES = 5;
 const SMOOTH_TAU_MS = 350,
   BLINK_EAR = IS_MOBILE ? 0.09 : 0.14;
 const HEAD_COMP_DELAY_MS = 450,
   FUSE_TAU_MS = 750;
-const MAX_GAZE_MOVEMENT = IS_MOBILE ? 0.4 : 0.35; // VERY RELAXED: validate the AVERAGE, not individual frames
-const MAX_HEAD_MOVEMENT = IS_MOBILE ? 0.35 : 0.28; // VERY RELAXED: validate the AVERAGE
+const MAX_GAZE_MOVEMENT = IS_MOBILE ? 0.08 : 0.35;
+const MAX_HEAD_MOVEMENT = IS_MOBILE ? 0.18 : 0.28;
+const MOBILE_COLLECT_SKIP_MS = 1000;
 // Keep calibration and exam camera constraints aligned for each platform.
 const CAM_W = IS_MOBILE ? 1280 : 1920, CAM_H = IS_MOBILE ? 720 : 1080;
 const maxTrainPx = () =>
   Math.hypot(innerWidth, innerHeight) * (IS_MOBILE ? 0.22 : 0.15); // RELAXED: we're averaging multiple frames
+const softLooPx = () => Math.hypot(innerWidth, innerHeight) * 0.13;
 
 YoloEye.cfg.blinkEar = BLINK_EAR;
 YoloEye.cfg.headCompDelay = HEAD_COMP_DELAY_MS;
@@ -231,6 +233,8 @@ const cal = {
   maxInvalidAttempts: 3,
   modelFails: 0,
   restartAll: false,
+  softRetries: 0,
+  softBest: null,
   baselineGaze: null,
   baselineHead: null,
   lastFeedback: "",
@@ -468,8 +472,15 @@ function uiFrame(now) {
     if (u >= 1) glide = null;
   }
   if (cal.active) {
+    const targetSamplesReached = cal.samples.length >= TARGET_SAMPLES;
+    const progressDuration =
+      cal.phase === "collect" && !targetSamplesReached
+        ? COLLECT_MAX
+        : RING_MS;
     setRing(
-      cal.phase === "collect" ? Math.min(1, (now - cal.t0) / RING_MS) : 0,
+      cal.phase === "collect"
+        ? Math.min(1, (now - cal.t0) / progressDuration)
+        : 0,
     );
   }
   requestAnimationFrame(uiFrame);
@@ -510,6 +521,8 @@ function startCalibration() {
     rows: [],
     modelFails: 0,
     invalidAttempts: 0,
+    softRetries: 0,
+    softBest: null,
   });
   document.body.classList.add("calibrating");
   mainScreen.classList.add("hidden");
@@ -820,11 +833,14 @@ function validateGeometry(rows) {
   const aspect = Math.min(1, video.videoWidth / video.videoHeight); // portrait frame => narrower width FOV
   const tanHalf = Math.tan((LONG_SIDE_FOV_DEG * Math.PI) / 360) * aspect;
   const distCm = FACE_W_CM / (2 * scale * tanHalf);
-  const edge = G[2] - G[1]; // centre dot -> edge dot, as a fraction of the screen
+  const edgeX = GX[2] - GX[1];
+  const edgeY = GY[2] - GY[1];
   const expX =
-    EYE_PER_RAD_X * Math.atan((edge * innerWidth) / CSS_PX_PER_CM / distCm);
+    EYE_PER_RAD_X *
+    Math.atan((edgeX * innerWidth) / CSS_PX_PER_CM / distCm);
   const expY =
-    EYE_PER_RAD_Y * Math.atan((edge * innerHeight) / CSS_PX_PER_CM / distCm);
+    EYE_PER_RAD_Y *
+    Math.atan((edgeY * innerHeight) / CSS_PX_PER_CM / distCm);
 
   // ---- template: where each dot should sit relative to the centre dot ----
   const dbg = [];
@@ -833,8 +849,8 @@ function validateGeometry(rows) {
     const scaleX = Math.max(Math.abs(hx), expX),
       scaleY = Math.max(Math.abs(hy), expY);
     for (let s = 1; s < ORDER.length; s++) {
-      const ix = (ORDER[s][0] - G[1]) / edge,
-        iy = (ORDER[s][1] - G[1]) / edge; // -1, 0 or +1
+      const ix = (ORDER[s][0] - GX[1]) / edgeX,
+        iy = (ORDER[s][1] - GY[1]) / edgeY; // -1, 0 or +1
       const dX = by[s].ox - by[0].ox,
         dY = by[s].oy - by[0].oy;
       const devX = Math.abs(dX - ix * hx),
@@ -919,7 +935,7 @@ function finishCalibration() {
     ? getCalibrationRows(profileCalibrationBaseline)
     : null;
   const sessionId = `session-${Date.now()}`;
-  const currentSessionRows = aggregateCalibrationSession(
+  let currentSessionRows = aggregateCalibrationSession(
     currentRows,
     sessionId,
   );
@@ -964,11 +980,44 @@ function finishCalibration() {
     };
   };
 
-  const currentCandidate = evaluateCandidate("current", currentSessionRows);
+  let currentCandidate = evaluateCandidate("current", currentSessionRows);
   if (!currentCandidate.check.valid) {
-    console.warn("Final model rejected:", currentCandidate.check.reason);
-    failAttempt(currentCandidate.check.reason, true);
-    return;
+    if (IS_MOBILE && cal.softBest) {
+      console.warn(
+        "Retry calibration failed validation; using the previous valid attempt.",
+      );
+      currentCandidate = cal.softBest.candidate;
+      currentSessionRows = cal.softBest.rows;
+      cal.softBest = null;
+    } else {
+      console.warn("Final model rejected:", currentCandidate.check.reason);
+      failAttempt(currentCandidate.check.reason, true);
+      return;
+    }
+  }
+
+  if (IS_MOBILE) {
+    const looPx = currentCandidate.errs[currentCandidate.best].loo;
+    if (looPx > softLooPx() && cal.softRetries < 1) {
+      cal.softRetries++;
+      cal.softBest = {
+        candidate: currentCandidate,
+        rows: currentSessionRows,
+        loo: looPx,
+      };
+      failAttempt(
+        `Accuracy was ${looPx.toFixed(0)}px, lower than ideal.\nProp the phone steady at eye level and look right at each dot. Starting over once.`,
+        true,
+      );
+      return;
+    }
+    if (cal.softBest) {
+      if (cal.softBest.loo < looPx) {
+        currentCandidate = cal.softBest.candidate;
+        currentSessionRows = cal.softBest.rows;
+      }
+      cal.softBest = null;
+    }
   }
 
   let selected = currentCandidate;
@@ -1154,6 +1203,20 @@ const calibrationTimer = setInterval(() => {
     const ringDone = t >= COLLECT_MIN;
     const enough = cal.samples.length >= TARGET_SAMPLES;
     if (ringDone && (enough || t >= COLLECT_MAX)) {
+      if (IS_MOBILE) {
+        const gazeRange = Math.max(
+          trimmedRange(cal.samples.map((sample) => sample.ox)),
+          trimmedRange(cal.samples.map((sample) => sample.oy)),
+        );
+        const headRange = Math.max(
+          range(cal.samples.map((sample) => sample.yaw)),
+          range(cal.samples.map((sample) => sample.pitch)),
+          range(cal.samples.map((sample) => sample.roll)),
+        );
+        console.log(
+          `[dot ${st.spot}] gaze range ${gazeRange.toFixed(3)} | head range ${headRange.toFixed(2)} | n=${cal.samples.length}`,
+        );
+      }
       const v = validateSamples(cal.samples);
       if (!v.valid) {
         console.warn("Samples rejected:", v.reason);
@@ -1948,6 +2011,12 @@ fm.onResults(async (res) => {
     const s = smooth(raw, performance.now());
 
     if (cal.active && cal.phase === "collect") {
+      if (
+        IS_MOBILE &&
+        performance.now() - cal.t0 < MOBILE_COLLECT_SKIP_MS
+      ) {
+        return;
+      }
       checkRealtimeMovement(s);
       cal.frameBuf.push({ ...s });
       if (cal.frameBuf.length === FRAMES_PER_AVG) {
