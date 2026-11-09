@@ -4793,6 +4793,13 @@
         inset: auto 0 0;
       }
 
+      @media (max-width: 900px) and (pointer: coarse) {
+        #examCard {
+          width: min(80vw, 560px);
+          margin-inline: auto;
+        }
+      }
+
       @media (max-width: 599px) {
         #examContent .options[data-qtype="multiple-choice"] {
           grid-template-columns: minmax(0, 1fr);
@@ -5337,9 +5344,9 @@
         faceIcon.textContent = "⚠";
       }
     </script>
-    <script src="yolo-eye.js?v=5"></script>
-    <script src="exam-gaze-block.js?v=17"></script>
-    <script src="gaze-metrics.js?v=5"></script>
+    <script src="yolo-eye.js"></script>
+    <script src="exam-gaze-block.js"></script>
+    <script src="gaze-metrics.js"></script>
     <script>
       const GATE_DELAY_MS = 5000;
       const GATE_DEFAULT_TEXT =

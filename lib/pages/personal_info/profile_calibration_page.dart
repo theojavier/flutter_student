@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
+import '../../utils/string_keyed_map.dart';
 import '../../widgets/profile_gaze_calibration_view.dart';
 
 class ProfileCalibrationPage extends StatefulWidget {
@@ -45,7 +46,7 @@ class _ProfileCalibrationPageState extends State<ProfileCalibrationPage> {
       final result = await functions.httpsCallable('getGazeCalibration').call({
         'platform': _platform,
       });
-      final response = result.data as Map<String, dynamic>?;
+      final response = decodeStringKeyedMap(result.data);
       final calibration = response?['calibrationData'];
       if (!mounted) return;
       setState(() {
@@ -140,7 +141,7 @@ class _ProfileCalibrationPageState extends State<ProfileCalibrationPage> {
 
       if (!mounted) return;
 
-      final responseData = result.data as Map<String, dynamic>?;
+      final responseData = decodeStringKeyedMap(result.data);
       final success = responseData?['success'] == true;
 
       if (success) {

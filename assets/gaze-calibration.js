@@ -196,6 +196,7 @@ const RING_MS = IS_MOBILE ? 4000 : 2500;
 const EXTRA_MS = IS_MOBILE ? 4000 : 2000;
 const COLLECT_MIN = RING_MS;
 const COLLECT_MAX = RING_MS + EXTRA_MS;
+const MOBILE_FIRST_DOT_EXTRA_MS = 4000;
 const FRAMES_PER_AVG = 3;
 const TARGET_SAMPLES = IS_MOBILE ? 12 : 10,
   MIN_SAMPLES = 5;
@@ -415,7 +416,7 @@ function failAttempt(reason, restartAll = false) {
   showCalibrationError(reason);
 }
 
-// Dot glide and progress ring are driven by requestAnimationFrame.
+// Dot glide is driven by requestAnimationFrame; the ring uses a browser animation.
 const RING_R = 20.5,
   RING_C = 2 * Math.PI * RING_R;
 
@@ -430,8 +431,29 @@ dot.insertAdjacentHTML(
   </svg>`,
 );
 const ringArc = document.getElementById("ringArc");
-const setRing = (p) =>
-  ringArc.setAttribute("stroke-dashoffset", RING_C * (1 - p));
+let ringAnimation = null;
+
+function resetRing() {
+  ringAnimation?.cancel();
+  ringAnimation = null;
+  ringArc.setAttribute("stroke-dashoffset", RING_C);
+}
+
+function startRingAnimation() {
+  ringAnimation?.cancel();
+  ringArc.setAttribute("stroke-dashoffset", RING_C);
+  ringAnimation = ringArc.animate(
+    [
+      { strokeDashoffset: RING_C },
+      { strokeDashoffset: 0 },
+    ],
+    {
+      duration: COLLECT_MIN,
+      easing: "linear",
+      fill: "forwards",
+    },
+  );
+}
 
 const ease = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
 let pos = null;
@@ -467,23 +489,12 @@ function uiFrame(now) {
     );
     if (u >= 1) glide = null;
   }
-  if (cal.active) {
-    const targetSamplesReached = cal.samples.length >= TARGET_SAMPLES;
-    const progressDuration =
-      cal.phase === "collect" && !targetSamplesReached
-        ? COLLECT_MAX
-        : RING_MS;
-    setRing(
-      cal.phase === "collect"
-        ? Math.min(1, (now - cal.t0) / progressDuration)
-        : 0,
-    );
-  }
   requestAnimationFrame(uiFrame);
 }
 requestAnimationFrame(uiFrame);
 
 function beginDot() {
+  resetRing();
   const st = PLAN[cal.i];
   [cal.fx, cal.fy] = ORDER[st.spot];
   placeDot();
@@ -1188,16 +1199,21 @@ const calibrationTimer = setInterval(() => {
   if (!cal.active) return;
   const st = PLAN[cal.i];
   const t = performance.now() - cal.t0;
+  const maxCollectMs =
+    IS_MOBILE && st.spot === 0
+      ? COLLECT_MAX + MOBILE_FIRST_DOT_EXTRA_MS
+      : COLLECT_MAX;
 
   if (cal.phase === "settle" && t > SETTLE) {
     cal.phase = "collect";
     cal.t0 = performance.now();
+    startRingAnimation();
     cal.samples = [];
     cal.frameBuf = [];
   } else if (cal.phase === "collect") {
     const ringDone = t >= COLLECT_MIN;
     const enough = cal.samples.length >= TARGET_SAMPLES;
-    if (ringDone && (enough || t >= COLLECT_MAX)) {
+    if (ringDone && (enough || t >= maxCollectMs)) {
       if (IS_MOBILE) {
         const gazeRange = Math.max(
           trimmedRange(cal.samples.map((sample) => sample.ox)),
@@ -2005,10 +2021,10 @@ fm.onResults(async (res) => {
     const s = smooth(raw, performance.now());
 
     if (cal.active && cal.phase === "collect") {
-      if (
-        IS_MOBILE &&
-        performance.now() - cal.t0 < MOBILE_COLLECT_SKIP_MS
-      ) {
+      const currentSpot = PLAN[cal.i]?.spot;
+      const sampleSkipMs =
+        IS_MOBILE && currentSpot === 0 ? 0 : MOBILE_COLLECT_SKIP_MS;
+      if (performance.now() - cal.t0 < sampleSkipMs) {
         return;
       }
       checkRealtimeMovement(s);

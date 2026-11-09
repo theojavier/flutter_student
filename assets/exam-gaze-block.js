@@ -143,7 +143,8 @@ function drawFaceMesh(ctx, landmarks, width, height) {
 }
 
 const BLINK_EAR = 0.11; // Match YoloEye.cfg.blinkEar to prevent freeze-then-jump
-const AWAY_MS = 700; // must be outside the safe zone this long before a strike
+const MOBILE_FILTER = window.__examIsMobilePlatform === true;
+const AWAY_MS = MOBILE_FILTER ?1600 : 1000; // must be outside the safe zone this long before a strike
 const HEAD_LIMIT_RAD = 0.7; 
 
 const BLINK_MAX_MS = 1500; 
@@ -257,12 +258,11 @@ class PxFilter {
     return this.x;
   }
 }
-const MOBILE_FILTER = window.__examIsMobilePlatform === true;
 const posX = MOBILE_FILTER
-  ? new PxFilter(0.18, 0.0008)
+  ? new PxFilter(0.14, 0.0005)
   : new PxFilter();
 const posY = MOBILE_FILTER
-  ? new PxFilter(0.18, 0.0008)
+  ? new PxFilter(0.1, 0.00025)
   : new PxFilter();
 const posHist = []; // raw (unfiltered) screen estimates of the last SPREAD_WIN_MS
 let usingEyeFirstFallbackX = false;
@@ -285,10 +285,18 @@ let lastGazeT = performance.now();
 let awayMs = 0;       // leaky "time spent outside": jitter in and out cancels, real looking away builds up
 const Y_BLIP_PX = 140;       // was 90
 const Y_CONFIRM_FRAMES = 2;
+const Y_STILL_WINDOW_MS = 700;
+const Y_STILL_MIN_MS = 500;
+const Y_STILL_RANGE_PX = 36;
+const Y_STILL_UNLOCK_PX = 48;
+const Y_STILL_CONFIRM_FRAMES = 3;
 let yStable = null;
 let yCandidate = null;
 let yCandidateCount = 0;
 let yCandidateDirection = 0;
+const yStillSamples = [];
+let yStillAnchor = null;
+let yStillCandidateCount = 0;
 
 function filterYBlips(y) {
   if (!Number.isFinite(y)) return y;
@@ -329,6 +337,54 @@ function resetYBlipFilter() {
   yCandidate = null;
   yCandidateCount = 0;
   yCandidateDirection = 0;
+  yStillSamples.length = 0;
+  yStillAnchor = null;
+  yStillCandidateCount = 0;
+}
+
+function stabilizeY(now, y, rect) {
+  if (!Number.isFinite(y)) return y;
+
+  if (yStillAnchor !== null) {
+    const anchorInsideCard =
+      yStillAnchor >= rect.top && yStillAnchor <= rect.bottom;
+    const gazeOutsideCard = y < rect.top || y > rect.bottom;
+    if (MOBILE_FILTER && anchorInsideCard && gazeOutsideCard) {
+      yStillAnchor = null;
+      yStillCandidateCount = 0;
+      yStillSamples.length = 0;
+      return y;
+    }
+
+    if (Math.abs(y - yStillAnchor) <= Y_STILL_UNLOCK_PX) {
+      yStillCandidateCount = 0;
+      return yStillAnchor;
+    }
+
+    yStillCandidateCount++;
+    if (yStillCandidateCount < Y_STILL_CONFIRM_FRAMES) return yStillAnchor;
+    yStillAnchor = null;
+    yStillCandidateCount = 0;
+    yStillSamples.length = 0;
+    return y;
+  }
+
+  yStillSamples.push({ t: now, y });
+  while (yStillSamples.length && now - yStillSamples[0].t > Y_STILL_WINDOW_MS)
+    yStillSamples.shift();
+
+  if (
+    yStillSamples.length >= 5 &&
+    now - yStillSamples[0].t >= Y_STILL_MIN_MS
+  ) {
+    const values = yStillSamples.map((sample) => sample.y);
+    if (Math.max(...values) - Math.min(...values) <= Y_STILL_RANGE_PX) {
+      yStillAnchor = GazeCore.med(values);
+      yStillCandidateCount = 0;
+      return yStillAnchor;
+    }
+  }
+  return y;
 }
 
 const biasX = GAZE_BIAS_X * window.innerWidth;
@@ -508,12 +564,12 @@ function recordSpread(now, x, y) {
   return distances[Math.ceil(CLOUD_PCT * n) - 1];
 }
 
-const EXIT_WIN = MOBILE_FILTER ? 6 : 4;
-const EXIT_VOTES = MOBILE_FILTER ? 5 : 3;
-const EXIT_MIN_MS = MOBILE_FILTER ? 800 : 300;
+const EXIT_WIN = 4;
+const EXIT_VOTES = 3;
+const EXIT_MIN_MS = MOBILE_FILTER ? 600 : 300;
 const JUMP_PX = 220;
-const JUMP_EXTRA_MS = 250;
-const EXIT_INSET = 3;
+const JUMP_EXTRA_MS = MOBILE_FILTER ? 500 : 250;
+const EXIT_INSET = MOBILE_FILTER ? 12 : 3;
 let exitOutSince = 0;
 let exitOpen = false;
 let exitNeedMs = EXIT_MIN_MS;
@@ -558,8 +614,8 @@ function exitGate(rect, now, x, y) {
       .slice(-EXIT_WIN)
       .filter((point) => !inside(point.x, point.y)).length;
     if (
-      outsideVotes >= EXIT_VOTES &&
-      now - exitOutSince >= exitNeedMs
+      now - exitOutSince >= exitNeedMs &&
+      (MOBILE_FILTER || outsideVotes >= EXIT_VOTES)
     ) {
       exitOpen = true;
     }
@@ -1568,17 +1624,20 @@ async function onResults(results) {
   usingEyeFirstFallbackY = eyeFirstFallbackY;
   estimateX =
     estimateX + (eyeEstimateX - estimateX) * fallbackBlendX;
-  estimateY = filterYBlips(
+  const rawEstimateY = filterYBlips(
     fullEstimateY + (eyeEstimateY - fullEstimateY) * fallbackBlendY,
   );
+  estimateY = MOBILE_FILTER
+    ? stabilizeY(tNow, rawEstimateY, rect)
+    : rawEstimateY;
 
   const spread = recordSpread(tNow, estimateX, estimateY);
   // 1) median of the last 3 gaze estimates removes one-frame "teleports"
 
   // 3) the CENTRE is clamped to the viewport, so the bubble can sit on the edge (half visible) but never leaves
-  const recentEstimates = posHist.slice(-(MOBILE_FILTER ? 5 : 3));
+  const recentEstimates = posHist.slice(-(MOBILE_FILTER ? 7 : 3));
   const mid = (k) =>
-    recentEstimates.length < (MOBILE_FILTER ? 5 : 3)
+    recentEstimates.length < (MOBILE_FILTER ? 7 : 3)
       ? recentEstimates[recentEstimates.length - 1][k]
       : GazeCore.med(recentEstimates.map((q) => q[k]));
   targetX = clampPx(posX.filter(mid("x"), tNow), 0, window.innerWidth);
@@ -1596,15 +1655,24 @@ async function onResults(results) {
     const allowed = exitGate(rect, tNow, targetX, targetY);
     targetX = allowed.x;
     targetY = allowed.y;
-    const held = holdBubbleWhileIrisStill(
-      tNow,
-      f,
-      headDev,
-      targetX,
-      targetY,
-    );
-    targetX = held.x;
-    targetY = held.y;
+    const targetOutsideCard =
+      targetX < rect.left ||
+      targetX > rect.right ||
+      targetY < rect.top ||
+      targetY > rect.bottom;
+    if (MOBILE_FILTER && targetOutsideCard) {
+      resetIrisHold();
+    } else {
+      const held = holdBubbleWhileIrisStill(
+        tNow,
+        f,
+        headDev,
+        targetX,
+        targetY,
+      );
+      targetX = held.x;
+      targetY = held.y;
+    }
   }
   window.GazeMetrics?.onGaze(tNow, estimateX, estimateY, targetX, targetY);
   if (window.SHOW_GAZE_JITTER_METER === true) {

@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../helpers/SecureStorageHelper.dart';
 import '../../widgets/pull_to_refresh_shell.dart';
+import '../../utils/string_keyed_map.dart';
 import 'profile_calibration_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -110,7 +113,13 @@ class _ProfilePageState extends State<ProfilePage> {
 
       if (!mounted) return;
 
-      final data = result.data as Map<String, dynamic>?;
+      final data = decodeStringKeyedMap(result.data);
+      for (final platform in ['pc', 'mobile']) {
+        final platformData = data?[platform];
+        if (platformData != null) {
+          data![platform] = decodeStringKeyedMap(platformData);
+        }
+      }
       setState(() {
         _calibrationStatus = data;
         _loadingCalibrationStatus = false;
@@ -459,8 +468,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Widget _calibrationStatusCard(String platform) {
     final platformKey = platform.toLowerCase();
-    final statusData =
-        _calibrationStatus?[platformKey] as Map<String, dynamic>?;
+    final statusData = decodeStringKeyedMap(_calibrationStatus?[platformKey]);
 
     final bool isCalibrated = statusData?['calibrated'] == true;
     final bool needsRecalibration = statusData?['needsRecalibration'] == true;
@@ -578,7 +586,10 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  void _startCalibration() async {
+  Future<void> _startCalibration() async {
+    if (!await _requestCalibrationCameraPermission()) return;
+    if (!mounted) return;
+
     _canCloseCalibration = false;
     final result = await showDialog<bool>(
       context: context,
@@ -606,6 +617,71 @@ class _ProfilePageState extends State<ProfilePage> {
     // If calibration succeeded, reload status
     if (result == true) {
       _loadCalibrationStatus();
+    }
+  }
+
+  Future<bool> _requestCalibrationCameraPermission() async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return true;
+    }
+
+    try {
+      final status = await Permission.camera.request();
+      if (status.isGranted) return true;
+      if (!mounted) return false;
+
+      if (status.isPermanentlyDenied) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Camera permission required'),
+            content: const Text(
+              'Allow camera access in your device settings to calibrate gaze.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  Navigator.pop(dialogContext);
+                  final opened = await openAppSettings();
+                  if (!opened && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Could not open app settings.'),
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Open settings'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Camera access is needed to start gaze calibration.'),
+          ),
+        );
+      }
+      return false;
+    } catch (error) {
+      debugPrint(
+        '[profile-calibration] Camera permission request failed: $error',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not request camera access. Please try again.'),
+          ),
+        );
+      }
+      return false;
     }
   }
 
