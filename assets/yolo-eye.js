@@ -290,8 +290,14 @@ const YoloEye = (() => {
     cctx.setTransform(M[0], M[3], M[1], M[4], M[2], M[5]);
     cctx.drawImage(V, 0, 0, V.videoWidth || V.width, V.videoHeight || V.height);
     const d = cctx.getImageData(0, 0, S, S).data, n = S * S, t = new Float32Array(3 * n);
-    if (NHWC) for (let i = 0; i < n; i++) { t[3 * i] = d[4 * i] / 255; t[3 * i + 1] = d[4 * i + 1] / 255; t[3 * i + 2] = d[4 * i + 2] / 255; }
-    else for (let i = 0; i < n; i++) { t[i] = d[4 * i] / 255; t[n + i] = d[4 * i + 1] / 255; t[2 * n + i] = d[4 * i + 2] / 255; }
+    if (NHWC) for (let i = 0; i < n; i++) {
+      const gray = (0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2]) / 255;
+      t[3 * i] = gray; t[3 * i + 1] = gray; t[3 * i + 2] = gray;
+    }
+    else for (let i = 0; i < n; i++) {
+      const gray = (0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2]) / 255;
+      t[i] = gray; t[n + i] = gray; t[2 * n + i] = gray;
+    }
     return t;
   }
   let inferenceSeq = 0;

@@ -26,7 +26,6 @@
       import {
         getFirestore,
         collection,
-        getDocs,
         doc,
         setDoc,
         getDoc,
@@ -225,6 +224,7 @@
 
       const MAX_STRIKES = 50;
       const STRIKE_LIMIT_DELAY_S = 5;
+      let examStrikeLimit = MAX_STRIKES;
       let strikeLimitTriggered = false;
 
       window.renderStrikes = function (count, confirmed = true) {
@@ -238,12 +238,18 @@
         window.cheatingCount = n;
         el.textContent = `Strikes: ${n}`;
         el.classList.toggle("has-strikes", n > 0);
-        if (confirmed && n > MAX_STRIKES) triggerStrikeLimit();
+        if (confirmed && n > examStrikeLimit) triggerStrikeLimit();
       };
 
       async function syncStrikesFromServer(examId) {
         try {
           const { data } = await getStrikeCountFn({ examId });
+          examStrikeLimit =
+            Number.isInteger(data.strikeLimit) &&
+            data.strikeLimit >= 1 &&
+            data.strikeLimit <= MAX_STRIKES
+              ? data.strikeLimit
+              : MAX_STRIKES;
           window.renderStrikes(data.cheatingCount);
           return true;
         } catch (err) {
@@ -394,6 +400,16 @@
         }
       });
       let statusUnsub = null;
+      let teacherStopDetected = false;
+      let teacherStopHandling = false;
+
+      function beginTeacherStopHandling() {
+        teacherStopDetected = true;
+        if (teacherStopHandling) return;
+        teacherStopHandling = true;
+        window.hasSubmitted = true;
+        void handleTeacherStop();
+      }
 
       function listenForStatusChanges(examId) {
         if (statusUnsub) return;
@@ -404,10 +420,9 @@
             if (
               snap.exists() &&
               snap.data().currentIndex === "stopped" &&
-              !window.hasSubmitted
+              !teacherStopDetected
             ) {
-              window.hasSubmitted = true;
-              handleTeacherStop();
+              beginTeacherStopHandling();
             }
           });
         };
@@ -476,10 +491,13 @@
         document.getElementById("answermodelneeded").style.display = "none";
         document.getElementById("stopModal").style.display = "block";
         const failed = state === "failed";
-        document.getElementById("stopStatus").style.display = failed
-          ? "none"
-          : "flex";
+        const submitted = state === "submitted";
+        document.getElementById("stopStatus").style.display =
+          failed || submitted ? "none" : "flex";
         document.getElementById("stopFailed").style.display = failed
+          ? "block"
+          : "none";
+        document.getElementById("stopComplete").style.display = submitted
           ? "block"
           : "none";
       }
@@ -487,6 +505,9 @@
       function showStrikeLimitState(state) {
         document.getElementById("confirmModal").style.display = "none";
         document.getElementById("answermodelneeded").style.display = "none";
+        document.getElementById("strikeLimitMsg").textContent =
+          `You have gone over the limit of ${examStrikeLimit} strikes. ` +
+          "Your exam will be submitted automatically and marked as incomplete.";
         document.getElementById("strikeLimitModal").style.display = "block";
         document.getElementById("strikeLimitCountdown").style.display =
           state === "countdown" ? "flex" : "none";
@@ -728,6 +749,15 @@
           clearTimeout(deviceModeTimeout);
         }
 
+        const studentResultSnap = await getDoc(getStudentDocRef(examId));
+        if (
+          studentResultSnap.exists() &&
+          studentResultSnap.data().currentIndex === "stopped"
+        ) {
+          beginTeacherStopHandling();
+          return;
+        }
+
         if (wasUnloading) {
           window.isReloadSession = true;
           sessionStorage.removeItem("is_unloading");
@@ -810,7 +840,13 @@
           const snap = await getDoc(resultRef);
 
           if (snap.exists()) {
-            const status = snap.data().status;
+            const studentData = snap.data();
+            if (studentData.currentIndex === "stopped") {
+              beginTeacherStopHandling();
+              return;
+            }
+
+            const status = studentData.status;
             if (status === "completed" || status === "incomplete") {
               // Already finished — redirect to result page
               window.sendToHost(
@@ -2011,6 +2047,12 @@
           );
           try {
             const data = await sendStrike(examId, crypto.randomUUID());
+            examStrikeLimit =
+              Number.isInteger(data.strikeLimit) &&
+              data.strikeLimit >= 1 &&
+              data.strikeLimit <= MAX_STRIKES
+                ? data.strikeLimit
+                : MAX_STRIKES;
             window.renderStrikes(data.cheatingCount);
           } catch (err) {
             console.warn("Strike not accepted:", err.code || err.message);
@@ -2235,15 +2277,23 @@
         window.cheatCaptureStream = null;
         window.disposeExamTracking?.();
 
-        // Notify parent window or redirect
-        console.log("Sending finishExam message to parent window");
-
-        // Send message immediately AND after a short delay to ensure Flutter receives it
         const message = {
           action: "finishExam",
           examId: examId,
         };
 
+        if (teacherStopDetected) {
+          showStopModal("submitted");
+          document.getElementById("stopContinueBtn").onclick = () => {
+            window.sendToHost(message);
+          };
+          return;
+        }
+
+        // Notify parent window or redirect
+        console.log("Sending finishExam message to parent window");
+
+        // Send message immediately AND after a short delay to ensure Flutter receives it
         if (window.parent && window.parent !== window) {
           window.sendToHost(message);
           console.log("First message sent");
@@ -2598,21 +2648,8 @@
               return;
             }
 
-            try {
-              const examId = window.examData.examId;
-              const studentId = window.examData.studentId;
-              const studentCollection = getStudentDocRef(examId);
-              await setDoc(
-                studentCollection,
-                { currentIndex: currentQuestionIndex + 1 },
-                { merge: true },
-              );
-            } catch (err) {
-              console.error("Failed to save currentIndex:", err);
-            }
-
-            currentQuestionIndex++;
-            showQuestion(currentQuestionIndex);
+            pendingQuestionIndex = currentQuestionIndex + 1;
+            await window.reloadExamQuestions();
           };
         }
         // Submit button (last question)
@@ -2660,140 +2697,66 @@
         }
       }
 
+      function showQuestionLoading() {
+        const btn = document.getElementById("nextQuestion");
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Loading…";
+        }
+      }
+
+      async function fetchExamQuestion(examId, index) {
+        showQuestionLoading();
+        const getQuestion = httpsCallable(functions, "getExamQuestion", {
+          timeout: 30000,
+        });
+        const { data } = await getQuestion({ examId, index });
+        if (
+          !data?.question ||
+          data.index !== index ||
+          !Number.isInteger(data.totalQuestions) ||
+          data.totalQuestions <= index
+        ) {
+          throw new Error("The server returned an invalid question response.");
+        }
+
+        if (
+          !Array.isArray(window.questions) ||
+          window.questions.length !== data.totalQuestions
+        ) {
+          window.questions = new Array(data.totalQuestions);
+        }
+        window.questions[index] = data.question;
+        window.answers = window.answers || {};
+        if (data.savedAnswer !== null && data.savedAnswer !== undefined) {
+          window.answers[data.question.id] = data.savedAnswer;
+        }
+        window.matchingPool = Array.isArray(data.matchingPool)
+          ? data.matchingPool
+          : [];
+        return data.question;
+      }
+
       async function loadExamQuestions(examId) {
         if (!examId) {
-          console.error("loadExamQuestions called with null examId");
-          return false;
+          throw new Error("loadExamQuestions called with null examId");
         }
 
-        // Reset UI placeholders
-        document.getElementById("examContent").innerHTML = `
-    <h2>Loading…</h2>
-    <div class="question"><p>Loading…</p></div>
-  `;
-
-        try {
-          //Fetch all question docs
-          const questionsCol = collection(db, "exams", examId, "questions");
-          const snapshot = await getDocs(questionsCol);
-
-          if (snapshot.empty) {
-            console.error("No questions found in Firestore for exam:", examId);
-            showQuestionsError();
-            return false;
-          }
-
-          const rawQuestions = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-          }));
-          const groups = {
-            "true-false": [],
-            "multiple-choice": [],
-            matching: [],
-          };
-
-          // Put each question into its group
-          rawQuestions.forEach((q) => {
-            const t = (q.type || "").toLowerCase();
-            if (groups[t]) groups[t].push(q);
-          });
-
-          // Shuffle each group independently
-          Object.keys(groups).forEach((type) => {
-            groups[type] = shuffleArray(groups[type]);
-          });
-
-          // Build final grouped+random order
-          const sortedRandom = [
-            ...groups["true-false"],
-            ...groups["multiple-choice"],
-            ...groups["matching"],
-          ];
-
-          const finalQuestions = sortedRandom;
-
-          const resultRef = getStudentDocRef(examId);
-          const resultSnap = await getDoc(resultRef);
-
-          let orderedIds;
-          if (resultSnap.exists() && resultSnap.data().questionOrder) {
-            orderedIds = resultSnap.data().questionOrder;
-          } else {
-            orderedIds = finalQuestions.map((q) => q.id);
-            await setDoc(
-              resultRef,
-              { questionOrder: orderedIds },
-              { merge: true },
-            );
-          }
-          const orderedQuestions = orderedIds
-            .map((qid, idx) => {
-              const q = rawQuestions.find((rq) => rq.id === qid);
-              if (!q) {
-                console.warn("Question ID not found:", qid);
-                return null;
-              }
-              return {
-                ...q,
-                index: idx,
-                questionText: q.questionText ?? q.text ?? "",
-                type: (q.type ?? q.kind ?? "multiple-choice").toLowerCase(),
-                options: Array.isArray(q.options)
-                  ? q.options
-                  : Array.isArray(q.choices)
-                    ? q.choices
-                    : [],
-              };
-            })
-            .filter(Boolean);
-
-          if (!orderedQuestions.length) {
-            console.error("No questions matched the saved question order.");
-            window.questions = [];
-            showQuestionsError();
-            return false;
-          }
-
-          window.questions = orderedQuestions;
-          window.answers = window.answers || {};
-
-          //Build matching pool now that window.questions exists
-          window.matchingPool = Array.from(
-            new Set(
-              window.questions
-                .filter(
-                  (q) => q.type === "matching" && Array.isArray(q.options),
-                )
-                .flatMap((q) => q.options),
-            ),
-          );
-
-          if (
-            resultSnap.exists() &&
-            resultSnap.data().currentIndex !== undefined
-          ) {
-            currentQuestionIndex = resultSnap.data().currentIndex;
-            console.log("Restored currentIndex:", currentQuestionIndex);
-          } else {
-            console.log("ℹNo currentIndex saved, starting at 0");
-          }
-
-          try {
-            showQuestion(currentQuestionIndex);
-            renderNextOrSubmitButton();
-          } catch (err) {
-            console.error("showQuestion/render failed:", err);
-            window.questions = [];
-            showQuestionsError();
-            return false;
-          }
-          return true;
-        } catch (err) {
-          console.error("loadExamQuestions failed:", err);
-          showQuestionsError();
-          return false;
+        const resultSnap = await getDoc(getStudentDocRef(examId));
+        if (!resultSnap.exists()) {
+          throw new Error("The exam progress record is missing.");
         }
+        const savedIndex = resultSnap.data().currentIndex;
+        currentQuestionIndex =
+          savedIndex === undefined ? 0 : Number(savedIndex);
+        if (!Number.isInteger(currentQuestionIndex) || currentQuestionIndex < 0) {
+          throw new Error("The saved exam position is invalid.");
+        }
+
+        await fetchExamQuestion(examId, currentQuestionIndex);
+        showQuestion(currentQuestionIndex);
+        renderNextOrSubmitButton();
+        return true;
       }
 
       function showQuestionsError() {
@@ -2812,6 +2775,7 @@
 
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       let questionsLoading = false;
+      let pendingQuestionIndex = null;
 
       window.reloadExamQuestions = async function ({ manual = false } = {}) {
         const examId = window.examData?.examId;
@@ -2829,7 +2793,10 @@
           return true;
         }
 
-        if (window.questions?.length) {
+        if (
+          pendingQuestionIndex === null &&
+          window.questions?.[currentQuestionIndex]
+        ) {
           if (manual) {
             try {
               showQuestion(currentQuestionIndex);
@@ -2846,7 +2813,30 @@
         questionsLoading = true;
         try {
           for (let attempt = 1; attempt <= 4; attempt++) {
-            if (await loadExamQuestions(examId)) return true;
+            try {
+              if (pendingQuestionIndex !== null) {
+                const nextIndex = pendingQuestionIndex;
+                await fetchExamQuestion(examId, nextIndex);
+                await setDoc(
+                  getStudentDocRef(examId),
+                  { currentIndex: nextIndex },
+                  { merge: true },
+                );
+                currentQuestionIndex = nextIndex;
+                pendingQuestionIndex = null;
+                showQuestion(currentQuestionIndex);
+                renderNextOrSubmitButton();
+                return true;
+              }
+
+              return await loadExamQuestions(examId);
+            } catch (err) {
+              console.error(`Question load attempt ${attempt} failed:`, err);
+              if (attempt === 4) {
+                showQuestionsError();
+                return false;
+              }
+            }
             if (attempt < 4) {
               const backoff = Math.min(1000 * 2 ** attempt, 8000);
               await sleep(backoff + Math.random() * 1000);
@@ -5127,6 +5117,10 @@
           <p>We couldn't submit yet. Check your connection and try again.</p>
           <button id="stopRetryBtn" class="btn">Try Again</button>
         </div>
+        <div id="stopComplete" style="display: none">
+          <p>Your instructor stopped this exam. Your answers have been submitted.</p>
+          <button id="stopContinueBtn" class="btn">Continue</button>
+        </div>
       </div>
     </div>
     <div
@@ -5141,8 +5135,8 @@
         <div class="stop-icon" aria-hidden="true">!</div>
         <h3 id="strikeLimitTitle">Strike limit exceeded</h3>
         <p id="strikeLimitMsg">
-          You have gone over the maximum of 50 strikes. Your exam will be
-          submitted automatically and marked as incomplete.
+          You have gone over the exam strike limit. Your exam will be submitted
+          automatically and marked as incomplete.
         </p>
         <div id="strikeLimitCountdown" class="stop-status">
           <span>Submitting in <b id="strikeLimitSeconds">5</b> seconds…</span>
@@ -5746,13 +5740,6 @@
 
         html += `</div></div>`;
         return html;
-      }
-
-      function shuffleArray(arr) {
-        return arr
-          .map((value) => ({ value, sort: Math.random() }))
-          .sort((a, b) => a.sort - b.sort)
-          .map(({ value }) => value);
       }
 
       window.addEventListener("resize", () => {

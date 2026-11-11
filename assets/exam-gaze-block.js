@@ -144,7 +144,7 @@ function drawFaceMesh(ctx, landmarks, width, height) {
 
 const BLINK_EAR = 0.11; // Match YoloEye.cfg.blinkEar to prevent freeze-then-jump
 const MOBILE_FILTER = window.__examIsMobilePlatform === true;
-const AWAY_MS = MOBILE_FILTER ?1600 : 1000; // must be outside the safe zone this long before a strike
+const AWAY_MS = MOBILE_FILTER ? 5000 : 3000;
 const HEAD_LIMIT_RAD = 0.7; 
 
 const BLINK_MAX_MS = 1500; 
@@ -239,7 +239,7 @@ const SPREAD_FULL_PX = 140;    // 80%-cloud radius (px) at which the bubble/rule
 const SPREAD_MIN_N = 5;
 const CLOUD_PCT = 0.8;
 const HEAD_R_GAIN = 120;       // px of extra radius per radian of head turn (looks only, never loosens the rule)
-const AWAY_DECAY = 0.7;        // time outside counts 1x, time inside pays it back at 0.7x
+// const AWAY_DECAY = 0.7;     // Previous behavior: good gaze reduced away time gradually.
 const HEAD_EYE_FALLBACK_MIN_RAD = 0.15; // use eyes alone if head motion pushes the estimate outside the exam area
  
 const clampPx = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1713,7 +1713,7 @@ async function onResults(results) {
     MOBILE_GAZE_PLATFORM && tNow < mobileTouchGraceUntil;
   if (window.examStarted && !gazeOk && !mobileTouchGrace) {
     if (!window.awayStartedAt) window.awayStartedAt = Date.now();
-  } else if ((gazeOk || mobileTouchGrace) && awayMs <= 0) {
+  } else if (gazeOk || mobileTouchGrace) {
     window.awayStartedAt = 0;
   }
   if (!window.examStarted) {
@@ -1724,11 +1724,15 @@ async function onResults(results) {
     learnFromGate(tNow);
   }
  
-  // Leaky timer instead of "reset on every good frame": a few jittery frames can't build a strike
+  // Reset immediately when gaze is valid inside the exam card.
   const dtG = Math.min(tNow - lastGazeT, 200);
   lastGazeT = tNow;
+  // Previous gradual reset behavior:
+  // awayMs = gazeOk || mobileTouchGrace
+  //   ? Math.max(0, awayMs - dtG * AWAY_DECAY)
+  //   : Math.min(awayMs + dtG, AWAY_MS * 1.6);
   awayMs = gazeOk || mobileTouchGrace
-    ? Math.max(0, awayMs - dtG * AWAY_DECAY)
+    ? 0
     : Math.min(awayMs + dtG, AWAY_MS * 1.6);
   window.GazeMetrics?.onState(gazeOk, awayMs);
  
