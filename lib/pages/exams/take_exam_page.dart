@@ -56,6 +56,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   String? studentId;
   int? start;
   int? end;
+  int? lateEntryMinutes;
   bool _monitoringEnabled = false; // set from the exam document in build()
 
   bool _leftApp = false; // app went to background
@@ -70,15 +71,64 @@ class _TakeExamPageState extends State<TakeExamPage>
   Stream<DocumentSnapshot<Map<String, dynamic>>>? _resultMetadataStream;
 
   // Ticks once a second, but only rebuilds when the exam crosses a boundary
-  // (not started -> open -> ended).
+  // (not started -> open -> late-entry closed -> ended).
   Timer? _ticker;
   int _lastPhase = -1;
 
-  /// 0 = not started yet, 1 = open, 2 = ended
+  int? _entryDeadlineMillis(
+    int? scheduledStart,
+    int? scheduledEnd,
+    int? grace,
+  ) {
+    if (scheduledStart == null || grace == null) return null;
+    final deadline = scheduledStart + grace * Duration.millisecondsPerMinute;
+    return scheduledEnd == null || deadline <= scheduledEnd
+        ? deadline
+        : scheduledEnd;
+  }
+
+  String? _startWindowError(Map<String, dynamic> examData) {
+    final scheduledStart =
+        (examData["startTime"] as Timestamp?)?.millisecondsSinceEpoch;
+    final scheduledEnd =
+        (examData["endTime"] as Timestamp?)?.millisecondsSinceEpoch;
+    if (scheduledStart == null || scheduledEnd == null) {
+      return "The exam schedule is unavailable. Contact your instructor.";
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now < scheduledStart) {
+      return "You can start this exam at its scheduled time.";
+    }
+    if (now > scheduledEnd) {
+      return "The scheduled exam time has ended.";
+    }
+
+    final rawGrace = examData["lateEntryMinutes"];
+    if (rawGrace != null &&
+        (rawGrace is! int || rawGrace < 5 || rawGrace > 60)) {
+      return "The exam's start window is invalid. Contact your instructor.";
+    }
+    final deadline = _entryDeadlineMillis(
+      scheduledStart,
+      scheduledEnd,
+      rawGrace is int ? rawGrace : null,
+    );
+    if (deadline != null && now > deadline) {
+      return "The latest time to start this exam has passed. Contact your instructor if you think you should still have access.";
+    }
+    return null;
+  }
+
+  /// 0 = not started, 1 = open, 2 = ended, 3 = late-entry window closed.
   int _computePhase() {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (start != null && now < start!) return 0;
     if (end != null && now > end!) return 2;
+    final entryDeadline = _entryDeadlineMillis(start, end, lateEntryMinutes);
+    if (entryDeadline != null && now > entryDeadline) {
+      return 3;
+    }
     return 1;
   }
 
@@ -108,6 +158,7 @@ class _TakeExamPageState extends State<TakeExamPage>
         .snapshots();
     start = widget.startMillis;
     end = widget.endMillis;
+    lateEntryMinutes = null;
     _monitoringEnabled = false;
     _lastPhase = -1;
     unawaited(markExamNotificationViewed(widget.examId));
@@ -145,7 +196,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     });
   }
 
-  // Error popup 
+  // Error popup
 
   Future<void> _showErrorDialog({
     required String title,
@@ -268,7 +319,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     _dialogOpen = false;
   }
 
-  // Single "ready" popup that frames BOTH permissions 
+  // Single "ready" popup that frames BOTH permissions
 
   Future<bool> _showReadyDialog() async {
     if (!mounted) return false;
@@ -372,7 +423,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     return proceed ?? false;
   }
 
-  // Screen share (whole screen only) 
+  // Screen share (whole screen only)
 
   Future<bool> _requestFullScreenShare() async {
     try {
@@ -392,7 +443,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     }
   }
 
-  // Camera / permissions 
+  // Camera / permissions
 
   /// Only asks for camera permission (no preview, no waiting). The stream is
   /// stopped right away so gaze calibration / exam.html can open the camera
@@ -448,7 +499,7 @@ class _TakeExamPageState extends State<TakeExamPage>
         : DateFormat("MMM d, yyyy").format(date);
   }
 
-  // BUILD 
+  // BUILD
 
   @override
   Widget build(BuildContext context) {
@@ -518,10 +569,22 @@ class _TakeExamPageState extends State<TakeExamPage>
           end =
               data["endTime"]?.toDate().millisecondsSinceEpoch ??
               widget.endMillis;
+          final rawLateEntryMinutes = data["lateEntryMinutes"];
+          lateEntryMinutes =
+              rawLateEntryMinutes is int &&
+                  rawLateEntryMinutes >= 5 &&
+                  rawLateEntryMinutes <= 60
+              ? rawLateEntryMinutes
+              : null;
           _lastPhase = _computePhase();
 
           // Used by _buildExamAction to show the gray "Need monitoring" button
           _monitoringEnabled = data["monitoringEnabled"] == true;
+          final entryDeadline = _entryDeadlineMillis(
+            start,
+            end,
+            lateEntryMinutes,
+          );
 
           final teacher =
               "${data["creator"] ?? data["teacher"] ?? data["createdBy"] ?? "Unknown"}";
@@ -539,6 +602,12 @@ class _TakeExamPageState extends State<TakeExamPage>
                 Icons.schedule_outlined,
                 "Schedule",
                 "${formatDate(start!)} - ${DateFormat("h:mm a").format(DateTime.fromMillisecondsSinceEpoch(end!))}",
+              ),
+            if (entryDeadline != null)
+              _DetailRow(
+                Icons.lock_clock_outlined,
+                "Last allowed start",
+                formatDate(entryDeadline),
               ),
           ];
 
@@ -778,6 +847,20 @@ class _TakeExamPageState extends State<TakeExamPage>
           );
         }
 
+        final entryDeadline = _entryDeadlineMillis(
+          start,
+          end,
+          lateEntryMinutes,
+        );
+        if (entryDeadline != null && now > entryDeadline) {
+          return _actionButton(
+            label: "Start window closed",
+            icon: Icons.lock_clock_outlined,
+            hint: "The deadline to start this exam has passed.",
+            onPressed: null,
+          );
+        }
+
         // Monitoring not enabled by the instructor: gray, disabled button
         if (!_monitoringEnabled) {
           return _actionButton(
@@ -820,6 +903,16 @@ class _TakeExamPageState extends State<TakeExamPage>
               }
 
               final examData = examDoc.data() ?? {};
+              final windowError = _startWindowError(examData);
+              if (windowError != null) {
+                await _showErrorDialog(
+                  title: "Cannot start exam",
+                  message: windowError,
+                  icon: Icons.lock_clock_outlined,
+                  color: _warnColor,
+                );
+                return;
+              }
               final monitoringEnabled = examData["monitoringEnabled"] == true;
               // Force isPc off where screen sharing can't exist
               final isPc = examData["isPc"] != false && ScreenShare.supported;
@@ -1013,6 +1106,27 @@ class _TakeExamPageState extends State<TakeExamPage>
                 return;
               }
 
+              final latestExamDoc = await db
+                  .collection("exams")
+                  .doc(widget.examId)
+                  .get();
+              if (!mounted) return;
+              final latestExamData = latestExamDoc.data();
+              final latestWindowError =
+                  latestExamDoc.exists && latestExamData != null
+                  ? _startWindowError(latestExamData)
+                  : "The exam is no longer available.";
+              if (latestWindowError != null) {
+                if (isPc) _screen.stop();
+                await _showErrorDialog(
+                  title: "Start window closed",
+                  message: latestWindowError,
+                  icon: Icons.lock_clock_outlined,
+                  color: _warnColor,
+                );
+                return;
+              }
+
               // Start with clean per-attempt state while preserving exam/student
               // identifiers, gaze calibration, and authentication storage.
               clearStaleExamStorage();
@@ -1067,7 +1181,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     );
   }
 
-  // UI helpers: match the clean Secure Exam HTML layout 
+  // UI helpers: match the clean Secure Exam HTML layout
 
   Widget _skelBox({double? width, required double height, double radius = 6}) {
     return Container(

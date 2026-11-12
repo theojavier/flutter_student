@@ -39,19 +39,16 @@ const profileSetupMode = setupParams.get("profile") === "1";
 let profileCalibrationBaseline = null;
 let profileBaselineReady = !profileSetupMode;
 let profileBaselineStatus = null;
+let savedFaceGuide = null;
 const requestedPlatform = setupParams.get("platform");
 window.setProfileCalibrationBaseline = (calibrationData) => {
   if (!profileSetupMode) return;
   if (calibrationData && typeof calibrationData === "object") {
-    const cloudHistory = getCalibrationHistory(calibrationData);
-    const localHistory = getCalibrationHistory(profileCalibrationBaseline);
-    if (cloudHistory.length || !localHistory.length) {
-      profileCalibrationBaseline = calibrationData;
-    } else {
-      console.warn(
-        "Cloud calibration is unusable; retaining the valid local calibration baseline.",
-      );
-    }
+    profileCalibrationBaseline = calibrationData;
+    savedFaceGuide = expandedFaceGuide(calibrationData);
+  } else {
+    profileCalibrationBaseline = null;
+    savedFaceGuide = null;
   }
   profileBaselineReady = true;
   if (modelReady) updateCalibrationStartButton();
@@ -109,53 +106,31 @@ const examPlatform =
     ? requestedPlatform
     : detectedPlatform;
 
-function loadLocalProfileCalibration() {
-  for (const key of [
-    `gazeCalibrationData:${examPlatform}`,
-    "gazeCalibrationData",
-  ]) {
-    try {
-      const calibration = JSON.parse(localStorage.getItem(key) || "null");
-      if (!calibration || typeof calibration !== "object") continue;
-      const savedPlatform =
-        calibration.platform ||
-        (key === "gazeCalibrationData"
-          ? localStorage.getItem("gazeCalibrationPlatform")
-          : examPlatform);
-      if (savedPlatform && savedPlatform !== examPlatform) continue;
-      if (
-        calibration.version !== GazeCore.VERSION ||
-        calibration.geometryOk !== true ||
-        !Array.isArray(calibration.rows)
-      ) {
-        console.warn(`Skipping incompatible local calibration at ${key}.`);
-        continue;
-      }
-      const sourceRows =
-        Array.isArray(calibration.calibrationHistory) &&
-        calibration.calibrationHistory.length
-          ? calibration.calibrationHistory
-          : calibration.rows;
-      const spots = new Set(
-        sourceRows
-          .filter((row) => Number.isInteger(row?.spot))
-          .map((row) => row.spot),
-      );
-      if (spots.size < 9) {
-        console.warn(`Skipping incomplete local calibration at ${key}.`);
-        continue;
-      }
-      return calibration;
-    } catch (error) {
-      console.warn(`Ignoring malformed local calibration at ${key}:`, error);
-    }
+function faceGuideFrom(data) {
+  const guide = data?.faceGuide;
+  if (
+    !guide ||
+    !Number.isFinite(guide.x) ||
+    !Number.isFinite(guide.y) ||
+    !Number.isFinite(guide.r) ||
+    guide.x < 0 ||
+    guide.x > 1 ||
+    guide.y < 0 ||
+    guide.y > 1 ||
+    guide.r < 0.05 ||
+    guide.r > 0.5
+  ) {
+    return null;
   }
-  return null;
+  return { x: guide.x, y: guide.y, r: guide.r };
 }
 
-if (profileSetupMode) {
-  profileCalibrationBaseline = loadLocalProfileCalibration();
+function expandedFaceGuide(data) {
+  const guide = faceGuideFrom(data);
+  if (!guide) return null;
+  return { ...guide, r: Math.min(guide.r, 0.2) * 1.1 };
 }
+
 profileBaselineStatus = $("setupStatus");
 if (profileSetupMode && profileCalibrationBaseline) {
   profileBaselineStatus.textContent =
@@ -505,18 +480,23 @@ function beginDot() {
   cal.baselineGaze = null;
   cal.baselineHead = null;
   clearFeedback();
-  calMessage.textContent =
-    `Keep your face centered in the camera preview. Look at the dot and keep your head still (${cal.i + 1}/${PLAN.length})`;
+  calMessage.textContent = savedFaceGuide
+    ? `Keep your full face inside the red circle. Look at the dot and keep your head still (${cal.i + 1}/${PLAN.length})`
+    : `Keep your face in the white oval and both eyes visible. Look at the dot and keep your head still (${cal.i + 1}/${PLAN.length})`;
 }
 
 function startCalibration() {
+  if (!currentFaceGuideInside) {
+    setupStatus.textContent = savedFaceGuide
+      ? "Move your full face inside the red circle before starting calibration."
+      : "Position your face in the white oval and keep both eyes visible before starting calibration.";
+    return;
+  }
   if (profileSetupMode && !profileBaselineReady) {
     setupStatus.textContent = "Still loading your saved calibration. Please wait.";
     return;
   }
-  if (profileSetupMode && !profileCalibrationBaseline) {
-    profileCalibrationBaseline = loadLocalProfileCalibration();
-  }
+  savedFaceGuide = expandedFaceGuide(profileCalibrationBaseline);
   localStorage.removeItem("gazeCalibrationData");
   sessionStorage.removeItem("gazeOnlineClicks");
   sessionStorage.removeItem("gazeBias");
@@ -531,6 +511,8 @@ function startCalibration() {
     softRetries: 0,
     softBest: null,
   });
+  faceGuideSamples = [];
+  lastFaceGuideSampleAt = 0;
   document.body.classList.add("calibrating");
   mainScreen.classList.add("hidden");
   calibrationOverlay.classList.add("active");
@@ -1102,6 +1084,11 @@ function finishCalibration() {
   }
 
   const { rows, modelLin, modelQuad, errs, best, headBase } = selected;
+  const calibrationFaceGuide =
+    estimateFaceGuide() || savedFaceGuide;
+  if (calibrationFaceGuide) {
+    savedFaceGuide = expandedFaceGuide({ faceGuide: calibrationFaceGuide });
+  }
   console.log(
     `Selected ${selected.label} calibration; train lin ${errs.lin.train.toFixed(0)} / quad ${errs.quad.train.toFixed(0)}px | loo lin ${errs.lin.loo.toFixed(0)} / quad ${errs.quad.loo.toFixed(0)}px`,
   );
@@ -1120,6 +1107,7 @@ function finishCalibration() {
     best,
     smoothTauMs: SMOOTH_TAU_MS,
     timestamp: Date.now(),
+    ...(calibrationFaceGuide ? { faceGuide: calibrationFaceGuide } : {}),
     accuracy: errs[best].loo,
     rows: compactRows(rows),
     calibrationHistory: compactRows(calibrationHistory),
@@ -1269,6 +1257,9 @@ let quickVerifyFirstTurnDirection = 0;
 let quickVerifyYawSamples = [];
 let quickVerifyEyeSamples = [];
 let quickVerifyLastYoloAt = 0;
+let currentFaceGuideInside = false;
+let currentFaceGuideTooSmall = false;
+const MIN_FACE_GUIDE_SIZE_RATIO = 0.82;
 const QUICK_VERIFY_CENTER_MS = 2000;
 const QUICK_VERIFY_EYE_SAMPLE_COUNT = 3;
 const QUICK_VERIFY_MAX_EYE_JITTER = 0.12;
@@ -1448,6 +1439,7 @@ async function prepareExamSetup() {
     const calibrationExists =
       status.exists === true ||
       calibrationData != null;
+    savedFaceGuide = expandedFaceGuide(calibrationData);
     if (calibrationExists && isUsableCalibration(calibrationData)) {
       localStorage.setItem(
         `gazeCalibrationData:${examPlatform}`,
@@ -1562,6 +1554,7 @@ function processQuickVerification(
   faceCount = 1,
   yoloAt = 0,
   eyeVisibility = null,
+  faceBounds = null,
 ) {
   if (!quickVerifyActive) return;
   const { yaw, cx, cy, ear } = sample || {};
@@ -1584,14 +1577,14 @@ function processQuickVerification(
     return;
   }
 
-  const faceCentered = Math.abs(cx) < 0.14 && Math.abs(cy) < 0.16;
+  const faceCentered = faceFitsGuide(faceBounds);
   const now = performance.now();
   if (quickVerifyStep === "center") {
     if (!faceCentered) {
       quickVerifySince = 0;
       quickVerifyYawSamples = [];
       setQuickVerifyStatus(
-        "Move your face to the center of the camera preview.",
+        faceGuidePrompt(faceBounds),
       );
       return;
     }
@@ -1614,13 +1607,13 @@ function processQuickVerification(
   }
 
   if (quickVerifyStep === "eyeCheck") {
-    if (Math.abs(cx) > 0.14 || Math.abs(cy) > 0.16) {
+    if (!faceCentered) {
       quickVerifyStep = "center";
       quickVerifySince = 0;
       quickVerifyYawSamples = [];
       quickVerifyEyeSamples = [];
       setQuickVerifyStatus(
-        "Keep your face centered while both eyes are checked.",
+        `${faceGuidePrompt(faceBounds)} Keep both eyes clear while they are checked.`,
       );
       return;
     }
@@ -1733,7 +1726,9 @@ function processQuickVerification(
   if (quickVerifyStep === "return") {
     if (!faceCentered || Math.abs(yawDelta) > 0.08) {
       quickVerifySince = 0;
-      setQuickVerifyStatus("Face forward and center yourself again…");
+      setQuickVerifyStatus(
+        "Face forward and move your full face inside the red circle again…",
+      );
       return;
     }
     if (!quickVerifySince) quickVerifySince = now;
@@ -1761,20 +1756,39 @@ function updateCalibrationStartButton() {
     startBtn.disabled = true;
     startLabel.textContent = "Checking saved calibration…";
   } else if (examSetupState === "calibrating") {
-    startBtn.disabled = profileSetupMode && !profileBaselineReady;
+    startBtn.disabled =
+      (profileSetupMode && !profileBaselineReady) ||
+      !currentFaceGuideInside;
     startLabel.textContent =
       profileSetupMode && !profileBaselineReady
         ? "Loading saved calibration…"
-        : "Start 9-Point Calibration";
+        : currentFaceGuideInside
+          ? "Start 9-Point Calibration"
+          : savedFaceGuide && currentFaceGuideTooSmall
+            ? "Move closer to red circle"
+            : savedFaceGuide
+              ? "Move face inside red circle"
+              : "Show face in white oval";
   } else if (examSetupState === "error") {
     startBtn.disabled = false;
     startLabel.textContent = "Check calibration again";
   }
-  if (examSetupState === "verify") {
-    quickVerifyStatus.textContent =
-      "Camera ready. Center your face in the oval, then select Start face verification.";
-    quickVerifyBegin.disabled = false;
-    quickVerifyBeginLabel.textContent = "Start face verification";
+  if (examSetupState === "verify" && !quickVerifyActive) {
+    quickVerifyStatus.textContent = savedFaceGuide
+      ? currentFaceGuideInside
+        ? "Face inside the red circle. Select Start face verification when ready."
+        : `${currentFaceGuideTooSmall ? "Move closer until your face nearly fills the red circle." : "Move your full face inside the red circle."} Do this before starting verification.`
+      : currentFaceGuideInside
+        ? "Face visible. Keep both eyes clear, then select Start face verification."
+        : "Place your face in the white oval and keep both eyes visible.";
+    quickVerifyBegin.disabled = !currentFaceGuideInside;
+    quickVerifyBeginLabel.textContent = currentFaceGuideInside
+      ? "Start face verification"
+      : savedFaceGuide && currentFaceGuideTooSmall
+        ? "Move closer to red circle"
+        : savedFaceGuide
+          ? "Move face inside red circle"
+          : "Show face in preview";
   }
 }
 
@@ -1788,7 +1802,8 @@ function startQuickVerification() {
   if (
     !modelReady ||
     examSetupState !== "verify" ||
-    quickVerifyActive
+    quickVerifyActive ||
+    !currentFaceGuideInside
   ) {
     return;
   }
@@ -1951,6 +1966,148 @@ function startTracking() {
   })();
   return trackingStartPromise;
 }
+
+let faceGuideSamples = [];
+let lastFaceGuideSampleAt = 0;
+
+function getFaceGuideSample(landmarks, width, height) {
+  const left = landmarks[234],
+    right = landmarks[454],
+    top = landmarks[10],
+    bottom = landmarks[152];
+  if (
+    ![left, right, top, bottom].every(
+      (point) =>
+        Number.isFinite(point?.x) &&
+        Number.isFinite(point?.y) &&
+        point.x >= 0 &&
+        point.x <= 1 &&
+        point.y >= 0 &&
+        point.y <= 1,
+    )
+  ) {
+    return null;
+  }
+  const minX = Math.min(left.x, right.x),
+    maxX = Math.max(left.x, right.x),
+    minY = Math.min(top.y, bottom.y),
+    maxY = Math.max(top.y, bottom.y);
+  const radius =
+    (Math.max(
+      ((maxX - minX) * width) / 2,
+      ((maxY - minY) * height) / 2,
+    ) *
+      1.05) /
+    width;
+  if (radius < 0.05 || radius > 0.5) return null;
+  return {
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+    r: radius,
+  };
+}
+
+function recordFaceGuide(landmarks, width, height) {
+  if (!cal.active || performance.now() - lastFaceGuideSampleAt < 100) return;
+  lastFaceGuideSampleAt = performance.now();
+  const sample = getFaceGuideSample(landmarks, width, height);
+  if (sample) faceGuideSamples.push(sample);
+}
+
+function estimateFaceGuide() {
+  if (!faceGuideSamples.length) return null;
+  const median = (key) => {
+    const values = faceGuideSamples.map((sample) => sample[key]).sort((a, b) => a - b);
+    const middle = values.length >> 1;
+    return values.length % 2
+      ? values[middle]
+      : (values[middle - 1] + values[middle]) / 2;
+  };
+  return faceGuideFrom({
+    faceGuide: {
+      x: median("x"),
+      y: median("y"),
+      r: median("r"),
+    },
+  });
+}
+
+function faceFitsGuide(faceBounds) {
+  if (!faceBounds) return false;
+  if (!savedFaceGuide) {
+    const ovalX = (faceBounds.x - 0.5) / 0.21;
+    const ovalY = (faceBounds.y - 0.5) / 0.4;
+    return ovalX * ovalX + ovalY * ovalY <= 1;
+  }
+  const guide = savedFaceGuide;
+  const radius = guide.r;
+  const minimumFaceRadius = radius * MIN_FACE_GUIDE_SIZE_RATIO;
+  const dx = (faceBounds.x - guide.x) * (video.videoWidth || 1);
+  const dy = (faceBounds.y - guide.y) * (video.videoHeight || 1);
+  const faceRadiusPx = faceBounds.r * (video.videoWidth || 1);
+  const guideRadiusPx = radius * (video.videoWidth || 1);
+  return (
+    faceRadiusPx >= minimumFaceRadius * (video.videoWidth || 1) &&
+    Math.hypot(dx, dy) + faceRadiusPx <= guideRadiusPx
+  );
+}
+
+function faceGuidePrompt(faceBounds) {
+  if (!savedFaceGuide) {
+    return faceBounds
+      ? "Keep your face in the white oval and both eyes visible."
+      : "Place your face in the white oval and keep both eyes visible.";
+  }
+  const minimumRadius =
+    savedFaceGuide.r * MIN_FACE_GUIDE_SIZE_RATIO;
+  if (faceBounds && faceBounds.r < minimumRadius) {
+    return "Move closer until your face nearly fills the red circle.";
+  }
+  return "Move your full face inside the red circle.";
+}
+
+function updateFaceGuideAlignment(faceBounds) {
+  const inside = faceFitsGuide(faceBounds);
+  const minimumRadius = savedFaceGuide
+    ? savedFaceGuide.r * MIN_FACE_GUIDE_SIZE_RATIO
+    : 0;
+  const tooSmall = !!savedFaceGuide && !!faceBounds && faceBounds.r < minimumRadius;
+  if (
+    inside === currentFaceGuideInside &&
+    tooSmall === currentFaceGuideTooSmall
+  ) {
+    return;
+  }
+  currentFaceGuideInside = inside;
+  currentFaceGuideTooSmall = tooSmall;
+  updateCalibrationStartButton();
+}
+
+function drawFaceGuide() {
+  if (
+    !savedFaceGuide ||
+    !cal.active &&
+    examSetupState !== "calibrating" &&
+    examSetupState !== "verify" &&
+    examSetupState !== "saving"
+  ) {
+    return;
+  }
+  const guide = savedFaceGuide;
+  const centerX = guide.x * canvas.width,
+    centerY = guide.y * canvas.height,
+    radius = guide.r * canvas.width;
+  ctx.save();
+  ctx.fillStyle = "rgba(255, 59, 48, 0.16)";
+  ctx.strokeStyle = "rgba(255, 59, 48, 0.65)";
+  ctx.lineWidth = Math.max(2, canvas.width / 640);
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
 fm.onResults(async (res) => {
   res = faceInputCropper.mapResults(res);
   if (trackingDisposed || busy || !YoloEye.ready) return;
@@ -1966,10 +2123,14 @@ fm.onResults(async (res) => {
     }
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!res.multiFaceLandmarks?.length) {
+      updateFaceGuideAlignment(null);
+      drawFaceGuide();
       processQuickVerification(null, 0);
       return;
     }
     if (quickVerifyActive && res.multiFaceLandmarks.length > 1) {
+      updateFaceGuideAlignment(null);
+      drawFaceGuide();
       processQuickVerification(null, 2);
       return;
     }
@@ -1978,6 +2139,9 @@ fm.onResults(async (res) => {
     const W = video.videoWidth,
       H = video.videoHeight;
     if (!W) return;
+    const faceBounds = getFaceGuideSample(lm, W, H);
+    updateFaceGuideAlignment(faceBounds);
+    recordFaceGuide(lm, W, H);
 
     if (
       typeof drawConnectors === "function" &&
@@ -1990,10 +2154,11 @@ fm.onResults(async (res) => {
       });
       ctx.restore();
     }
+    drawFaceGuide();
 
     const faceSample = GazeCore.extract(lm, W, H);
     if (quickVerifyActive && quickVerifyStep !== "eyeCheck") {
-      processQuickVerification(faceSample);
+      processQuickVerification(faceSample, 1, 0, null, faceBounds);
       return;
     }
 
@@ -2012,6 +2177,7 @@ fm.onResults(async (res) => {
         1,
         YoloEye.lastGazeAt,
         YoloEye.checkEyeVisibility(lm, W, H, video),
+        faceBounds,
       );
       return;
     }

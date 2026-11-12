@@ -67,7 +67,7 @@ class _ProfileCalibrationPageState extends State<ProfileCalibrationPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Could not load the cloud calibration ($error). The calibration page will check its local saved copy.',
+            'Could not load the cloud calibration ($error). No local calibration will be used as a fallback.',
           ),
         ),
       );

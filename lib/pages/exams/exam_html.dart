@@ -153,10 +153,35 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
     final DateTime endTime = endTs.toDate();
     final DateTime now = DateTime.now();
 
-    // If exam not yet started or already ended - reject
+    // Let an existing attempt resume after the entry deadline, but never let
+    // a student create a new attempt outside the scheduled start window.
+    final attemptDoc = await FirebaseFirestore.instance
+        .collection("examResults")
+        .doc(widget.examId)
+        .collection("students")
+        .doc(uid)
+        .get();
+    final attempt = attemptDoc.data();
+    final attemptStatus = attempt?["status"]?.toString();
+    final hasStartedAttempt =
+        (attemptStatus == "in-progress" || attemptStatus == "incomplete") &&
+        attempt?["startedAt"] is Timestamp;
+    final rawLateEntryMinutes = examData["lateEntryMinutes"];
+    if (rawLateEntryMinutes != null &&
+        (rawLateEntryMinutes is! int ||
+            rawLateEntryMinutes < 5 ||
+            rawLateEntryMinutes > 60)) {
+      return false;
+    }
+    final latestStart = rawLateEntryMinutes is int
+        ? startTime.add(Duration(minutes: rawLateEntryMinutes))
+        : endTime;
+
+    // If exam not yet started, the entry window has closed, or exam ended - reject
     if (now.isBefore(startTime) || now.isAfter(endTime)) {
       return false;
     }
+    if (!hasStartedAttempt && now.isAfter(latestStart)) return false;
 
     // resolve studentId
     if (!mounted) return false;
@@ -254,9 +279,9 @@ class _ExamHtmlPageState extends State<ExamHtmlPage> {
 
   Future<void> _markIncompleteOnServer() async {
     try {
-      await FirebaseFunctions.instanceFor(region: 'asia-southeast1')
-          .httpsCallable('markExamIncomplete')
-          .call({'examId': widget.examId});
+      await FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('markExamIncomplete').call({'examId': widget.examId});
     } on FirebaseFunctionsException catch (error) {
       debugPrint('Could not mark exam incomplete: ${error.message}');
     } catch (error) {
