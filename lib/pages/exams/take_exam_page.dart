@@ -57,6 +57,7 @@ class _TakeExamPageState extends State<TakeExamPage>
   int? start;
   int? end;
   int? lateEntryMinutes;
+  bool _lateEntryConfigInvalid = false;
   bool _monitoringEnabled = false; // set from the exam document in build()
 
   bool _leftApp = false; // app went to background
@@ -159,6 +160,7 @@ class _TakeExamPageState extends State<TakeExamPage>
     start = widget.startMillis;
     end = widget.endMillis;
     lateEntryMinutes = null;
+    _lateEntryConfigInvalid = false;
     _monitoringEnabled = false;
     _lastPhase = -1;
     unawaited(markExamNotificationViewed(widget.examId));
@@ -576,6 +578,8 @@ class _TakeExamPageState extends State<TakeExamPage>
                   rawLateEntryMinutes <= 60
               ? rawLateEntryMinutes
               : null;
+          _lateEntryConfigInvalid =
+              rawLateEntryMinutes != null && lateEntryMinutes == null;
           _lastPhase = _computePhase();
 
           // Used by _buildExamAction to show the gray "Need monitoring" button
@@ -843,6 +847,16 @@ class _TakeExamPageState extends State<TakeExamPage>
             label: "Ended",
             icon: Icons.event_busy_outlined,
             hint: "Exam ended.",
+            onPressed: null,
+          );
+        }
+
+        if (_lateEntryConfigInvalid) {
+          return _actionButton(
+            label: "Invalid start window",
+            icon: Icons.lock_clock_outlined,
+            hint:
+                "The exam's start window is invalid. Contact your instructor.",
             onPressed: null,
           );
         }

@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class ProfileGazeCalibrationView extends StatefulWidget {
-  final void Function(String action, Map<String, dynamic>? data) onAction;
+  final Future<dynamic> Function(String action, Map<String, dynamic> data)
+  onAction;
   final Map<String, dynamic>? previousCalibration;
 
   const ProfileGazeCalibrationView({
@@ -49,7 +50,7 @@ class _ProfileGazeCalibrationViewState
             if (data is Map) {
               final action = data['action'] as String?;
               if (action != null) {
-                widget.onAction(action, Map<String, dynamic>.from(data));
+                return widget.onAction(action, Map<String, dynamic>.from(data));
               }
             }
           },

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import '../helpers/face_identity_storage.dart';
 import 'gaze_calibration_view.dart';
 
 class GazeCalibrationOverlay extends StatefulWidget {
@@ -30,6 +31,10 @@ class _GazeCalibrationOverlayState extends State<GazeCalibrationOverlay> {
     Map<String, dynamic> data,
   ) async {
     switch (action) {
+      case 'getFaceReference':
+      case 'saveFaceReference':
+        return FaceIdentityStorage.handleAction(action, data);
+
       case 'getGazeCalibration':
         final platform = data['platform'] as String?;
         if (platform != 'pc' && platform != 'mobile') {

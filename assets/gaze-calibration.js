@@ -33,6 +33,7 @@ const quickVerifyScreen = $("quickVerifyScreen");
 const quickVerifyStatus = $("quickVerifyStatus");
 const quickVerifyBegin = $("quickVerifyBegin");
 const quickVerifyBeginLabel = $("quickVerifyBeginLabel");
+const faceConsentCheckbox = $("faceConsent");
 const setupParams = new URLSearchParams(location.search);
 const examSetupMode = setupParams.get("exam") === "1";
 const profileSetupMode = setupParams.get("profile") === "1";
@@ -40,12 +41,29 @@ let profileCalibrationBaseline = null;
 let profileBaselineReady = !profileSetupMode;
 let profileBaselineStatus = null;
 let savedFaceGuide = null;
+let profileHostToken = null;
+const examHostToken = setupParams.get("hostToken");
+const sendCalibrationMessage = window.sendToHost;
+window.sendToHost = (data) =>
+  sendCalibrationMessage(
+    (profileSetupMode && profileHostToken) ||
+      (examSetupMode && examHostToken)
+      ? {
+          ...data,
+          hostToken: profileSetupMode ? profileHostToken : examHostToken,
+        }
+      : data,
+  );
 const requestedPlatform = setupParams.get("platform");
-window.setProfileCalibrationBaseline = (calibrationData) => {
+window.setProfileCalibrationBaseline = (calibrationData, hostToken = null) => {
   if (!profileSetupMode) return;
+  profileHostToken =
+    typeof hostToken === "string" && hostToken.length >= 32 ? hostToken : null;
   if (calibrationData && typeof calibrationData === "object") {
     profileCalibrationBaseline = calibrationData;
-    savedFaceGuide = expandedFaceGuide(calibrationData);
+    savedFaceGuide = isUsableCalibration(calibrationData)
+      ? expandedFaceGuide(calibrationData)
+      : null;
   } else {
     profileCalibrationBaseline = null;
     savedFaceGuide = null;
@@ -70,7 +88,10 @@ window.addEventListener("message", (event) => {
     }
   }
   if (message?.action === "setProfileCalibrationBaseline") {
-    window.setProfileCalibrationBaseline(message.calibrationData);
+    window.setProfileCalibrationBaseline(
+      message.calibrationData,
+      message.hostToken,
+    );
   }
 });
 if (examSetupMode) {
@@ -1167,12 +1188,29 @@ function finishCalibration() {
   }
   dot.style.display = "none";
   if (profileSetupMode) {
-    window.disposeGazeTracking?.();
-    window.sendToHost({
-      action: "saveCalibration",
-      platform: examPlatform,
-      calibrationData,
-    });
+    calMessage.textContent = "Confirming face identity before saving calibration…";
+    void (async () => {
+      try {
+        await confirmFaceStillMatchesReference();
+        window.disposeGazeTracking?.();
+        window.sendToHost({
+          action: "saveCalibration",
+          platform: examPlatform,
+          calibrationData,
+        });
+      } catch (error) {
+        console.error(
+          "Could not verify face identity after calibration:",
+          error,
+        );
+        window.sendToHost({
+          action: "calibrationFailed",
+          error:
+            error.message ||
+            "Face verification failed. Repeat the identity check and calibration.",
+        });
+      }
+    })();
   } else if (examSetupMode) {
     void saveExamCalibration(calibrationData);
   } else {
@@ -1248,7 +1286,15 @@ let modelReady = false;
 let examSetupState = examSetupMode ? "checking" : "calibrating";
 let calibrationSetupCancelled = false;
 let storedCalibrationRecord = null;
+let pendingExamCalibrationData = null;
+let pendingExamCalibrationRecord = null;
+let pendingExamCalibrationUsable = false;
+let examCalibrationCheckReady = !examSetupMode;
+let examCalibrationCheckError = null;
 let modelLoadError = null;
+let faceRecognitionReady = false;
+let faceRecognitionLoadPromise = null;
+let faceRecognitionLoadError = null;
 let quickVerifyActive = false;
 let quickVerifyStep = "idle";
 let quickVerifySince = 0;
@@ -1264,6 +1310,9 @@ const QUICK_VERIFY_CENTER_MS = 2000;
 const QUICK_VERIFY_EYE_SAMPLE_COUNT = 3;
 const QUICK_VERIFY_MAX_EYE_JITTER = 0.12;
 const QUICK_VERIFY_MAX_EAR_JITTER = 0.06;
+const FACE_MATCH_DISTANCE_THRESHOLD = 0.6;
+const FACE_RECOGNITION_MODEL_URL =
+  "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model";
 
 function isUsableCalibration(data) {
   const required = [
@@ -1302,7 +1351,7 @@ function isUsableCalibration(data) {
 
 function postExamSetupMessage(action, payload = {}) {
   if (!examSetupMode) return;
-  const message = { action, ...payload };
+  const message = { action, ...payload, hostToken: examHostToken };
   if (window.flutter_inappwebview?.callHandler) {
     void window.flutter_inappwebview.callHandler("flutterMessage", message);
   } else if (window.parent !== window) {
@@ -1311,10 +1360,23 @@ function postExamSetupMessage(action, payload = {}) {
 }
 
 function requestFlutterSetupAction(action, payload = {}) {
-  const message = { action, ...payload };
   if (window.flutter_inappwebview?.callHandler) {
-    return window.flutter_inappwebview.callHandler("flutterMessage", message);
+    return window.flutter_inappwebview.callHandler("flutterMessage", {
+      action,
+      ...payload,
+    });
   }
+  const hostToken = profileSetupMode ? profileHostToken : examHostToken;
+  if ((profileSetupMode || examSetupMode) && !hostToken) {
+    return Promise.reject(
+      new Error("The calibration host is not ready. Reload and retry."),
+    );
+  }
+  const message = {
+    action,
+    ...payload,
+    ...((profileSetupMode || examSetupMode) ? { hostToken } : {}),
+  };
   if (window.parent === window) {
     return Promise.reject(new Error("The calibration host is unavailable."));
   }
@@ -1323,8 +1385,13 @@ function requestFlutterSetupAction(action, payload = {}) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       window.removeEventListener("message", receiveResponse);
-      reject(new Error("The calibration host did not respond within 90 seconds."));
-    }, 90000);
+      console.error("Calibration host request timed out:", action);
+      reject(
+        new Error(
+          `The calibration host did not respond to "${action}" within 30 seconds.`,
+        ),
+      );
+    }, 30000);
 
     function receiveResponse(event) {
       let response = event.data;
@@ -1338,7 +1405,9 @@ function requestFlutterSetupAction(action, payload = {}) {
       if (
         event.origin !== location.origin ||
         !response ||
-        response.requestId !== requestId
+        response.requestId !== requestId ||
+        ((profileSetupMode || examSetupMode) &&
+          response.hostToken !== hostToken)
       ) {
         return;
       }
@@ -1397,20 +1466,64 @@ function showQuickVerification() {
   mainScreen.classList.add("hidden");
   calibrationOverlay.classList.remove("active");
   quickVerifyScreen.classList.add("visible");
+  faceConsentCheckbox.checked = false;
   dot.style.display = "none";
-  $("quickVerifyTitle").textContent = "Verify your camera";
+  $("quickVerifyTitle").textContent = "Verify your identity";
   quickVerifyBegin.disabled = true;
   quickVerifyBeginLabel.textContent = "Loading camera…";
-  quickVerifyStatus.textContent = "Loading gaze and face-tracking models…";
+  quickVerifyStatus.textContent =
+    "Loading face matching, gaze, and face-tracking models…";
   void startTracking();
+  void loadFaceRecognitionModels()
+    .then(() => {
+      faceRecognitionReady = true;
+      faceRecognitionLoadError = null;
+      updateCalibrationStartButton();
+    })
+    .catch((error) => {
+      faceRecognitionLoadError = error;
+      quickVerifyStatus.textContent =
+        "Face matching could not load. Check your connection and refresh the page.";
+      quickVerifyBegin.disabled = true;
+      console.error("Could not load face-recognition models:", error);
+    });
+}
+
+function loadFaceRecognitionModels() {
+  if (!faceRecognitionLoadPromise) {
+    faceRecognitionLoadPromise = (async () => {
+      if (!window.faceapi) {
+        throw new Error("The face-recognition library did not load.");
+      }
+      await Promise.all([
+        faceapi.nets.ssdMobilenetv1.loadFromUri(FACE_RECOGNITION_MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(
+          FACE_RECOGNITION_MODEL_URL,
+        ),
+        faceapi.nets.faceRecognitionNet.loadFromUri(
+          FACE_RECOGNITION_MODEL_URL,
+        ),
+      ]);
+    })().catch((error) => {
+      faceRecognitionLoadPromise = null;
+      throw error;
+    });
+  }
+  return faceRecognitionLoadPromise;
 }
 
 async function prepareExamSetup() {
   if (!examSetupMode) return;
   calibrationSetupCancelled = false;
-  examSetupState = "checking";
-  startBtn.disabled = true;
-  startLabel.textContent = "Checking saved calibration…";
+  examCalibrationCheckReady = false;
+  examCalibrationCheckError = null;
+  if (!quickVerifyScreen.classList.contains("visible")) {
+    showQuickVerification();
+  } else {
+    examSetupState = "verify";
+    updateCalibrationStartButton();
+  }
+  quickVerifyStatus.textContent = "Checking your saved calibration…";
   try {
     const parentHost =
       window.parent !== window ? window.parent.examGazeHost : null;
@@ -1439,8 +1552,28 @@ async function prepareExamSetup() {
     const calibrationExists =
       status.exists === true ||
       calibrationData != null;
-    savedFaceGuide = expandedFaceGuide(calibrationData);
-    if (calibrationExists && isUsableCalibration(calibrationData)) {
+    const calibrationUsable =
+      calibrationExists && isUsableCalibration(calibrationData);
+    console.info("Exam calibration check", {
+      platform: examPlatform,
+      exists: calibrationExists,
+      usable: calibrationUsable,
+      version: calibrationData?.version ?? null,
+      expectedVersion: GazeCore.VERSION,
+      geometryOk: calibrationData?.geometryOk ?? null,
+      rowCount: Array.isArray(calibrationData?.rows)
+        ? calibrationData.rows.length
+        : 0,
+    });
+    savedFaceGuide = calibrationUsable
+      ? expandedFaceGuide(calibrationData)
+      : null;
+    if (calibrationUsable) {
+      pendingExamCalibrationData = calibrationData;
+      pendingExamCalibrationRecord = record?.calibrationData
+        ? record
+        : { ...record, calibrationData };
+      pendingExamCalibrationUsable = true;
       localStorage.setItem(
         `gazeCalibrationData:${examPlatform}`,
         JSON.stringify(calibrationData),
@@ -1454,43 +1587,39 @@ async function prepareExamSetup() {
         "gazeCalibrationLoadedKey",
         `${examPlatform}:${calibrationData.timestamp || record?.calibratedAt || "saved"}`,
       );
-      storedCalibrationRecord = record?.calibrationData
-        ? record
-        : { ...record, calibrationData };
-      showQuickVerification();
-      return;
+      storedCalibrationRecord = pendingExamCalibrationRecord;
+    } else {
+      pendingExamCalibrationData = null;
+      pendingExamCalibrationRecord = null;
+      pendingExamCalibrationUsable = false;
+      localStorage.removeItem("gazeCalibrationData");
+      localStorage.removeItem("gazeCalibrationPlatform");
+      localStorage.removeItem("gazeCalibrationLoadedKey");
+      sessionStorage.removeItem("gazeOnlineClicks");
+      sessionStorage.removeItem("gazeBias");
+      if (status.checkError) {
+        throw new Error(status.checkError);
+      }
+      if (calibrationExists || status.hasInvalidRecord) {
+        calMessage.textContent =
+          `A calibration record exists for ${examPlatform}, but it is not usable by this version. Complete a new calibration to update it.`;
+      } else {
+        calMessage.textContent =
+          `No saved calibration was found for ${examPlatform}. Complete the nine-point calibration once to save it to your profile.`;
+      }
     }
 
-    localStorage.removeItem("gazeCalibrationData");
-    localStorage.removeItem("gazeCalibrationPlatform");
-    localStorage.removeItem("gazeCalibrationLoadedKey");
-    sessionStorage.removeItem("gazeOnlineClicks");
-    sessionStorage.removeItem("gazeBias");
-    if (status.checkError) {
-      throw new Error(status.checkError);
-    }
-    if (calibrationExists || status.hasInvalidRecord) {
-      calMessage.textContent =
-        `A calibration exists for ${examPlatform}, but it is incompatible with this version. Complete a new calibration to update it.`;
-    } else {
-      calMessage.textContent =
-        "No saved calibration was found. Complete the nine-point calibration once to save it to your profile.";
-    }
-    examSetupState = "calibrating";
-    setSetupView("calibrate");
-    document.documentElement.classList.remove("exam-setup-checking");
-    document.body.classList.remove("exam-setup-checking");
-    document.body.classList.remove("quick-verifying");
-    quickVerifyScreen.classList.remove("visible");
-    mainScreen.classList.remove("hidden");
-    startLabel.textContent = "Loading eye model…";
-    startBtn.disabled = true;
-    void startTracking();
+    examCalibrationCheckReady = true;
+    updateCalibrationStartButton();
   } catch (error) {
     console.error("Could not load saved gaze calibration:", error);
-    showExamSetupError(
-      `Could not check your saved calibration: ${error.message || "Check your connection, then select Check calibration again."}`,
-    );
+    examCalibrationCheckError =
+      `Could not check your saved calibration: ${error.message || "Check your connection and retry."}`;
+    examCalibrationCheckReady = true;
+    quickVerifyStatus.textContent =
+      `${examCalibrationCheckError} Select retry to check again.`;
+    quickVerifyBegin.disabled = false;
+    quickVerifyBeginLabel.textContent = "Retry calibration check";
   }
 }
 
@@ -1502,9 +1631,10 @@ async function saveExamCalibration(calibrationData) {
   calibrationOverlay.classList.remove("active");
   $("quickVerifyTitle").textContent = "Saving your calibration";
   quickVerifyStatus.textContent =
-    "Saving your calibration securely to your profile…";
+    "Confirming your face identity before saving calibration…";
 
   try {
+    await confirmFaceStillMatchesReference();
     const parentHost =
       window.parent !== window ? window.parent.examGazeHost : null;
     const record =
@@ -1535,10 +1665,10 @@ async function saveExamCalibration(calibrationData) {
     setupStatus.textContent =
       `Your calibration was not saved: ${error.message || "Check your connection."} Start calibration again after fixing the issue.`;
     calibrationOverlay.classList.remove("active");
-    examSetupState = "calibrating";
+    examSetupState = "error";
     startBtn.classList.remove("loading");
-    startBtn.disabled = !modelReady;
-    startLabel.textContent = "Start calibration again";
+    startBtn.disabled = false;
+    startLabel.textContent = "Check identity and calibration again";
   }
 }
 
@@ -1546,6 +1676,196 @@ function setQuickVerifyStatus(message) {
   quickVerifyStatus.textContent = message;
   if (quickVerifyActive) {
     quickVerifyBeginLabel.textContent = message;
+  }
+}
+
+function captureVerificationPhoto() {
+  if (!video.videoWidth || !video.videoHeight) {
+    throw new Error("The camera is not ready. Try the face check again.");
+  }
+  const photo = document.createElement("canvas");
+  photo.width = video.videoWidth;
+  photo.height = video.videoHeight;
+  photo.getContext("2d").drawImage(video, 0, 0);
+  return photo.toDataURL("image/jpeg", 0.9);
+}
+
+function loadVerificationImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () =>
+      reject(new Error("The saved face photo could not be opened."));
+    image.src = dataUrl;
+  });
+}
+
+async function getVerificationDescriptor(image) {
+  const detections = await faceapi
+    .detectAllFaces(
+      image,
+      new faceapi.SsdMobilenetv1Options({ minConfidence: 0.6 }),
+    )
+    .withFaceLandmarks()
+    .withFaceDescriptors();
+  if (detections.length !== 1) {
+    throw new Error(
+      detections.length > 1
+        ? "Only one face can be in the camera for identity verification."
+        : "A clear face was not found. Improve the lighting and try again.",
+    );
+  }
+  return detections[0].descriptor;
+}
+
+async function verifyFaceIdentity({ allowEnrollment = true } = {}) {
+  const photoDataUrl = captureVerificationPhoto();
+  const currentImage = await loadVerificationImage(photoDataUrl);
+  const currentDescriptor = await getVerificationDescriptor(currentImage);
+  const reference = await requestFlutterSetupAction("getFaceReference", {});
+
+  if (reference?.exists === true) {
+    if (typeof reference.jpegBase64 !== "string") {
+      throw new Error(
+        "The saved face reference is incomplete. Contact your instructor.",
+      );
+    }
+    const referenceImage = await loadVerificationImage(
+      `data:image/jpeg;base64,${reference.jpegBase64}`,
+    );
+    const referenceDescriptor =
+      await getVerificationDescriptor(referenceImage);
+    const distance = faceapi.euclideanDistance(
+      referenceDescriptor,
+      currentDescriptor,
+    );
+    if (distance > FACE_MATCH_DISTANCE_THRESHOLD) {
+      return { matched: false };
+    }
+    return {
+      matched: true,
+      enrolled: false,
+      createdAt: reference.createdAt,
+    };
+  }
+
+  if (reference?.exists !== false) {
+    throw new Error("The saved face reference status is invalid.");
+  }
+  if (!allowEnrollment) {
+    throw new Error(
+      "The saved face reference is missing. Repeat identity setup before saving calibration.",
+    );
+  }
+  const saved = await requestFlutterSetupAction("saveFaceReference", {
+    jpegBase64: photoDataUrl.split(",")[1],
+  });
+  if (saved?.success !== true) {
+    throw new Error("The first face reference could not be saved.");
+  }
+  return {
+    matched: true,
+    enrolled: true,
+    createdAt: saved.createdAt,
+  };
+}
+
+async function confirmFaceStillMatchesReference() {
+  const result = await verifyFaceIdentity({ allowEnrollment: false });
+  if (!result.matched) {
+    throw new Error(
+      "The face no longer matches the enrolled student. Verify again before saving calibration.",
+    );
+  }
+}
+
+function retryFaceVerification(message) {
+  quickVerifyActive = false;
+  quickVerifyStep = "center";
+  quickVerifySince = 0;
+  quickVerifyYawSamples = [];
+  quickVerifyEyeSamples = [];
+  document.body.classList.remove("quick-verifying");
+  setQuickVerifyStatus(message);
+  quickVerifyBegin.disabled =
+    !faceRecognitionReady ||
+    !faceConsentCheckbox.checked ||
+    !currentFaceGuideInside;
+  quickVerifyBeginLabel.textContent = "Try identity check again";
+}
+
+function continueWithCalibration(message) {
+  examSetupState = "calibrating";
+  setSetupView("calibrate");
+  document.documentElement.classList.remove("exam-setup-checking");
+  document.body.classList.remove(
+    "exam-setup-checking",
+    "quick-verifying",
+  );
+  quickVerifyScreen.classList.remove("visible");
+  mainScreen.classList.remove("hidden");
+  setupStatus.textContent = message;
+  updateCalibrationStartButton();
+}
+
+function finishFaceIdentityCheck(referenceResult) {
+  if (profileSetupMode) {
+    continueWithCalibration(
+      referenceResult.enrolled
+        ? "Your face reference is saved. Complete your gaze calibration now."
+        : "Face identity verified. Complete your gaze calibration.",
+    );
+    return;
+  }
+
+  if (pendingExamCalibrationUsable) {
+    quickVerifyStatus.textContent =
+      "Face identity verified. Preparing your exam…";
+    quickVerifyBeginLabel.textContent = "Face verification passed";
+    window.disposeGazeTracking?.();
+    postExamSetupMessage("gazeSetupComplete", {
+      platform: examPlatform,
+      calibrationData: pendingExamCalibrationData,
+      record: pendingExamCalibrationRecord,
+      needsReload: false,
+    });
+    return;
+  }
+
+  pendingExamCalibrationUsable = false;
+  pendingExamCalibrationData = null;
+  pendingExamCalibrationRecord = null;
+  storedCalibrationRecord = null;
+  savedFaceGuide = null;
+  localStorage.removeItem("gazeCalibrationData");
+  localStorage.removeItem("gazeCalibrationPlatform");
+  localStorage.removeItem("gazeCalibrationLoadedKey");
+  sessionStorage.removeItem("gazeOnlineClicks");
+  sessionStorage.removeItem("gazeBias");
+  continueWithCalibration(
+    "Face identity verified. No usable saved calibration was found; complete a new gaze calibration.",
+  );
+}
+
+async function completeQuickVerification() {
+  quickVerifyBegin.disabled = true;
+  quickVerifyStatus.textContent = "Checking your saved face reference…";
+  try {
+    const result = await verifyFaceIdentity();
+    if (!result.matched) {
+      retryFaceVerification(
+        "This face did not match the saved student reference. Try again; if you are the enrolled student, contact your instructor.",
+      );
+      return;
+    }
+    quickVerifyStep = "done";
+    quickVerifyStatus.textContent = "Face identity verified.";
+    finishFaceIdentityCheck(result);
+  } catch (error) {
+    console.error("Face identity verification failed:", error);
+    retryFaceVerification(
+      error.message || "Face verification failed. Please try again.",
+    );
   }
 }
 
@@ -1727,68 +2047,96 @@ function processQuickVerification(
     if (!faceCentered || Math.abs(yawDelta) > 0.08) {
       quickVerifySince = 0;
       setQuickVerifyStatus(
-        "Face forward and move your full face inside the red circle again…",
+        `${faceGuidePrompt(faceBounds)} Face forward and hold still…`,
       );
       return;
     }
     if (!quickVerifySince) quickVerifySince = now;
     if (now - quickVerifySince >= 500) {
       quickVerifyActive = false;
-      quickVerifyStep = "done";
+      quickVerifyStep = "identity";
       document.body.classList.remove("quick-verifying");
-      setQuickVerifyStatus("Face verification passed. Preparing your exam…");
-      quickVerifyBeginLabel.textContent = "Face verification passed";
-      window.disposeGazeTracking?.();
-      postExamSetupMessage("gazeSetupComplete", {
-        platform: examPlatform,
-        calibrationData: storedCalibrationRecord.calibrationData,
-        record: storedCalibrationRecord,
-        needsReload: false,
-      });
+      void completeQuickVerification();
     }
   }
 }
 
 function updateCalibrationStartButton() {
-  if (!modelReady) return;
-  startBtn.classList.remove("loading");
-  if (examSetupState === "checking") {
-    startBtn.disabled = true;
-    startLabel.textContent = "Checking saved calibration…";
-  } else if (examSetupState === "calibrating") {
-    startBtn.disabled =
-      (profileSetupMode && !profileBaselineReady) ||
-      !currentFaceGuideInside;
-    startLabel.textContent =
-      profileSetupMode && !profileBaselineReady
-        ? "Loading saved calibration…"
-        : currentFaceGuideInside
-          ? "Start 9-Point Calibration"
-          : savedFaceGuide && currentFaceGuideTooSmall
-            ? "Move closer to red circle"
-            : savedFaceGuide
-              ? "Move face inside red circle"
-              : "Show face in white oval";
-  } else if (examSetupState === "error") {
-    startBtn.disabled = false;
-    startLabel.textContent = "Check calibration again";
+  if (!modelReady && examSetupState !== "verify") return;
+  if (!modelReady) {
+    quickVerifyBegin.disabled = true;
+  }
+  if (modelReady) {
+    startBtn.classList.remove("loading");
+    if (examSetupState === "checking") {
+      startBtn.disabled = true;
+      startLabel.textContent = "Checking saved calibration…";
+    } else if (examSetupState === "calibrating") {
+      startBtn.disabled =
+        (profileSetupMode && !profileBaselineReady) ||
+        !currentFaceGuideInside;
+      startLabel.textContent =
+        profileSetupMode && !profileBaselineReady
+          ? "Loading saved calibration…"
+          : currentFaceGuideInside
+            ? "Start 9-Point Calibration"
+            : savedFaceGuide && currentFaceGuideTooSmall
+              ? "Move closer to red circle"
+              : savedFaceGuide
+                ? "Move face inside red circle"
+                : "Show face in white oval";
+    } else if (examSetupState === "error") {
+      startBtn.disabled = false;
+      startLabel.textContent = "Check calibration again";
+    }
   }
   if (examSetupState === "verify" && !quickVerifyActive) {
-    quickVerifyStatus.textContent = savedFaceGuide
-      ? currentFaceGuideInside
-        ? "Face inside the red circle. Select Start face verification when ready."
-        : `${currentFaceGuideTooSmall ? "Move closer until your face nearly fills the red circle." : "Move your full face inside the red circle."} Do this before starting verification.`
-      : currentFaceGuideInside
-        ? "Face visible. Keep both eyes clear, then select Start face verification."
-        : "Place your face in the white oval and keep both eyes visible.";
-    quickVerifyBegin.disabled = !currentFaceGuideInside;
-    quickVerifyBeginLabel.textContent = currentFaceGuideInside
-      ? "Start face verification"
-      : savedFaceGuide && currentFaceGuideTooSmall
-        ? "Move closer to red circle"
-        : savedFaceGuide
-          ? "Move face inside red circle"
-          : "Show face in preview";
+    if (examSetupMode && examCalibrationCheckError) {
+      quickVerifyStatus.textContent =
+        `${examCalibrationCheckError} Select retry to check again.`;
+      quickVerifyBegin.disabled = false;
+      quickVerifyBeginLabel.textContent = "Retry calibration check";
+    } else if (examSetupMode && !examCalibrationCheckReady) {
+      quickVerifyStatus.textContent =
+        "Checking your saved calibration for this device…";
+      quickVerifyBegin.disabled = true;
+      quickVerifyBeginLabel.textContent = "Checking saved calibration…";
+    } else if (modelLoadError && profileSetupMode) {
+      quickVerifyStatus.textContent =
+        `Camera or model failed to load: ${modelLoadError.message || "Check camera permission."} Select below to retry.`;
+      quickVerifyBegin.disabled = false;
+      quickVerifyBeginLabel.textContent = "Reload and retry camera";
+    } else if (faceRecognitionLoadError) {
+      quickVerifyStatus.textContent =
+        "Face matching could not load. Check your connection and refresh the page.";
+      quickVerifyBegin.disabled = true;
+      quickVerifyBeginLabel.textContent = "Face matching unavailable";
+    } else if (!faceConsentCheckbox.checked) {
+      quickVerifyStatus.textContent =
+        "Review and accept the face-photo notice before starting verification.";
+      quickVerifyBegin.disabled = true;
+      quickVerifyBeginLabel.textContent = "Agree to face verification";
+    } else if (!faceRecognitionReady) {
+      quickVerifyStatus.textContent = "Loading face-matching models…";
+      quickVerifyBegin.disabled = true;
+      quickVerifyBeginLabel.textContent = "Loading face matching…";
+    } else {
+      quickVerifyStatus.textContent = savedFaceGuide
+        ? currentFaceGuideInside
+          ? "Face inside the red circle. Select Start face verification when ready."
+          : `${currentFaceGuideTooSmall ? "Move closer until your face nearly fills the red circle." : "Move your full face inside the red circle."} Do this before starting verification.`
+        : currentFaceGuideInside
+          ? "Face visible. Keep both eyes clear, then select Start face verification."
+          : "Place your face in the white oval and keep both eyes visible.";
+      quickVerifyBegin.disabled = !currentFaceGuideInside;
+      quickVerifyBeginLabel.textContent = currentFaceGuideInside
+        ? "Start face verification"
+        : savedFaceGuide && currentFaceGuideTooSmall
+          ? "Move closer to red circle"
+          : savedFaceGuide
+            ? "Move face inside red circle"
+            : "Show face in preview";
+    }
   }
 }
 
@@ -1801,8 +2149,12 @@ function setReady() {
 function startQuickVerification() {
   if (
     !modelReady ||
+    !faceRecognitionReady ||
     examSetupState !== "verify" ||
+    (examSetupMode &&
+      (!examCalibrationCheckReady || examCalibrationCheckError != null)) ||
     quickVerifyActive ||
+    !faceConsentCheckbox.checked ||
     !currentFaceGuideInside
   ) {
     return;
@@ -1822,7 +2174,28 @@ function startQuickVerification() {
   );
 }
 
-quickVerifyBegin.addEventListener("click", startQuickVerification);
+quickVerifyBegin.addEventListener("click", () => {
+  if (examCalibrationCheckError) {
+    void prepareExamSetup();
+    return;
+  }
+  if (modelLoadError) {
+    location.reload();
+    return;
+  }
+  const liveCamera = video.srcObject
+    ?.getVideoTracks?.()
+    .some((track) => track.readyState === "live");
+  if (trackingDisposed || !liveCamera) {
+    location.reload();
+    return;
+  }
+  startQuickVerification();
+});
+faceConsentCheckbox.addEventListener(
+  "change",
+  updateCalibrationStartButton,
+);
 function setLoadError(e) {
   console.error("Calibration setup failed:", e);
   modelLoadError = e;
@@ -1833,6 +2206,11 @@ function setLoadError(e) {
       `Camera or model failed to load: ${e.message || "Reload the page and check camera permission."}`,
     );
     startLabel.textContent = "Reload setup";
+  } else if (profileSetupMode) {
+    quickVerifyStatus.textContent =
+      `Camera or model failed to load: ${e.message || "Check camera permission."} Select below to retry.`;
+    quickVerifyBegin.disabled = false;
+    quickVerifyBeginLabel.textContent = "Reload and retry camera";
   }
 }
 
@@ -1844,6 +2222,14 @@ mainScreen.addEventListener("click", (e) => {
 quickVerifyScreen.addEventListener("click", (e) => {
   if (e.target !== quickVerifyScreen) return;
   cancelCalibrationSetup();
+});
+
+document.addEventListener("click", (e) => {
+  if (!quickVerifyScreen.classList.contains("visible")) return;
+  const infoBox = quickVerifyScreen.querySelector(".info-box");
+  if (infoBox && !infoBox.contains(e.target)) {
+    cancelCalibrationSetup();
+  }
 });
 
 calibrationOverlay.addEventListener("click", (e) => {
@@ -2209,6 +2595,8 @@ fm.onResults(async (res) => {
 
 if (examSetupMode) {
   void prepareExamSetup();
+} else if (profileSetupMode) {
+  showQuickVerification();
 } else {
   void startTracking();
 }

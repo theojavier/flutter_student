@@ -118,7 +118,7 @@
         align-items: center;
         justify-content: center;
         padding: max(16px, env(safe-area-inset-top, 0px)) 16px
-          calc(var(--cam-h) + 40px + env(safe-area-inset-bottom, 0px));
+          calc(var(--cam-h) + env(safe-area-inset-bottom, 0px));
         pointer-events: auto;
         background: rgba(17, 18, 23, 0.3);
       }
@@ -129,7 +129,7 @@
         max-width: 560px;
         width: 100%;
         height: calc(
-          100dvh - var(--cam-h) - 40px -
+          100dvh - var(--cam-h) -
             max(16px, env(safe-area-inset-top, 0px)) -
             env(safe-area-inset-bottom, 0px)
         );
@@ -227,6 +227,21 @@
         margin: 0 0 12px;
         color: var(--green-dark);
         line-height: 1.6;
+      }
+      .face-consent {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: flex-start;
+        gap: 9px;
+        margin: 0 0 10px;
+        color: #555961;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .face-consent input {
+        flex: 0 0 auto;
+        margin: 2px 0 0;
+        accent-color: var(--green);
       }
       #quickVerifyBegin {
         display: block;
@@ -689,11 +704,11 @@
         }
         #quickVerifyScreen {
           padding: max(12px, env(safe-area-inset-top, 0px)) 12px
-            calc(var(--cam-h) + 40px + env(safe-area-inset-bottom, 0px));
+            calc(var(--cam-h) + env(safe-area-inset-bottom, 0px));
         }
         #quickVerifyScreen .info-box {
           height: calc(
-            100dvh - var(--cam-h) - 40px -
+            100dvh - var(--cam-h) -
               max(12px, env(safe-area-inset-top, 0px)) -
               env(safe-area-inset-bottom, 0px)
           );
@@ -775,6 +790,82 @@
           transition-duration: 0.01ms !important;
         }
       }
+
+      /* Bigger responsive popups (original text size, camera size untouched). */
+      :root {
+        --cam-bottom: 20px;
+        --pop-top: 20px;
+        --pop-bottom: 28px;
+        --pop-top-eff: max(var(--pop-top), env(safe-area-inset-top, 0px));
+      }
+
+      /* Anchor to the top: any extra height becomes bottom gap. */
+      #mainScreen,
+      #quickVerifyScreen {
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: var(--pop-top-eff);
+      }
+
+      /* Box follows content, constrained only when the screen is too short. */
+      #mainScreen .info-box,
+      #quickVerifyScreen .info-box {
+        height: auto;
+      }
+
+      #mainScreen .info-content,
+      #quickVerifyScreen .info-content {
+        scrollbar-width: none;
+      }
+      #mainScreen .info-content::-webkit-scrollbar,
+      #quickVerifyScreen .info-content::-webkit-scrollbar {
+        display: none;
+      }
+
+      /* Wide screens: place the popup beside the camera. */
+      @media (min-width: 1100px) {
+        #mainScreen,
+        #quickVerifyScreen {
+          padding-bottom: calc(
+            var(--pop-bottom) + env(safe-area-inset-bottom, 0px)
+          );
+        }
+        #mainScreen .info-box,
+        #quickVerifyScreen .info-box {
+          max-width: 600px;
+          max-height: calc(
+            100dvh - var(--pop-top-eff) - var(--pop-bottom) -
+              env(safe-area-inset-bottom, 0px)
+          );
+        }
+      }
+
+      /* Narrow screens: keep the popup above the camera. */
+      @media (max-width: 1099px) {
+        :root {
+          --pop-top: 12px;
+          --pop-bottom: 16px;
+        }
+        #mainScreen,
+        #quickVerifyScreen {
+          padding-bottom: calc(
+            var(--cam-h) + var(--cam-bottom) + var(--pop-bottom) +
+              env(safe-area-inset-bottom, 0px)
+          );
+        }
+        #mainScreen .info-box,
+        #quickVerifyScreen .info-box {
+          max-height: calc(
+            100dvh - var(--pop-top-eff) - var(--cam-h) - var(--cam-bottom) -
+              var(--pop-bottom) - env(safe-area-inset-bottom, 0px)
+          );
+        }
+      }
+      @media (max-width: 680px) {
+        :root {
+          --cam-bottom: 12px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -794,7 +885,7 @@
           <div class="info-content">
             <div class="instr-label">Before you start</div>
             <ul class="instruction-list">
-              <li>✓ Keep your full face inside the red circle, with both eyes open</li>
+              <li>✓ Keep your full face centered in the camera preview, with both eyes open</li>
               <li>✓ Keep both eyes clearly visible and unobstructed; move hair or anything covering them</li>
               <li>✓ Use bright, even light on your face; avoid a bright window or lamp behind you and strong shadows</li>
               <li>✓ Keep your head still and look at each of the 9 dots (about 40 seconds)</li>
@@ -825,7 +916,7 @@
           <div class="info-content">
             <div class="instr-label">Before you start</div>
             <ul class="instruction-list">
-              <li>✓ Keep your full face inside the red circle, with both eyes visible</li>
+              <li>✓ Keep your full face centered in the camera preview, with both eyes visible</li>
               <li>✓ Keep both eyes open and unobstructed; move hair or anything covering them</li>
               <li>✓ Use bright, even light on your face; avoid a bright window or lamp behind you and strong shadows</li>
               <li>✓ Hold still, then turn your head each way and return to center</li>
@@ -837,6 +928,16 @@
             </ul>
             <p id="quickVerifyStatus" role="status" aria-live="polite">Checking your saved calibration…</p>
           </div>
+          <label class="face-consent">
+            <input id="faceConsent" type="checkbox" />
+            <span>
+              I agree to on-device face matching. The first successful check
+              saves one private reference photo to my account; later checks
+              compare a temporary camera image without uploading it. The first
+              check sets my reference; it does not prove my official student
+              identity.
+            </span>
+          </label>
           <button id="quickVerifyBegin" type="button" disabled>
             <span id="quickVerifyBeginLabel">Loading camera…</span>
           </button>
@@ -884,6 +985,7 @@
     </script>
     <script src="gaze-core.js"></script>
     <script src="yolo-eye.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
     <script src="gaze-calibration.js"></script>
   </body>
 </html>

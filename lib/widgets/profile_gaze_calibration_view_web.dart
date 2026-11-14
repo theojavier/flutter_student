@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 import 'dart:html' as html;
 import 'dart:ui_web' as ui;
 import 'package:flutter/material.dart';
 
 class ProfileGazeCalibrationView extends StatefulWidget {
-  final void Function(String action, Map<String, dynamic>? data) onAction;
+  final Future<dynamic> Function(String action, Map<String, dynamic> data)
+  onAction;
   final Map<String, dynamic>? previousCalibration;
 
   const ProfileGazeCalibrationView({
@@ -24,32 +27,74 @@ class _ProfileGazeCalibrationViewState
   static const String _viewType = 'profile-gaze-calibration-overlay';
   static html.IFrameElement? _activeFrame;
   static Map<String, dynamic>? _pendingCalibration;
+  static String? _hostToken;
   StreamSubscription<html.MessageEvent>? _sub;
 
   @override
   void initState() {
     super.initState();
     _pendingCalibration = widget.previousCalibration;
+    final random = Random.secure();
+    _hostToken = base64Url.encode(
+      List<int>.generate(24, (_) => random.nextInt(256)),
+    );
     _ensureFactoryRegistered();
 
-    _sub = html.window.onMessage.listen((event) {
-      if (!mounted) return;
-      final data = event.data;
-      if (data is Map) {
-        final action = data['action'] as String?;
-        if (action != null) {
-          // Convert to Map<String, dynamic>
-          final mappedData = Map<String, dynamic>.from(data);
+    _sub = html.window.onMessage.listen(_handleMessage);
+  }
 
-          // Handle different actions
-          if (action == 'saveCalibration') {
-            _handleSaveCalibration(mappedData);
-          } else {
-            widget.onAction(action, mappedData);
-          }
-        }
+  void _handleMessage(html.MessageEvent event) {
+    if (!mounted || event.origin != html.window.location.origin) return;
+    dynamic data = event.data;
+    try {
+      if (data is String) data = jsonDecode(data);
+    } on FormatException catch (error) {
+      debugPrint('[profile-calibration] Ignoring malformed message: $error');
+      return;
+    }
+    if (data is! Map ||
+        data['action'] is! String ||
+        data['hostToken'] != _hostToken) {
+      return;
+    }
+
+    debugPrint('[profile-calibration-web] Received ${data['action']}');
+    unawaited(_dispatchMessage(Map<String, dynamic>.from(data)));
+  }
+
+  Future<void> _dispatchMessage(Map<String, dynamic> message) async {
+    final requestId = message['requestId'];
+    try {
+      final result = await widget.onAction(
+        message['action'] as String,
+        message,
+      );
+      if (requestId is String) {
+        debugPrint(
+          '[profile-calibration-web] Responding to ${message['action']}',
+        );
+        _activeFrame?.contentWindow?.postMessage(
+          jsonEncode({
+            'requestId': requestId,
+            'hostToken': _hostToken,
+            'result': result,
+          }),
+          html.window.location.origin,
+        );
       }
-    });
+    } catch (error) {
+      debugPrint('[profile-calibration] Host action failed: $error');
+      if (requestId is String) {
+        _activeFrame?.contentWindow?.postMessage(
+          jsonEncode({
+            'requestId': requestId,
+            'hostToken': _hostToken,
+            'error': error.toString(),
+          }),
+          html.window.location.origin,
+        );
+      }
+    }
   }
 
   void _ensureFactoryRegistered() {
@@ -69,26 +114,12 @@ class _ProfileGazeCalibrationViewState
         iframe.contentWindow?.postMessage({
           'action': 'setProfileCalibrationBaseline',
           'calibrationData': _pendingCalibration,
+          'hostToken': _hostToken,
         }, html.window.location.origin);
       });
       return iframe;
     });
     _factoryRegistered = true;
-  }
-
-  void _handleSaveCalibration(Map<String, dynamic> data) async {
-    final platform = data['platform'] as String?;
-    final calibrationData = data['calibrationData'];
-
-    if (platform == null || calibrationData == null) {
-      widget.onAction('calibrationFailed', {'error': 'Missing data'});
-      return;
-    }
-
-    widget.onAction('saveCalibration', {
-      'platform': platform,
-      'calibrationData': calibrationData,
-    });
   }
 
   @override
@@ -99,6 +130,7 @@ class _ProfileGazeCalibrationViewState
       iframe.contentWindow?.postMessage({'action': 'dispose'}, '*');
       iframe.src = 'about:blank';
       _activeFrame = null;
+      _hostToken = null;
     }
     super.dispose();
   }

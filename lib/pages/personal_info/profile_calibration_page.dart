@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
+import '../../helpers/face_identity_storage.dart';
 import '../../utils/string_keyed_map.dart';
 import '../../widgets/profile_gaze_calibration_view.dart';
 
@@ -74,20 +75,24 @@ class _ProfileCalibrationPageState extends State<ProfileCalibrationPage> {
     }
   }
 
-  Future<void> _handleCalibrationAction(
+  Future<dynamic> _handleCalibrationAction(
     String action,
     Map<String, dynamic>? data,
   ) async {
     debugPrint('[profile-calibration] Action: $action');
 
     switch (action) {
+      case 'getFaceReference':
+      case 'saveFaceReference':
+        return FaceIdentityStorage.handleAction(action, data ?? const {});
+
       case 'saveCalibration':
         await _saveCalibrationToFirebase(data);
-        break;
+        return null;
 
       case 'calibrationComplete':
         // The saveCalibration action will be called separately
-        break;
+        return null;
 
       case 'calibrationFailed':
         if (!mounted) return;
@@ -98,14 +103,15 @@ class _ProfileCalibrationPageState extends State<ProfileCalibrationPage> {
           ),
         );
         Navigator.of(context, rootNavigator: true).pop();
-        break;
+        return null;
 
       case 'calibrationCancelled':
         Navigator.of(context, rootNavigator: true).pop();
-        break;
+        return null;
 
       default:
         debugPrint('[profile-calibration] Unknown action: $action');
+        return null;
     }
   }
 

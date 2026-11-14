@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:html' as html;
 import 'dart:ui_web' as ui;
 import 'package:flutter/material.dart';
@@ -23,18 +24,20 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
   static bool _factoryRegistered = false;
   static const String _viewType = 'gaze-calibration-overlay';
   static html.IFrameElement? _activeFrame;
+  static String? _hostToken;
   StreamSubscription<html.MessageEvent>? _sub;
 
   @override
   void initState() {
     super.initState();
+    final random = Random.secure();
+    _hostToken = base64Url.encode(
+      List<int>.generate(24, (_) => random.nextInt(256)),
+    );
     _ensureFactoryRegistered();
 
     _sub = html.window.onMessage.listen((event) {
-      if (!mounted) return;
-      if (event.origin != html.window.location.origin) {
-        return;
-      }
+      if (!mounted || event.origin != html.window.location.origin) return;
       final rawData = event.data;
       dynamic data;
       try {
@@ -50,16 +53,27 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
           message[entry.key as String] = entry.value;
         }
       }
-      if (message['action'] is! String) return;
+      if (message['action'] is! String || message['hostToken'] != _hostToken) {
+        return;
+      }
+      debugPrint('[calibration-bridge] Received ${message['action']}');
       final requestId = message['requestId'];
+      final hostToken = message['hostToken'] as String;
       unawaited(
         widget
             .onAction(message['action'] as String, message)
             .then<void>((result) {
               if (requestId is String) {
                 try {
+                  debugPrint(
+                    '[calibration-bridge] Responding to ${message['action']}',
+                  );
                   _activeFrame?.contentWindow?.postMessage(
-                    jsonEncode({'requestId': requestId, 'result': result}),
+                    jsonEncode({
+                      'requestId': requestId,
+                      'hostToken': hostToken,
+                      'result': result,
+                    }),
                     html.window.location.origin,
                   );
                 } catch (error) {
@@ -69,6 +83,7 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
                   _activeFrame?.contentWindow?.postMessage(
                     jsonEncode({
                       'requestId': requestId,
+                      'hostToken': hostToken,
                       'error': 'The calibration response could not be encoded.',
                     }),
                     html.window.location.origin,
@@ -82,6 +97,7 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
                 _activeFrame?.contentWindow?.postMessage(
                   jsonEncode({
                     'requestId': requestId,
+                    'hostToken': hostToken,
                     'error': error.toString(),
                   }),
                   html.window.location.origin,
@@ -98,7 +114,13 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
     ui.platformViewRegistry.registerViewFactory(_viewType, (int viewId) {
       final iframe = html.IFrameElement()
         ..src =
-            '${html.window.location.origin}/assets/gaze-calibration.html?exam=1'
+            Uri.parse(
+                  '${html.window.location.origin}/assets/gaze-calibration.html',
+                )
+                .replace(
+                  queryParameters: {'exam': '1', 'hostToken': _hostToken!},
+                )
+                .toString()
         ..style.border = 'none'
         ..style.width = '100%'
         ..style.height = '100%'
@@ -118,6 +140,7 @@ class _GazeCalibrationViewState extends State<GazeCalibrationView> {
       iframe.contentWindow?.postMessage({'action': 'dispose'}, '*');
       iframe.src = 'about:blank';
       _activeFrame = null;
+      _hostToken = null;
     }
     super.dispose();
   }
